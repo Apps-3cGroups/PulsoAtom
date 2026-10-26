@@ -45,7 +45,7 @@ export class UnconfiguredStore {
 
 const tables = {
   catalog: 'catalog_items', catalogVersions: 'catalog_versions', catalogAudit: 'catalog_audit',
-  users: 'users', sessions: 'sessions', conversations: 'conversations', evaluations: 'evaluations',
+  users: 'users', sessions: 'sessions', evaluations: 'evaluations',
   reviews: 'review_events', jobs: 'evaluation_jobs',
 };
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
@@ -91,6 +91,14 @@ export class MysqlStore {
           if (before.get(item.id) === payload) continue;
           if (key === 'users') await connection.execute('INSERT INTO users (id, email, payload) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)', [item.id, item.email.toLowerCase(), payload]);
           else await connection.execute(`INSERT INTO ${table} (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)`, [item.id, payload]);
+          if (key === 'evaluations') {
+            const versions = new Map(item.catalogVersions.map(ref => [ref.id, ref.version]));
+            for (const result of item.results) {
+              await connection.execute('INSERT INTO evaluation_results (evaluation_id, variable_id, catalog_version, status, value_json, reason) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE catalog_version = VALUES(catalog_version), status = VALUES(status), value_json = VALUES(value_json), reason = VALUES(reason)', [item.id, result.variableId, versions.get(result.variableId), result.status, result.value === undefined ? null : JSON.stringify(result.value), result.reason ?? null]);
+              await connection.execute('DELETE FROM evaluation_evidence WHERE evaluation_id = ? AND variable_id = ?', [item.id, result.variableId]);
+              for (const evidence of result.evidence || []) await connection.execute('INSERT INTO evaluation_evidence (evaluation_id, variable_id, source_message_id, quote) VALUES (?, ?, ?, ?)', [item.id, result.variableId, evidence.messageId, evidence.quote]);
+            }
+          }
         }
         // Solo las sesiones expiran o se eliminan; el histórico es acumulativo.
         if (key === 'sessions') for (const id of before.keys()) if (!after.has(id)) await connection.execute('DELETE FROM sessions WHERE id = ?', [id]);

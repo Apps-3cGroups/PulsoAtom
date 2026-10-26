@@ -33,18 +33,9 @@ npm start
 
 La API debe seguir encendida. Todas las rutas y recursos viven bajo `/pulso`; `/` devuelve 404 deliberadamente. `web/server.js` sirve el frontend y reenvía `/pulso/api` a la API.
 
-## Vincular con GitHub
+## Repositorio
 
-El proyecto está preparado como un repositorio Git local en la rama `main`. El primer commit contiene código, catálogo, ejemplos de configuración y capturas. `.gitignore` excluye las credenciales (`.env`), datos locales de demostración, dependencias y la compilación.
-
-Cuando tengas el repositorio remoto y acceso a GitHub, desde esta carpeta:
-
-```sh
-git remote add origin URL_DEL_REPOSITORIO
-git push -u origin main
-```
-
-Si GitHub CLI indica que la sesión expiró, vuelve a iniciar sesión con `gh auth login` antes de subirlo. No pegues contraseñas ni tokens en el chat ni en la URL del remoto.
+El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/PulsoAtom) en la rama `main`. `.gitignore` excluye las credenciales (`.env`), datos locales de demostración, dependencias y la compilación. No pegues contraseñas ni tokens en el chat ni en la URL del remoto.
 
 ## Lo que incluye
 
@@ -78,7 +69,7 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 
 | Grupo | Uso |
 | --- | --- |
-| `APP_DB_*` | Base MySQL propia de Pulso: cuentas, catálogo, versiones, evaluaciones y auditoría. |
+| `APP_DB_*` | Base MySQL propia `dbPulsosAtom`: cuentas, catálogo, versiones, evaluaciones y auditoría. |
 | `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente a las tablas de origen. Los valores están reservados; aún no se hacen consultas a Atom. |
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Configuración reservada del servicio de IA; el adaptador se implementará después. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
@@ -86,7 +77,7 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 
 Para usar la base propia cuando esté disponible:
 
-1. Crear una base MySQL dedicada a Pulso con `utf8mb4`, usando una cuenta autorizada para aplicar migraciones.
+1. Crear la base MySQL `dbPulsosAtom` con `utf8mb4`, usando una cuenta autorizada para aplicar migraciones.
 2. Completar `APP_DB_*` y cambiar `DEMO_MODE=false`.
 3. Desde `api/`, ejecutar `npm run db:migrate`, `npm run db:seed` y `npm run user:create`.
 4. `user:create` solicita nombre, correo, rol y contraseña en una terminal interactiva. La contraseña se oculta al escribir y se guarda con scrypt. No hay contraseñas reales predeterminadas ni registro público.
@@ -104,13 +95,13 @@ Motor y conexión; nombres de las tablas; identificadores y relaciones entre con
 - Asistente asignado, país, canal, identificador del cliente y URL de origen cuando exista.
 - Cómo reconocer nuevos registros, actualizaciones y conversaciones completas sin duplicarlas.
 
-El acceso de origen será de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. Las credenciales del origen no se envían al navegador.
+El acceso de origen será de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia solo guardará una referencia a cada conversación de Atom, no su transcripción. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
 ### Trabajo pendiente de integración
 
 El llenado del `.env` por sí solo no habilita el motor. Faltan el mapeo e importación incremental de Atom, los evaluadores de IA y código, el tratamiento de dependencias/no aplicabilidad de cada variable y un procesador de lotes con reintentos, control de duplicados y programación diaria. La evaluación inicial cubrirá las 12 variables acordadas, con pruebas sobre conversaciones reales autorizadas.
 
-El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Antes de importar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador inicial carga el estado completo. Esta entrega es una base local de desarrollo, todavía no una liberación de producción.
+El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Las conversaciones se leerán directamente de Atom mediante un adaptador aún pendiente. Antes de consultar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador inicial carga el estado completo de Pulso. Esta entrega es una base local de desarrollo, todavía no una liberación de producción.
 
 ## Verificación
 
@@ -125,7 +116,7 @@ npm test
 npm run build
 ```
 
-Hay 11 pruebas de API y 1 del servidor web: importación, roles, formularios, persistencia demo, versiones, lotes atómicos, evidencia, revisiones, búsqueda, filtros, ausencia de simulación en modo real, rutas y proxy. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
+Hay 13 pruebas de API y 1 del servidor web: importación, roles, formularios, persistencia demo, versiones, lotes atómicos, evidencia, revisiones, separación de bases, búsqueda, filtros, ausencia de simulación en modo real, rutas y proxy. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
 
 ## Organización
 
