@@ -1,0 +1,25 @@
+{
+  "name": "pulso-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20.19.0" },
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "node scripts/seed.js",
+    "user:create": "node scripts/create-user.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "mysql2": "^3.14.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": { "supertest": "^7.1.4" }
+}
