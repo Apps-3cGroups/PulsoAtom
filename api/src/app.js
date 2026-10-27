@@ -10,6 +10,7 @@ import { createCatalogSchema, updateCatalogSchema, batchSchema, validateCatalog,
 import { evaluatorFromEnv } from './evaluator.js';
 import { startEvaluationBatch } from './evaluation-service.js';
 import { matchesSomos3cPassword } from './identity.js';
+import { mountTdRoutes } from './td-routes.js';
 
 const prefix = '/pulso/api';
 const cookieName = 'pulso_session';
@@ -25,14 +26,17 @@ export const integrationStatus = () => ({
   blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), ...(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? [] : ['Configurar OpenAI para la evaluación.']), ...(process.env.OPENAI_EVALUATION_ENABLED === 'true' ? [] : ['La transferencia de conversaciones a OpenAI está deshabilitada.'])],
 });
 
-export function createApp(store, config, evaluator = evaluatorFromEnv(), identity = null) {
+export function createApp(store, config, evaluator = evaluatorFromEnv(), identity = null, tdServices = {}) {
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
-  app.use(express.json({ limit: '1mb' }));
+  const tdUploadPath = `${prefix}/integrations/td/s3/upload`;
+  const tdMailPath = `${prefix}/integrations/td/mail/send`;
+  const standardJson = express.json({ limit: '1mb' });
+  app.use((req, res, next) => [tdUploadPath, tdMailPath].includes(req.path) ? next() : standardJson(req, res, next));
   app.use(cookieParser());
   app.use(prefix, (req, _res, next) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -120,6 +124,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     res.clearCookie(cookieName, { path: '/pulso', httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
+  mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });
   app.get(`${prefix}/access/grants`, requireAdmin, async (_req, res) => {
     if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
     const state = await store.read();

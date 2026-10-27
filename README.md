@@ -76,6 +76,7 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 | `OPENAI_EVALUATION_ENABLED` | Bloqueo explícito de transferencia; `false` por defecto. Se activa solo al habilitar nuevos lotes de evaluación. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
 | `APP_TIMEZONE` | Zona horaria de presentación; el horario diario también conserva su propia zona. |
+| `TD_API_BASE_URL` | URL base de la API TD para S3 y SMTP. Se configura solo en `api/.env`; no se envía al navegador. También se acepta la clave heredada `URL-Base`. |
 
 Para usar la base propia en otra instalación:
 
@@ -95,6 +96,12 @@ Para autorizar al primer administrador en otra instalación, ejecuta `cd api && 
 `dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. Falta acordar la URL de apertura en Atom y el criterio exacto para evaluar conversaciones que aún cambian.
 
 El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
+
+### Servicios TD: S3 y SMTP
+
+Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`. Exportan `uploadFileToS3`, `getS3TemporaryUrl`, `downloadS3File`, `checkMailHealth`, `sendMail` y `sendSimpleMail`; todas devuelven `{ success, message, data, error }`. La API TD no recibe JWT. El cliente usa únicamente `TD_API_BASE_URL`, HTTPS, un tiempo límite y errores normalizados. `s3Key` no admite `/` ni `\`; la caducidad máxima del enlace es 604800 segundos y el cuerpo de subida tiene un límite de 50 MB.
+
+En modo real, un administrador autenticado puede usar las rutas `/pulso/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
 
 ### Evaluación con OpenAI
 

@@ -49,6 +49,14 @@ test('la autenticación protege las rutas y el rol supervisor no puede escribir 
   assert.match(signed.headers['set-cookie'][0], /SameSite=Strict/);
   assert.match(signed.headers['set-cookie'][0], /Path=\/pulso/);
 });
+test('las rutas TD exigen administrador y permanecen cerradas en demostración', async () => {
+  await request(app).get('/pulso/api/integrations/td/mail/health').expect(401);
+  await supervisor.get('/pulso/api/integrations/td/mail/health').expect(403);
+  const health = await admin.get('/pulso/api/integrations/td/mail/health').expect(409);
+  assert.equal(health.body.error.code, 'DEMO_MODE');
+  await write(supervisor, 'post', '/integrations/td/mail/send', { to: 'test@example.com', subject: 'Prueba', text: 'Hola' }).expect(403);
+  await write(admin, 'post', '/integrations/td/s3/upload', { fileName: 'a.txt', fileText: 'Hola' }).expect(409);
+});
 test('alta, validación de duplicados y guardado conservado al reabrir el archivo demo', async () => {
   const source = initialCatalog.find(v => v.id === 'cliente_molesto');
   const input = { ...editable(source), variable: 'cliente_solicito_prueba', name: 'Solicitud de prueba', active: false };
