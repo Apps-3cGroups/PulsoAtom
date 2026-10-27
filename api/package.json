@@ -11,6 +11,7 @@
     "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/seed.js",
     "user:create": "node scripts/create-user.js",
+    "access:bootstrap": "node scripts/bootstrap-access.js",
     "eval:sample": "node scripts/evaluate-sample.js"
   },
   "dependencies": {
