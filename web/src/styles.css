@@ -176,6 +176,14 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .boot-loading > .brand { margin-bottom: 30px; }
 .table-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--border); }
 .table-panel-head h2 { font-size: 16px; font-weight: 500; }
+.access-create { margin-bottom: 20px; }
+.access-create h2 { font-size: 17px; margin-bottom: 5px; }
+.access-create > p { color: var(--muted); margin-bottom: 18px; }
+.access-lookup { display: flex; gap: 8px; margin-bottom: 16px; }
+.access-lookup .ant-form-item { min-width: 250px; }
+.access-found { border-top: 1px solid var(--border); padding-top: 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.access-found > div { display: flex; flex: 1; min-width: 220px; flex-direction: column; gap: 4px; }
+.access-found span { color: var(--muted); font-size: 12px; }
 .table-client { display: flex; flex-direction: column; gap: 6px; text-align: left; background: none; border: 0; padding: 0; color: var(--ink); }
 .table-client:hover b { color: var(--accent); }
 .table-client b { font-weight: 500; }

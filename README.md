@@ -80,12 +80,14 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 Para usar la base propia en otra instalación:
 
 1. Crear la base MySQL `dbPulsosAtom` con `utf8mb4`, usando una cuenta autorizada para aplicar migraciones.
-2. Completar `APP_DB_*` y cambiar `DEMO_MODE=false`.
+2. Completar `APP_DB_*` y la sección `IDENTITY_*`; después cambiar `DEMO_MODE=false` cuando exista una cuenta inicial habilitada.
 3. Desde `api/`, ejecutar `npm run db:migrate`, `npm run db:seed` y `npm run user:create`.
 4. `user:create` solicita nombre, correo, rol y contraseña en una terminal interactiva. La contraseña se oculta al escribir y se guarda con scrypt. No hay contraseñas reales predeterminadas ni registro público.
 5. Reiniciar la API y entrar con la cuenta creada. El histórico real se lee desde Atom; las conversaciones de demostración nunca se importan.
 
-Una conexión ausente o fallida no activa el modo demo como respaldo. En la conexión facilitada se verificaron las 16 tablas, el seed de 130 variables y la lectura de 233 conversaciones de Atom. `DEMO_MODE` permanece en `true` hasta crear una cuenta real para iniciar sesión.
+Una conexión ausente o fallida no activa el modo demo como respaldo. En la conexión facilitada se verificaron las 16 tablas, el seed de 130 variables y la lectura de 233 conversaciones de Atom. `DEMO_MODE` permanece en `true` hasta habilitar un administrador real para iniciar sesión.
+
+La autenticación real puede usar `dbSomos3c_2.tblUsuariosPortal` mediante `IDENTITY_*`. Pulso compara la contraseña con el hash SHA-512 existente, verifica que la cuenta esté activa, desbloqueada y sin cambio obligatorio de clave pendiente, y no copia hashes a su base. El rol `super_admin` activo de Somos3C obtiene acceso administrativo inicial; los demás usuarios requieren una concesión guardada en la tabla `users` de Pulso. Un administrador gestiona esas concesiones en **Accesos**: busca por usuario exacto, asigna administrador o supervisor, edita el rol y activa o inactiva. Las sesiones se guardan en Pulso y se revalidan contra la cuenta de origen en cada solicitud. Actualmente la única cuenta `super_admin` de origen tiene `requiereCambioClave=1`, así que debe actualizar su clave en el portal de origen antes de usar Pulso. No se ha cambiado ninguna cuenta ni contraseña de Somos3C.
 
 ### Origen Atom confirmado
 
