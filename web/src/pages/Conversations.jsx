@@ -18,7 +18,7 @@ export default function Conversations({ search = false }) {
   const update = next => setParams(queryString({ ...next, q: query }), { replace: true });
   const open = c => navigate(`/conversacion/${encodeURIComponent(c.id)}${c.excerpt ? `?message=${encodeURIComponent(c.excerpt.messageId)}` : ''}`);
   const columns = [
-    { title: 'CLIENTE / CONVERSACIÓN', key: 'client', width: 230, render: (_, c) => <button className="table-client" onClick={() => open(c)}><b>{c.client.name}<span className="masked-phone"> …{c.client.phoneLast4}</span></b><span className="mono small muted">{c.id}</span></button> },
+    { title: 'CLIENTE / CONVERSACIÓN', key: 'client', width: 230, render: (_, c) => <button className="table-client" onClick={() => open(c)}><b>{c.client.name}{c.client.phoneLast4 && <span className="masked-phone"> …{c.client.phoneLast4}</span>}</b><span className="mono small muted">{c.id}</span></button> },
     { title: 'ASISTENTE DE VENTA', key: 'agent', width: 210, render: (_, c) => <div className="table-stack"><span>{c.agent.name}</span><span className="small muted">{c.countryName} <span className="country-code small-code">{c.country}</span></span></div> },
     { title: 'FECHA', key: 'date', width: 150, render: (_, c) => <div className="table-stack"><span>{dateText(c.date, { year: undefined })}</span><span className="mono small muted">{timeText(c.startedAt)} · {c.channel}</span></div> },
     { title: 'PRIORIDAD', key: 'priority', width: 120, render: (_, c) => <div className="priority-cell">{c.p1 > 0 && <PriorityTag priority="P1" count={c.p1} />}{c.p2 > 0 && <PriorityTag priority="P2" count={c.p2} />}{!c.p1 && !c.p2 && <span className="muted">—</span>}</div> },

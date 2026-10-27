@@ -1,6 +1,6 @@
 # Pulso
 
-Portal local de revisión de calidad de conversaciones de Atom. Primera entrega: interfaz, catálogo editable, revisión humana y preparación de conexiones. Las evaluaciones automáticas y la lectura de Atom todavía no se ejecutan.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones futuras y la auditoría viven en `dbPulsosAtom`. Las evaluaciones automáticas todavía no se ejecutan.
 
 ## Abrir y ejecutar
 
@@ -70,38 +70,32 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 | Grupo | Uso |
 | --- | --- |
 | `APP_DB_*` | Base MySQL propia `dbPulsosAtom`: cuentas, catálogo, versiones, evaluaciones y auditoría. |
-| `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente a las tablas de origen. Los valores están reservados; aún no se hacen consultas a Atom. |
+| `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente de lectura a conversaciones, eventos y países. El catálogo de países proviene de `dbSomos3c_2.tblCatalogoPaises`. |
 | `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Configuración reservada del servicio de IA; el adaptador se implementará después. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
 | `APP_TIMEZONE` | Zona horaria de presentación; el horario diario también conserva su propia zona. |
 
-Para usar la base propia cuando esté disponible:
+Para usar la base propia en otra instalación:
 
 1. Crear la base MySQL `dbPulsosAtom` con `utf8mb4`, usando una cuenta autorizada para aplicar migraciones.
 2. Completar `APP_DB_*` y cambiar `DEMO_MODE=false`.
 3. Desde `api/`, ejecutar `npm run db:migrate`, `npm run db:seed` y `npm run user:create`.
 4. `user:create` solicita nombre, correo, rol y contraseña en una terminal interactiva. La contraseña se oculta al escribir y se guarda con scrypt. No hay contraseñas reales predeterminadas ni registro público.
-5. Reiniciar la API y entrar con la cuenta creada. La carga inicial real incluye el catálogo, pero no conversaciones ni usuarios de demostración.
+5. Reiniciar la API y entrar con la cuenta creada. El histórico real se lee desde Atom; las conversaciones de demostración nunca se importan.
 
-Una conexión ausente o fallida no activa el modo demo como respaldo. Las migraciones y el adaptador MySQL están implementados, pero **su ejecución y persistencia real se validarán al recibir la conexión**.
+Una conexión ausente o fallida no activa el modo demo como respaldo. En la conexión facilitada se verificaron las 16 tablas, el seed de 130 variables y la lectura de 233 conversaciones de Atom. `DEMO_MODE` permanece en `true` hasta crear una cuenta real para iniciar sesión.
 
-### Datos que necesitaremos de Atom
+### Origen Atom confirmado
 
-Motor y conexión; nombres de las tablas; identificadores y relaciones entre conversación, mensaje, asistente y país. Después inspeccionaremos columnas, estados y fechas para acordar:
+`dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. Falta acordar la URL de apertura en Atom y el criterio exacto para evaluar conversaciones que aún cambian.
 
-- Identificador estable de la conversación y de cada mensaje.
-- Inicio, cierre y última modificación, con su zona horaria.
-- Autor de cada mensaje: cliente, bot o humano; texto y referencias multimedia.
-- Asistente asignado, país, canal, identificador del cliente y URL de origen cuando exista.
-- Cómo reconocer nuevos registros, actualizaciones y conversaciones completas sin duplicarlas.
-
-El acceso de origen será de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia solo guardará una referencia a cada conversación de Atom, no su transcripción. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
+El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
 ### Trabajo pendiente de integración
 
-El llenado del `.env` por sí solo no habilita el motor. Faltan el mapeo e importación incremental de Atom, los evaluadores de IA y código, el tratamiento de dependencias/no aplicabilidad de cada variable y un procesador de lotes con reintentos, control de duplicados y programación diaria. La evaluación inicial cubrirá las 12 variables acordadas, con pruebas sobre conversaciones reales autorizadas.
+La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto para evitar repetir la lectura completa en cada petición; no se guardan transcripciones en Pulso. Faltan los evaluadores de IA y código, el tratamiento de dependencias/no aplicabilidad de cada variable y un procesador de lotes con reintentos, control de duplicados y programación diaria. La evaluación inicial cubrirá las 12 variables acordadas, con pruebas sobre conversaciones reales autorizadas.
 
-El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Las conversaciones se leerán directamente de Atom mediante un adaptador aún pendiente. Antes de consultar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador inicial carga el estado completo de Pulso. Esta entrega es una base local de desarrollo, todavía no una liberación de producción.
+El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Antes de consultar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador actual carga el histórico completo de Atom y el estado completo de Pulso. Esta entrega todavía no es una liberación de producción.
 
 ## Verificación
 
@@ -116,7 +110,7 @@ npm test
 npm run build
 ```
 
-Hay 13 pruebas de API y 1 del servidor web: importación, roles, formularios, persistencia demo, versiones, lotes atómicos, evidencia, revisiones, separación de bases, búsqueda, filtros, ausencia de simulación en modo real, rutas y proxy. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
+Hay 16 pruebas de API y 1 del servidor web: importación, roles, formularios, persistencia demo, versiones, lotes atómicos, evidencia, revisiones, separación de bases, mapeo de Atom, búsqueda, filtros, ausencia de simulación en modo real, rutas y proxy. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
 
 ## Organización
 

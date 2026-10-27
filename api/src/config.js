@@ -28,3 +28,30 @@ export function databaseConfig() {
     ...(bool(process.env.APP_DB_SSL) ? { ssl: { rejectUnauthorized: true } } : {}),
   };
 }
+
+export function atomDatabaseConfig() {
+  if (!process.env.ATOM_DB_HOST || !process.env.ATOM_DB_USER || !process.env.ATOM_DB_NAME || !process.env.ATOM_CONVERSATIONS_TABLE || !process.env.ATOM_MESSAGES_TABLE || !process.env.ATOM_COUNTRIES_TABLE) return null;
+  if ((process.env.ATOM_DB_ENGINE || 'mysql') !== 'mysql') throw new Error('El conector de Atom requiere MySQL.');
+  const table = name => {
+    const value = process.env[name];
+    if (!value || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?$/.test(value)) throw new Error(`${name} debe ser un nombre de tabla válido.`);
+    return value;
+  };
+  return {
+    connection: {
+      host: process.env.ATOM_DB_HOST, port: Number(process.env.ATOM_DB_PORT || 3306),
+      user: process.env.ATOM_DB_USER, password: process.env.ATOM_DB_PASSWORD || '',
+      database: process.env.ATOM_DB_NAME, charset: 'utf8mb4', timezone: 'Z',
+      connectionLimit: 3, connectTimeout: 5000,
+      ...(bool(process.env.ATOM_DB_SSL) ? { ssl: { rejectUnauthorized: true } } : {}),
+    },
+    tables: {
+      conversations: table('ATOM_CONVERSATIONS_TABLE'),
+      events: table('ATOM_MESSAGES_TABLE'),
+      countries: table('ATOM_COUNTRIES_TABLE'),
+      documents: table('ATOM_DOCUMENTS_TABLE'),
+      agents: table('ATOM_AGENTS_TABLE'),
+      channels: table('ATOM_CHANNELS_TABLE'),
+    },
+  };
+}

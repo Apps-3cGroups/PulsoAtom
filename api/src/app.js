@@ -14,13 +14,15 @@ const loginSchema = z.object({ email: z.string().trim().email().max(254), passwo
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
 export const integrationStatus = () => ({
   ready: false,
-  atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME),
+  atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_CONVERSATIONS_TABLE && process.env.ATOM_MESSAGES_TABLE && process.env.ATOM_COUNTRIES_TABLE),
   aiConfigured: !!(process.env.AI_BASE_URL && process.env.AI_MODEL),
-  blockers: ['Conectar y mapear las tablas de conversaciones de Atom.', 'Configurar y validar el servicio de IA con las variables seleccionadas.', 'Habilitar el procesador de evaluaciones y su programación diaria.'],
+  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), 'Configurar y validar el servicio de IA con las variables seleccionadas.', 'Habilitar el procesador de evaluaciones y su programación diaria.'],
 });
 
 export function createApp(store, config) {
   const app = express();
+  const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
+  const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
   app.use(express.json({ limit: '1mb' }));
@@ -84,11 +86,11 @@ export function createApp(store, config) {
   });
   app.use(prefix, requireUser);
   app.get(`${prefix}/bootstrap`, async (_req, res) => {
-    const state = await store.read();
+    const state = await readHistory();
     const dates = state.conversations.map(c => c.date).sort();
     res.json({
       mode: config.demo ? 'demo' : 'real', metadata: state.metadata, timezone: config.timezone,
-      countries: countries.map(({ code, name }) => ({ code, name })),
+      countries: (state.countries || countries).map(({ code, name }) => ({ code, name })),
       agents: [...new Map(state.conversations.map(c => [c.agent.id, { ...c.agent, country: c.country }])).values()],
       catalog: state.catalog.map(({ id, name, family, phase, mark, active, version }) => ({ id, name, family, phase, mark, active, version })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
@@ -148,28 +150,28 @@ export function createApp(store, config) {
   });
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
-    const state = await store.read();
+    const state = await readHistory();
     const conversations = filteredConversations(state, query);
     const priority = conversations.filter(c => c.p1 || c.p2).sort(priorityOrder);
     res.json({ metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
   });
   const list = (search = false) => async (req, res) => {
     const query = listQuerySchema.parse(req.query);
-    const state = await store.read();
+    const state = await readHistory();
     const items = filteredConversations(state, query, search);
     res.json({ items: items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize), total: items.length, page: query.page, pageSize: query.pageSize });
   };
   app.get(`${prefix}/conversations`, list());
   app.get(`${prefix}/search`, list(true));
   app.get(`${prefix}/conversations/:id`, async (req, res) => {
-    const state = await store.read();
+    const state = await readHistory();
     const conversation = state.conversations.find(c => c.id === req.params.id);
     if (!conversation) throw new AppError(404, 'No se encontró esta conversación.', 'NOT_FOUND');
     res.json({ conversation: conversationView(state, conversation, undefined, true) });
   });
   app.post(`${prefix}/conversations/:id/reviews`, async (req, res) => {
     const input = reviewSchema.parse(req.body);
-    const review = await store.transaction(state => recordReview(state, req.params.id, input, req.user));
+    const review = await reviewHistory(state => recordReview(state, req.params.id, input, req.user));
     res.status(201).json({ review });
   });
   app.get(`${prefix}/evaluations`, async (_req, res) => {
@@ -178,7 +180,7 @@ export function createApp(store, config) {
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled) throw new AppError(409, 'La programación no puede activarse hasta conectar Atom, la IA y el procesador de evaluaciones.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+    if (input.dailyEnabled) throw new AppError(409, 'La programación no puede activarse hasta configurar la IA y el procesador de evaluaciones.', 'INTEGRATION_PENDING', integrationStatus().blockers);
     const settings = await store.transaction(state => {
       ensureVersion(state.settings, expectedVersion);
       state.settings = { ...input, version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
@@ -197,7 +199,7 @@ export function createApp(store, config) {
     if (error.type === 'entity.too.large') return res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'La solicitud supera el tamaño permitido.' } });
     const databaseError = error.code && /^(ER_|ECONN|ENOTFOUND|ETIMEDOUT)/.test(error.code);
     console.error('Error Pulso:', error.code || error.name);
-    res.status(databaseError ? 503 : 500).json({ error: { code: databaseError ? 'DATABASE_UNAVAILABLE' : 'INTERNAL_ERROR', message: databaseError ? 'No se pudo acceder a la base de Pulso. Revisa la conexión y las migraciones.' : 'No se pudo completar la operación. No se ha confirmado ningún cambio.' } });
+    res.status(databaseError ? 503 : 500).json({ error: { code: databaseError ? 'DATABASE_UNAVAILABLE' : 'INTERNAL_ERROR', message: databaseError ? 'No se pudo acceder a una base de datos. Revisa las conexiones de Pulso y Atom.' : 'No se pudo completar la operación. No se ha confirmado ningún cambio.' } });
   });
   return app;
 }

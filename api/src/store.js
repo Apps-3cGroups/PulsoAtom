@@ -110,3 +110,29 @@ export class MysqlStore {
   }
   async close() { await this.pool.end(); }
 }
+
+export class AtomHistoryStore {
+  constructor(base, reader) { this.base = base; this.reader = reader; }
+  async read() { return this.base.read(); }
+  async readWithConversations() {
+    const [state, source] = await Promise.all([this.base.read(), this.reader.read()]);
+    return this.attach(state, source);
+  }
+  attach(state, source) {
+    const latest = new Map();
+    for (const evaluation of state.evaluations) {
+      const previous = latest.get(evaluation.conversationId);
+      if (!previous || evaluation.createdAt > previous.createdAt) latest.set(evaluation.conversationId, evaluation);
+    }
+    state.conversations = source.conversations.map(conversation => ({ ...conversation, evaluationId: latest.get(conversation.id)?.id || null }));
+    state.countries = source.countries;
+    state.metadata = { ...state.metadata, source: 'Atom', lastLoadedAt: source.loadedAt };
+    return state;
+  }
+  async transaction(fn) { return this.base.transaction(fn); }
+  async transactionWithConversations(fn) {
+    const source = await this.reader.read();
+    return this.base.transaction(state => fn(this.attach(state, source)));
+  }
+  async close() { await Promise.all([this.base.close(), this.reader.close()]); }
+}
