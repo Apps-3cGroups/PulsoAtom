@@ -30,6 +30,8 @@ export function mapAtomConversation(row, events, country, timezone) {
     agent: { id: row.IdAsesorActual == null ? 'sin-asesor' : String(row.IdAsesorActual), name: row.AsesorNombre || 'Sin asesor asignado' },
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
     date: localDate(startedAt, timezone), startedAt,
+    sourceCreatedAt: row.FechaCreacionUtc ? iso(row.FechaCreacionUtc) : startedAt,
+    sourceUpdatedAt: row.FechaActualizacionUtc ? iso(row.FechaActualizacionUtc) : startedAt,
     endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : iso(row.FechaUltimaActividadUtc),
     completed: !!row.FechaFinUtc,
     channel: row.CanalNombre || 'Sin canal', topics: [], media: [...media], messages,
@@ -50,7 +52,7 @@ export class AtomReader {
     const [countryRows] = await this.pool.query(`SELECT DISTINCT p.CodigoPais AS code, p.ISO_Code2 AS iso2, p.NombrePais AS name FROM ${p} p INNER JOIN ${c} c ON c.CodigoPais = p.CodigoPais INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' ORDER BY p.NombrePais`);
     const countries = countryRows.map(row => ({ code: String(row.iso2), name: row.name, sourceCode: Number(row.code) }));
     const byCountry = new Map(countries.map(row => [row.sourceCode, row]));
-    const [rows] = await this.pool.query(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual, c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.IdDocumentoVigente, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`);
+    const [rows] = await this.pool.query(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual, c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.FechaCreacionUtc, c.FechaActualizacionUtc, c.IdDocumentoVigente, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`);
     const byDocument = new Map(rows.map(row => [String(row.IdDocumentoVigente), []]));
     const ids = [...byDocument.keys()];
     for (let offset = 0; offset < ids.length; offset += 300) {

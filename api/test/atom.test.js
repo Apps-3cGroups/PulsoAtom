@@ -76,8 +76,9 @@ test('las rutas reales muestran el país y los mensajes de Atom sin presentar ev
 });
 
 test('un lote a demanda crea resultados reales y los muestra en la conversación', async () => {
-  const previousFlag = process.env.OPENAI_EVALUATION_ENABLED;
-  process.env.OPENAI_EVALUATION_ENABLED = 'true';
+  const overrides = { OPENAI_EVALUATION_ENABLED: 'true', OPENAI_API_KEY: 'test', OPENAI_MODEL: 'mock', ATOM_DB_HOST: 'test', ATOM_DB_NAME: 'test', ATOM_COUNTRIES_TABLE: 'test', APP_DB_HOST: 'test' };
+  const previous = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
+  Object.assign(process.env, overrides);
   try {
     let stored = createState(false);
     stored.users.push({ id: 'admin-batch', name: 'Admin', email: 'batch@example.test', role: 'admin', active: true, passwordHash: hashPassword('long-test-password') });
@@ -95,6 +96,9 @@ test('un lote a demanda crea resultados reales y los muestra en la conversación
     const app = createApp(store, { demo: false, origin: 'http://127.0.0.1:3000', sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' }, evaluator);
     const client = request.agent(app);
     await client.post('/pulso/api/auth/login').set('Origin', 'http://127.0.0.1:3000').send({ email: 'batch@example.test', password: 'long-test-password' }).expect(200);
+    const scheduled = await client.patch('/pulso/api/evaluations/settings').set('Origin', 'http://127.0.0.1:3000').send({ dailyEnabled: true, dailyTime: '08:30', timezone: 'America/Tegucigalpa', expectedVersion: 1 }).expect(200);
+    assert.equal(scheduled.body.settings.dailyEnabled, true);
+    assert.ok(Date.parse(scheduled.body.settings.dailyStartedAt));
     const started = await client.post('/pulso/api/evaluations').set('Origin', 'http://127.0.0.1:3000').send({ scope: 'new', max: 5 }).expect(202);
     assert.equal(started.body.job.total, 1);
     for (let attempt = 0; attempt < 20 && stored.jobs[0].status === 'running'; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
@@ -104,7 +108,6 @@ test('un lote a demanda crea resultados reales y los muestra en la conversación
     assert.equal(detail.body.conversation.p1, 1);
     assert.equal(stored.conversations.length, 0);
   } finally {
-    if (previousFlag === undefined) delete process.env.OPENAI_EVALUATION_ENABLED;
-    else process.env.OPENAI_EVALUATION_ENABLED = previousFlag;
+    for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
 });

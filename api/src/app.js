@@ -183,10 +183,10 @@ export function createApp(store, config, evaluator = evaluatorFromEnv()) {
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled) throw new AppError(409, 'La programación no puede activarse hasta configurar la IA y el procesador de evaluaciones.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !integrationStatus().ready || !evaluator.configured)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y OpenAI en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
     const settings = await store.transaction(state => {
       ensureVersion(state.settings, expectedVersion);
-      state.settings = { ...input, version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
+      state.settings = { ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
       return state.settings;
     });
     res.json({ settings });
