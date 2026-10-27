@@ -50,3 +50,19 @@ test('el superadministrador de origen concede y revoca acceso desde Pulso', asyn
   await other.get('/pulso/api/catalog').expect(401);
   assert.equal((await store.read()).users.find(user => user.externalId === 2).passwordHash, undefined);
 });
+
+test('una cuenta por correo de tblPersonas usa el permiso propio de Pulso', async () => {
+  let state = createState(false);
+  state.users.push({ id: 'somos3c-person:42', externalId: 42, externalGrant: true, email: 'somos3c-person-42@pulso.local', name: 'Persona', role: 'admin', active: true });
+  const person = { id: 42, username: 'persona@example.test', name: 'Persona', active: true, blocked: false, changeRequired: false, sourceRoles: [], passwordHash: hash('clave-correcta') };
+  const identity = { mode: 'person-email', lookup: async email => email === person.username ? person : null, byId: async id => Number(id) === 42 ? person : null };
+  const store = { async read() { return structuredClone(state); }, async transaction(fn) { const draft = structuredClone(state); const result = await fn(draft); state = draft; return result; } };
+  const app = createApp(store, { demo: false, origin, sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' }, { configured: false }, identity);
+  const client = request.agent(app);
+  assert.equal((await client.get('/pulso/api/meta')).body.authMode, 'somos3c-email');
+  await write(client, 'post', '/auth/login', { username: person.username, password: 'clave-correcta' }).expect(200);
+  assert.equal((await client.get('/pulso/api/auth/me')).body.user.role, 'admin');
+  person.active = false;
+  await client.get('/pulso/api/auth/me').expect(401);
+  assert.equal(state.users[0].passwordHash, undefined);
+});

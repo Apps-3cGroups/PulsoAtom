@@ -1,6 +1,6 @@
 import { databaseConfig, identityDatabaseConfig } from '../src/config.js';
 import { MysqlStore } from '../src/store.js';
-import { Somos3cIdentity } from '../src/identity.js';
+import { Somos3cIdentity, Somos3cPersonIdentity } from '../src/identity.js';
 
 const username = process.argv[2]?.trim();
 if (!username || process.argv.length !== 3) throw new Error('Uso: npm run access:bootstrap -- <usuario exacto de Somos3C>');
@@ -8,15 +8,16 @@ const appOptions = databaseConfig();
 const identityOptions = identityDatabaseConfig();
 if (!appOptions || !identityOptions) throw new Error('Configura APP_DB_*, ATOM_DB_* e IDENTITY_* en api/.env.');
 const store = new MysqlStore(appOptions);
-const identity = new Somos3cIdentity(identityOptions);
+const identity = identityOptions.mode === 'person-email' ? new Somos3cPersonIdentity(identityOptions) : new Somos3cIdentity(identityOptions);
 try {
   const source = await identity.lookup(username);
   if (!source?.active || source.blocked || source.changeRequired) throw new Error('La cuenta de origen no está lista para ingresar a Pulso. Verifica su estado y cambio de clave en Somos3C.');
   await store.transaction(state => {
     if (state.users.some(user => user.role === 'admin' && user.active)) throw new Error('Pulso ya tiene un administrador. Usa la pantalla Accesos para otorgar permisos.');
+    const id = `${identity.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${source.id}`;
     state.users.push({
-      id: `somos3c:${source.id}`, externalId: source.id, externalGrant: true,
-      email: `somos3c-${source.id}@pulso.local`, name: source.name,
+      id, externalId: source.id, externalGrant: true,
+      email: `${id.replace(':', '-')}@pulso.local`, name: source.name,
       role: 'admin', active: true, createdAt: new Date().toISOString(),
     });
   });

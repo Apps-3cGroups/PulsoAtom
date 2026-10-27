@@ -41,9 +41,9 @@ export default function Access() {
     {error && <Alert type="error" showIcon message={error.message} style={{ marginBottom: 16 }} />}
     <section className="evaluation-card access-create">
       <h2>Agregar acceso</h2>
-      <p>Busca el usuario exacto de Somos3C. Su contraseña no se guarda en Pulso.</p>
+      <p>Busca el correo exacto de Somos3C. Su contraseña no se guarda en Pulso.</p>
       <Form layout="inline" onFinish={lookup} className="access-lookup">
-        <Form.Item name="username" rules={[{ required: true, message: 'Indica el usuario.' }]}><Input placeholder="Usuario de Somos3C" aria-label="Usuario de Somos3C" maxLength={80} /></Form.Item>
+        <Form.Item name="username" rules={[{ required: true, type: 'email', message: 'Indica un correo válido.' }]}><Input placeholder="Correo de Somos3C" aria-label="Correo de Somos3C" maxLength={254} /></Form.Item>
         <Button htmlType="submit" icon={<SearchOutlined />} loading={searching}>Buscar</Button>
       </Form>
       {found && <div className="access-found"><div><b>{found.name}</b><span>{found.username} · {found.active ? 'Activo en Somos3C' : 'Inactivo en Somos3C'}</span>{found.changeRequired && <Tag color="orange">Debe cambiar su clave en Somos3C</Tag>}{found.blocked && <Tag color="red">Cuenta bloqueada en Somos3C</Tag>}</div><Select aria-label="Rol en Pulso" value={role} onChange={setRole} options={roles} style={{ width: 160 }} /><Button type="primary" icon={<UserAddOutlined />} loading={saving === 'new'} disabled={!found.active || found.blocked} onClick={grant}>{request.data.items.some(item => item.externalId === found.id) ? 'Actualizar acceso' : 'Dar acceso'}</Button></div>}

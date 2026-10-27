@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import mysql from 'mysql2/promise';
+import { AppError } from './errors.js';
 
 export function matchesSomos3cPassword(storedHash, password) {
   if (!/^[a-f0-9]{128}$/i.test(storedHash || '')) return false;
@@ -10,6 +11,7 @@ export function matchesSomos3cPassword(storedHash, password) {
 
 export class Somos3cIdentity {
   constructor(options) {
+    this.mode = 'portal-user';
     this.pool = mysql.createPool(options.connection);
     this.tables = Object.fromEntries(Object.entries(options.tables).map(([key, value]) => [key, mysql.escapeId(`${options.connection.database}.${value}`)]));
   }
@@ -45,6 +47,36 @@ export class Somos3cIdentity {
       sourceRoles: String(row.sourceRoles || '').split(',').filter(Boolean),
       ...(row.passwordHash ? { passwordHash: row.passwordHash } : {}),
     };
+  }
+  async close() { await this.pool.end(); }
+}
+
+export class Somos3cPersonIdentity {
+  constructor(options) {
+    this.mode = 'person-email';
+    this.pool = mysql.createPool(options.connection);
+    this.table = mysql.escapeId(`${options.connection.database}.${options.tables.people}`);
+  }
+  normalize(row, username, credentials) {
+    return {
+      id: Number(row.id), username, name: row.name || username,
+      active: !!row.active, changeRequired: false, blocked: false, sourceRoles: [],
+      ...(credentials ? { passwordHash: row.passwordHash } : {}),
+    };
+  }
+  async lookup(email, { credentials = false } = {}) {
+    const [rows] = await this.pool.execute(`SELECT CodigoPersona AS id, NombreCompleto AS name, IsActivo AS active
+      ${credentials ? ', Credenciales AS passwordHash' : ''}
+      FROM ${this.table} WHERE LOWER(?) IN (LOWER(CorreoElectronico_Institucional),
+      LOWER(CorreoElectronico_Personal), LOWER(CorreoElectronico_Alternativo)) LIMIT 2`, [email]);
+    if (rows.length > 1) throw new AppError(409, 'Este correo identifica varias cuentas de origen. Usa un correo único.', 'AMBIGUOUS_IDENTITY');
+    return rows[0] ? this.normalize(rows[0], email, credentials) : null;
+  }
+  async byId(id) {
+    const [rows] = await this.pool.execute(`SELECT CodigoPersona AS id, NombreCompleto AS name, IsActivo AS active,
+      COALESCE(NULLIF(CorreoElectronico_Institucional, ''), NULLIF(CorreoElectronico_Personal, ''),
+      CorreoElectronico_Alternativo) AS username FROM ${this.table} WHERE CodigoPersona = ? LIMIT 1`, [id]);
+    return rows[0] ? this.normalize(rows[0], rows[0].username, false) : null;
   }
   async close() { await this.pool.end(); }
 }

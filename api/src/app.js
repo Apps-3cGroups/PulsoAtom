@@ -14,7 +14,7 @@ import { matchesSomos3cPassword } from './identity.js';
 const prefix = '/pulso/api';
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
-const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(80), password: z.string().min(1).max(200) }).strict();
+const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
 const grantSchema = z.object({ externalId: z.number().int().positive(), role: z.enum(['admin', 'supervisor']) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
 const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(100).default(20) }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
@@ -27,6 +27,7 @@ export const integrationStatus = () => ({
 
 export function createApp(store, config, evaluator = evaluatorFromEnv(), identity = null) {
   const app = express();
+  const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
@@ -48,7 +49,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     try { await store.read(); } catch { storageReady = false; }
     res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: !config.demo && !!store.readWithConversations && evaluator.configured && process.env.OPENAI_EVALUATION_ENABLED === 'true' });
   });
-  app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
+  app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
     const token = req.cookies[cookieName];
     if (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token)) {
@@ -93,12 +94,12 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
       if (!source.active || source.blocked) throw new AppError(403, 'La cuenta de origen está inactiva o bloqueada.', 'SOURCE_ACCOUNT_BLOCKED');
       if (source.changeRequired) throw new AppError(403, 'Debes actualizar tu contraseña en el portal de origen antes de entrar a Pulso.', 'PASSWORD_CHANGE_REQUIRED');
       const user = await store.transaction(state => {
-        const id = `somos3c:${source.id}`;
+        const id = externalUserId(source.id);
         let current = state.users.find(item => item.id === id);
         const sourceAdmin = source.sourceRoles.includes('super_admin');
         if (!sourceAdmin && (!current?.externalGrant || !current.active)) throw new AppError(403, 'Tu usuario aún no tiene acceso a Pulso.', 'PULSO_ACCESS_REQUIRED');
         if (!current) {
-          current = { id, externalId: source.id, externalGrant: false, email: `somos3c-${source.id}@pulso.local`, name: source.name, role: 'admin', active: true, createdAt: new Date().toISOString() };
+          current = { id, externalId: source.id, externalGrant: false, email: `${id.replace(':', '-')}@pulso.local`, name: source.name, role: 'admin', active: true, createdAt: new Date().toISOString() };
           state.users.push(current);
         }
         current.name = source.name;
@@ -126,7 +127,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
   });
   app.post(`${prefix}/access/lookup`, requireAdmin, async (req, res) => {
     if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
-    const { username } = z.object({ username: z.string().trim().min(1).max(80) }).strict().parse(req.body);
+    const { username } = z.object({ username: z.string().trim().min(1).max(254) }).strict().parse(req.body);
     const source = await identity.lookup(username);
     if (!source) throw new AppError(404, 'No se encontró el usuario en Somos3C.', 'NOT_FOUND');
     res.json({ user: { id: source.id, username: source.username, name: source.name, active: source.active, changeRequired: source.changeRequired, blocked: source.blocked } });
@@ -138,9 +139,9 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     if (!source?.active) throw new AppError(422, 'El usuario de origen no está activo.', 'SOURCE_ACCOUNT_BLOCKED');
     if (source.sourceRoles.includes('super_admin')) throw new AppError(409, 'El superadministrador de origen ya tiene acceso administrativo.', 'SOURCE_ADMIN');
     const grant = await store.transaction(state => {
-      const id = `somos3c:${source.id}`;
+      const id = externalUserId(source.id);
       let user = state.users.find(item => item.id === id);
-      if (!user) { user = { id, externalId: source.id, email: `somos3c-${source.id}@pulso.local`, createdAt: new Date().toISOString() }; state.users.push(user); }
+      if (!user) { user = { id, externalId: source.id, email: `${id.replace(':', '-')}@pulso.local`, createdAt: new Date().toISOString() }; state.users.push(user); }
       Object.assign(user, { name: source.name, role: input.role, active: true, externalGrant: true, updatedBy: req.user.id, updatedAt: new Date().toISOString() });
       return { id, externalId: source.id, name: source.name, role: user.role, active: true };
     });
