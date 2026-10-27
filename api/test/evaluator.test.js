@@ -60,6 +60,22 @@ test('el lote histórico selecciona pendientes y guarda solo evaluaciones propia
   assert.equal(state.evaluations.length, 2);
 });
 
+test('un lote por país incluye solo conversaciones pendientes del país solicitado', async () => {
+  const state = createState(false);
+  state.conversations = [
+    { ...conversation, id: 'hn-1', country: 'HN' },
+    { ...conversation, id: 'cr-1', country: 'CR' },
+    { ...conversation, id: 'hn-2', country: 'HN', evaluationId: 'old' },
+  ];
+  const store = { async readWithConversations() { return structuredClone(state); }, async read() { return structuredClone(state); }, async transaction(fn) { return fn(state); } };
+  const evaluator = { configured: true, async evaluate() { return { results: validateEvaluation(answer(), variables, conversation), model: 'gpt-6-luna', responseId: 'resp-1' }; } };
+  assert.deepEqual(eligibleConversations(state, { country: 'HN' }).map(c => c.id), ['hn-1']);
+  const job = await runEvaluationBatch(store, evaluator, { country: 'HN', max: 10 });
+  assert.deepEqual(job.conversationIds, ['hn-1']);
+  assert.equal(job.country, 'HN');
+  assert.equal(job.completed, 1);
+});
+
 test('un lote recupera trabajos vencidos y no publica detalles internos de fallos', async () => {
   const state = createState(false);
   state.conversations = [conversation];

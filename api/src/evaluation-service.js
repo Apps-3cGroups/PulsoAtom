@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
 
-export function eligibleConversations(state, { from, to, pendingOnly = true, sourceChangedAfter } = {}) {
+export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter } = {}) {
   return state.conversations.filter(c => c.messages.length && c.completed !== false && (!from || c.date >= from) && (!to || c.date <= to)
-    && (!pendingOnly || !c.evaluationId) && (!sourceChangedAfter || (c.sourceCreatedAt >= sourceChangedAfter || c.sourceUpdatedAt >= sourceChangedAfter)));
+    && (!country || c.country === country) && (!pendingOnly || !c.evaluationId) && (!sourceChangedAfter || (c.sourceCreatedAt >= sourceChangedAfter || c.sourceUpdatedAt >= sourceChangedAfter)));
 }
 
 export async function evaluateConversation(store, evaluator, conversation, catalog, { replace = false } = {}) {
@@ -26,13 +26,13 @@ export async function evaluateConversation(store, evaluator, conversation, catal
   return evaluation;
 }
 
-export async function startEvaluationBatch(store, evaluator, { from, to, pendingOnly = true, max = 100, random = false, conversationIds, sourceJobId, sourceChangedAfter, scheduleDate, onProgress } = {}) {
+export async function startEvaluationBatch(store, evaluator, { from, to, country, pendingOnly = true, max = 100, random = false, conversationIds, sourceJobId, sourceChangedAfter, scheduleDate, onProgress } = {}) {
   if (!evaluator.configured) throw new AppError(503, 'Falta configurar OpenAI.', 'AI_NOT_CONFIGURED');
   const state = await store.readWithConversations();
   const catalog = state.catalog;
   const active = catalog.filter(v => v.active);
   if (!active.length || active.some(v => v.type !== 'Flag' || !['IA', 'IA + código'].includes(v.method))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
-  let candidates = eligibleConversations(state, { from, to, pendingOnly, sourceChangedAfter });
+  let candidates = eligibleConversations(state, { from, to, country, pendingOnly, sourceChangedAfter });
   if (conversationIds) {
     if (!Array.isArray(conversationIds) || !conversationIds.length || new Set(conversationIds).size !== conversationIds.length) throw new AppError(422, 'La lista de conversaciones para revisión es inválida.', 'INVALID_RECHECK');
     const byId = new Map(candidates.map(c => [c.id, c]));
@@ -44,7 +44,7 @@ export async function startEvaluationBatch(store, evaluator, { from, to, pending
     for (let i = candidates.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [candidates[i], candidates[j]] = [candidates[j], candidates[i]]; }
   }
   candidates = candidates.slice(0, max);
-  const job = { id: randomUUID(), status: 'running', scope: scheduleDate ? 'daily' : conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period', sourceJobId: sourceJobId || null, scheduleDate: scheduleDate || null, from: from || null, to: to || null,
+  const job = { id: randomUUID(), status: 'running', scope: scheduleDate ? 'daily' : conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period', sourceJobId: sourceJobId || null, scheduleDate: scheduleDate || null, from: from || null, to: to || null, country: country || null,
     total: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
   await store.transaction(draft => {
