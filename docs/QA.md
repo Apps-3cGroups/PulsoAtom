@@ -1,162 +1,96 @@
-# Validación de Pulso · primera entrega
+# QA intensivo — Pulso
 
-Fecha: 26 de octubre de 2026. Alcance: portal local con datos demostrativos, API y base de integración futura. Se usaron pruebas automatizadas, revisión del código y navegación real en el navegador integrado; las pruebas de base real y de IA están fuera de esta entrega.
-
-Resultado ejecutado: **11 pruebas de API y 1 del servidor web aprobadas; compilación Vite correcta**. La compilación final también se sirvió con `web/server.js` y se comprobó la recarga de `/pulso/catalogo`. La comprobación visual del tema claro cubre una ventana de escritorio de aproximadamente 1012 px de ancho.
-
-## Checklist QA
-
-### 1. Flujo completo
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: ingreso demo, navegación, búsqueda, apertura del mensaje coincidente, revisión humana y retorno al resumen funcionan.
-  Evidencia: recorrido manual en `/pulso/busqueda?q=cancelar` → `/pulso/conversacion/DEMO-MX-0001`; prueba de refutación y deshacer.
-  Comportamiento esperado: consultar y revisar sin abandonar el portal ni perder la evidencia original.
-  Recomendación: repetir el recorrido con conversaciones reales cuando se conecte Atom.
-
-### 2. Botones y acciones
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: guardar, cancelar, cerrar, editar y cambiar estados tienen acción real. Evaluar, habilitar programación y abrir Atom están bloqueados cuando no existe integración.
-  Evidencia: guardado de catálogo y horario, modal de revisión, `api/test/portal.test.js`, mensajes visibles en Evaluaciones.
-  Comportamiento esperado: confirmar éxitos únicamente después de una operación persistida y explicar los controles no disponibles.
-  Recomendación: conservar el bloqueo hasta completar los adaptadores.
-
-### 3. Links y navegación
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: rutas, recursos y API usan `/pulso`. Las rutas internas recargan y el prefijo llega intacto a la API.
-  Evidencia: `web/test/server.test.js`; recarga manual del catálogo y de Evaluaciones; recarga del catálogo en la compilación Express.
-  Comportamiento esperado: no redirigir a `/` ni devolver un 404 en rutas válidas del portal.
-  Recomendación: repetir estas pruebas al colocar un proxy o dominio de despliegue.
-
-### 4. Catálogos y mantenimientos
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: agregar, editar, activar/inactivar y listado conviven en el catálogo. El estado visible coincide con la acción por fila.
-  Evidencia: `web/src/pages/Catalog.jsx`, captura `pulso-catalogo.png`; altas y duplicados por API; edición en navegador; activación de dos variables, contador de 12 a 14 e inactivación de retorno a 12.
-  Comportamiento esperado: conservar 130 variables iniciales y permitir su mantenimiento con versiones.
-  Recomendación: mantener las tres plantillas de guion inactivas hasta definir puntos concretos.
-
-### 5. Formularios
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: campos obligatorios, código único, longitudes, formato, versión esperada y evidencia se validan. Se comprobó persistencia demo después de recargar.
-  Evidencia: envío vacío de Agregar variable; cambio y restauración del nombre de `resultado_conversacion`, versiones 1–3 visibles; pruebas automatizadas de duplicado, conflicto y evidencia; horario cambiado a 08:00 y restaurado a 07:00 tras recarga.
-  Comportamiento esperado: no guardar datos inválidos ni sobrescribir cambios concurrentes.
-  Recomendación: validar transacciones contra la base real antes de habilitar su uso.
-
-### 6. Ortografía, redacción y tildes
-
-- Estado: cumple
-  Criticidad: menor
-  Hallazgo: se completaron nombres visibles con tildes y frases legibles, manteniendo los códigos originales del Excel. Se corrigió la etiqueta de revisión para incluir tanto administradores como supervisores.
-  Evidencia: `api/src/data/catalog-labels.json`, `catalog.json`, `web/src/pages/Conversation.jsx`.
-  Comportamiento esperado: mostrar nombres claros sin cambiar el identificador de cada variable.
-  Recomendación: revisar nomenclatura de negocio al incorporar las siguientes etapas del checklist.
-
-### 7. Estados de carga, espera y feedback
-
-- Estado: cumple
-  Criticidad: media
-  Hallazgo: se muestran cargas, errores con reintento, resultados vacíos y confirmaciones de guardado. La indisponibilidad temporal de la API se presentó como error y el reintento recuperó el catálogo.
-  Evidencia: reinicio de API durante QA; mensajes «Variable actualizada en la demostración», «2 variables actualizadas» y «La programación sigue inactiva».
-  Comportamiento esperado: no presentar resultados ficticios ni confirmar operaciones fallidas.
-  Recomendación: ampliar los casos de errores reales de Atom y del proveedor de IA al conectarlos.
-
-### 8. Revisión visual y alineación con diseño
-
-- Estado: cumple
-  Criticidad: media
-  Hallazgo: el portal utiliza un tema claro con los verdes, las figuras y colores de prioridad, el mapa por país/asistente y la jerarquía del prototipo. Se corrigió la visibilidad del estado en el catálogo.
-  Evidencia: `pulso-resumen.png`, `pulso-catalogo.png`, comparación con los HTML y la captura proporcionados; revisión manual de tema claro.
-  Comportamiento esperado: adaptar el diseño al histórico y al catálogo sin mostrar actividad en tiempo real.
-  Recomendación: revisar conjuntamente la densidad visual al mostrar un volumen real mayor.
-
-- Estado: revisar
-  Criticidad: media
-  Hallazgo: existen reglas responsive, pero no se ejecutó una prueba en un dispositivo móvil físico ni en todos los tamaños de pantalla.
-  Evidencia: reglas de 700, 980, 1200 y 1500 px en `web/src/styles.css`; capturas de escritorio disponibles.
-  Comportamiento esperado: navegación, drawers y tablas accesibles en pantallas pequeñas.
-  Recomendación: validar en los dispositivos que se usarán antes de liberar a producción.
-
-### 9. Tablas o listados
-
-- Estado: cumple
-  Criticidad: media
-  Hallazgo: hay búsqueda, filtros, paginación, estados y selección por lotes; las filas y los contadores se actualizan después de guardar.
-  Evidencia: pruebas de filtros/fechas/paginación; búsqueda manual «cancelar» devuelve 8 conversaciones; prueba manual de lote en la compilación final.
-  Comportamiento esperado: resultados coherentes con los filtros y sin alterar el histórico al cambiar el catálogo.
-  Recomendación: probar con el tamaño real del histórico al integrar consultas SQL paginadas.
-
-### 10. Modales
-
-- Estado: cumple
-  Criticidad: media
-  Hallazgo: los drawers de edición e historial abren y cierran; los modales de activación y revisión explican su efecto y permiten cancelar.
-  Evidencia: envío vacío, edición/restauración, historial de versiones, confirmación de lote y modal de deshacer revisión en el navegador.
-  Comportamiento esperado: mantener el contexto y requerir motivo/comentario al revisar flags.
-  Recomendación: conservar las confirmaciones para cambios de estado por lote.
-
-### 11. Consistencia funcional
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: no evaluado se distingue de cero; la evaluación conserva versiones; refutar y deshacer agregan eventos; el modo real nunca recurre a datos demo.
-  Evidencia: pruebas 4, 6, 7, 8 y 10 de API; revisión manual con dos eventos en `DEMO-MX-0001`.
-  Comportamiento esperado: mostrar resultado base, evidencia y revisión humana sin reescribir el pasado.
-  Recomendación: preservar esta separación al incorporar el evaluador automático.
-
-### 12. Robustez general
-
-- Estado: cumple
-  Criticidad: media
-  Hallazgo: se corrigió la advertencia de compatibilidad de Ant Design 5 con React 19 usando el paquete oficial. No se observaron nuevas advertencias ni errores de consola en el recorrido final de la compilación.
-  Evidencia: `web/src/main.jsx`, paquete `@ant-design/v5-patch-for-react-19`, [documentación oficial](https://5x.ant.design/docs/react/v5-for-19/), consola después del arranque final.
-  Comportamiento esperado: renderizado y modales compatibles con las versiones instaladas.
-  Recomendación: mantener el paquete mientras se use esta combinación de versiones.
-
-- Estado: revisar
-  Criticidad: media
-  Hallazgo: la compilación avisa de un paquete inicial de aproximadamente 883 kB (283 kB comprimido). El adaptador MySQL inicial carga el estado completo y todavía no está probado con volumen real.
-  Evidencia: salida de `npm run build`, `api/src/store.js`.
-  Comportamiento esperado: carga y consultas adecuadas al entorno de producción.
-  Recomendación: medir con volumen y red reales; dividir dependencias y pasar filtros/paginación a SQL antes de importar un histórico grande.
-
-### 13. Estándares adicionales
-
-- Estado: cumple
-  Criticidad: critica
-  Hallazgo: permisos visibles y de API son coherentes; el supervisor consulta el catálogo sin acciones de modificación. Configuración sensible separada del navegador y archivos `.env` ignorados.
-  Evidencia: acceso manual como supervisor; pruebas de 401/403, origen autorizado, cookies y cierre de sesión; `.gitignore`, archivos de ejemplo y `api/src/auth.js`.
-  Comportamiento esperado: aplicar permisos también en el servidor y mantener secretos fuera del frontend.
-  Recomendación: verificar cuentas reales, HTTPS y configuración del despliegue antes de publicar.
+Fecha: 27 de octubre de 2026. Alcance comprobado: portal claro bajo `/pulso`, modo demo, lectura real de Atom mediante una instancia QA local de solo lectura y catálogo en `dbPulsosAtom`. La instancia QA utilizó una cuenta temporal en memoria; no creó usuarios ni evaluaciones en MySQL. La ejecución de IA aún no existe.
 
 ## Resumen ejecutivo
 
-La primera entrega funciona con datos demostrativos persistidos localmente. Catálogo, revisiones y configuración tienen operaciones verificadas. La evaluación real permanece bloqueada y los datos de ejemplo están identificados.
+El histórico, búsqueda, detalle y catálogo funcionan en el alcance probado y conservan una separación visible entre datos demo y reales. El diseño claro mantiene la marca, las cinco métricas, las prioridades P1/P2, las figuras y el mapa por país/asistente del ejemplo. La vista real tiene menor densidad porque solo muestra conversaciones existentes; no se añadieron flags ficticios. No está listo para producción: faltan cuenta real, motor de evaluación, procesamiento diario y pruebas de persistencia de extremo a extremo con una sesión real.
+
+## Estado general
+
+| Área | Estado | Evidencia |
+| --- | --- | --- |
+| Diseño claro | Aprobado con ajustes | Comparación visual con `Pulso_prototipo.html`, `Directrices_Pulso.html` y la captura original; [resumen](pulso-resumen.png), [catálogo](pulso-catalogo.png), [catálogo móvil](qa-catalogo-movil.png). |
+| Navegación y rutas | Aprobado | Recorrido en `/pulso`, histórico, conversación, búsqueda, catálogo y evaluaciones; recarga de ruta interna en `web/test/server.test.js`. |
+| Catálogo | Aprobado en demo y lectura real | 130 variables, 12 activas; alta y edición protegidas por rol; formulario vacío, selección entre páginas, filtros, confirmación y cancelación comprobados en navegador. |
+| Atom | Aprobado para lectura del histórico actual | 233 conversaciones, 9,937 mensajes visibles, países CR 165, HN 64 y SV 4; sin IDs duplicados ni campos obligatorios faltantes. |
+| Base propia | Aprobado para lectura; escrituras reales pendientes de QA | 16 tablas; los 130 IDs y 12 estados activos coinciden con la importación del Excel. Cero usuarios, evaluaciones y revisiones reales. |
+| Evaluación y horario | Bloqueado por alcance pendiente | Pantalla informa que IA y lotes faltan; iniciar evaluación está deshabilitado y guardar horario no activa el proceso. |
+| Responsive | Aprobado en 390 px para las vistas recorridas | Sin desplazamiento horizontal de página en resumen, catálogo y detalle; la tabla del catálogo desplaza sus columnas sin tapar el nombre de la variable. |
+
+## Bugs por categoría
+
+| ID | Categoría | Severidad | Hallazgo y corrección | Evidencia |
+| --- | --- | --- | --- | --- |
+| V-01 | Responsive | Medio | Las columnas derechas fijas del catálogo tapaban el nombre de la variable en móvil. Se desactivó su posición fija bajo 700 px; la tabla conserva scroll horizontal. | `web/src/styles.css`, `web/src/pages/Catalog.jsx`, [captura móvil](qa-catalogo-movil.png). |
+| F-01 | Consistencia funcional | Medio | El detalle de una conversación pendiente mostraba un panel vacío con el título “Checklist de esta evaluación”. Ahora presenta las 12 variables activas como checklist previsto, todas marcadas “No evaluada”. | `web/src/pages/Conversation.jsx`; comprobación con conversación real sin evaluación. |
+| F-02 | Catálogo / lotes | Medio | Una selección podía quedar oculta al cambiar filtros y seguir disponible para activar/inactivar. El cambio de filtros o búsqueda ahora limpia la selección; el cambio de página la conserva. | `web/src/pages/Catalog.jsx`; prueba de selección en dos páginas y posterior búsqueda. |
+| C-01 | Contenido | Bajo | El acceso real enumeraba los seis países del demo; ahora solo los enumera en demo. “sistema” se muestra como “Sistema” y el estado vacío del histórico ya no sugiere conectar una fuente que funciona. | `web/src/App.jsx`, `web/src/pages/Conversation.jsx`, `web/src/pages/Conversations.jsx`. |
+| D-01 | Datos | Bajo | El selector de países podía incluir códigos de conversaciones sin documento listo. Ahora usa el mismo criterio `Estado = 'LISTO'` que el histórico. | `api/src/atom.js`; lectura SQL repetida contra Atom. |
+
+## Checklist QA
+
+### Flujo, navegación y botones
+
+- Estado: cumple. Criticidad: media. Resumen → histórico → detalle → búsqueda → mensaje coincidente funcionó con datos reales. El enlace a Atom está deshabilitado porque todavía no se conoce una URL válida. Las rutas internas permanecen bajo `/pulso`.
+- Estado: cumple. Criticidad: media. Los botones de IA y programación están deshabilitados con explicación; la API devuelve conflicto si se intenta ejecutar una evaluación no implementada.
+
+### Catálogo, formularios, tablas y modales
+
+- Estado: cumple. Criticidad: media. Agregar, editar, activar/inactivar y listado conviven en la misma pantalla para administradores; supervisores solo consultan. El formulario vacío muestra errores y la cancelación no altera el contador de activas.
+- Estado: cumple. Criticidad: media. Selección entre páginas, filtro, búsqueda, paginación y limpieza de selección comprobadas en navegador. La tabla móvil conserva nombres legibles y las acciones quedan disponibles al desplazar horizontalmente.
+- Estado: revisar. Criticidad: crítica para liberar. No existe una cuenta real en `users`; por eso no se probaron altas, ediciones y revisiones con sesión y persistencia MySQL reales. Las pruebas automatizadas cubren el flujo con almacenes de prueba y demo.
+
+### Datos e integración
+
+- Estado: cumple. Criticidad: media. La consulta real resolvió países mediante `dbSomos3c_2.tblCatalogoPaises`; el historial obtuvo 233 conversaciones con documentos `LISTO` y 9,937 mensajes de contenido. Los eventos `log` y `note` no se muestran como mensajes de conversación.
+- Estado: cumple. Criticidad: media. Las 130 variables importadas coinciden por ID y estado activo con el catálogo de MySQL; ninguna evaluación simulada aparece en modo real.
+- Estado: revisar. Criticidad: alta para escalar volumen. El adaptador carga el histórico completo de Atom y usa caché de un minuto; aún no hay paginación SQL ni lectura incremental.
+- Estado: revisar. Criticidad: alta para producción. IA, reintentos, idempotencia y programación diaria todavía no existen; se mantienen bloqueados de forma explícita.
+
+### Visual, accesibilidad y robustez
+
+- Estado: cumple. Criticidad: media. Tema claro, tipografías, jerarquía, P1/P2, colores de refutación y alerta humana, y mapa de rectángulos contrastados con el prototipo. En datos reales, las métricas sin evaluación muestran “—” y las conversaciones pendientes “?”, sin convertir ausencia de análisis en ausencia de riesgo.
+- Estado: cumple. Criticidad: media. Vistas principales comprobadas a ancho de escritorio y 390 px; sin desbordamiento horizontal de página. Cargas, errores, vacío y estados deshabilitados están presentes.
+- Estado: revisar. Criticidad: menor. Falta comprobar dispositivos físicos y lectores de pantalla. El bundle inicial de Vite sigue avisando por tamaño aproximado de 878 kB antes de compresión.
+
+## Prompts para corregir con Codex
+
+```text
+Contexto: Pulso en web/ y api/, ruta base /pulso. La lectura de Atom funciona, pero la evaluación no.
+Objetivo: implementar evaluación a demanda y diaria de las 12 variables activas, sin resultados ficticios.
+Instrucciones: usar los IDs de conversación y mensaje de Atom, conservar versión de checklist, registrar resultados y evidencia en dbPulsosAtom, añadir idempotencia, reintentos y pruebas con conversaciones autorizadas.
+Restricciones: Atom solo lectura; no copiar transcripciones completas a Pulso; mantener web/api separados.
+Criterios de aceptación: ejecución visible de inicio a fin, estados y errores verificables, resultados auditables, re-evaluación sin sobrescribir la anterior.
+```
+
+```text
+Contexto: el histórico actual carga todas las conversaciones y eventos de Atom en una caché de un minuto.
+Objetivo: escalar consultas de resumen, histórico, búsqueda y detalle.
+Instrucciones: paginar y filtrar en SQL, medir con el volumen real, mantener los mismos conteos y orden visible, e indexar los campos usados.
+Restricciones: conservar /pulso y la separación entre bases.
+Criterios de aceptación: resultados y filtros equivalentes al adaptador actual; tiempos y carga medidos; sin acceso de escritura a Atom.
+```
+
+## Criterio de salida
+
+Antes de liberar: crear cuenta real, cambiar `DEMO_MODE=false`, probar autenticación y operaciones de catálogo/revisión contra `dbPulsosAtom`, implementar y validar IA y lotes, verificar HTTPS/cookies del despliegue, y medir con un histórico mayor. El bundle grande y la prueba en dispositivos físicos siguen como riesgos de rendimiento y presentación.
 
 ## Hallazgos críticos
 
-No hay fallos críticos confirmados en el alcance local probado. No se certifica producción: faltan conexión MySQL, autenticación con cuentas reales, integración de Atom y ejecución de IA.
+No se detectaron fallos críticos en los recorridos ejecutados. La evaluación con IA y la cuenta real faltan por diseño y bloquean la salida a producción.
 
 ## Riesgos funcionales
 
-Persistencia y concurrencia MySQL sin ejecutar; importación incremental y procesamiento diario pendientes; volumen real y casos de no aplicabilidad por variable pendientes. Las modificaciones demo no se migran automáticamente al modo real.
+El histórico real es legible y buscable, pero todas las conversaciones siguen pendientes. No hay resultados ni flags auténticos para validar el flujo humano de revisión sobre MySQL. El procesamiento diario permanece inactivo.
 
 ## Desviaciones visuales
 
-Se sustituyó actividad en tiempo real por histórico y última carga; se añadieron Catálogo y Evaluaciones, la banda DEMO y estados pendientes. El resumen utiliza 216 conversaciones sintéticas, por lo que su mapa tiene menor densidad que la referencia. La revisión móvil sigue pendiente.
+El tema es claro, como se solicitó. La barra “En curso” del prototipo se reemplazó por Histórico porque no hay ingestión en tiempo real. La densidad del mapa depende de los datos existentes; no se rellenó con actividad simulada en modo real.
 
 ## Recomendaciones prioritarias antes de liberar a producción
 
-1. Recibir la conexión y nombres de tablas; inspeccionar columnas y relaciones sin modificar Atom.
-2. Ejecutar migraciones, cuentas, persistencia y conflictos contra MySQL.
-3. Implementar importación incremental y consultas paginadas con índices adecuados.
-4. Validar las 12 variables iniciales con evidencia real y conectar el procesador de lotes y el horario diario.
-5. Completar pruebas de dispositivos, volumen y configuración del despliegue.
+1. Crear una cuenta administradora real y probar persistencia y permisos con la base propia.
+2. Implementar el evaluador y el procesador diario con evidencia y versiones.
+3. Pasar el histórico de la carga completa a consultas paginadas e incrementales.
+4. Validar el diseño en dispositivos reales y monitorear tiempos y errores de la integración.

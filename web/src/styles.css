@@ -36,6 +36,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .ant-table-wrapper .ant-table-tbody > tr > td { border-bottom-color: var(--border); padding-top: 15px; padding-bottom: 15px; }
 .ant-table-wrapper .ant-table-pagination { padding: 0 18px; }
 .ant-table-wrapper .ant-table-cell-fix-right { background: var(--surface); }
+@media (max-width: 700px) {
+  .catalog-table .ant-table-cell-fix-right { position: static !important; box-shadow: none !important; }
+  .catalog-table .ant-table-cell-fix-right::after { display: none !important; }
+}
 .ant-input, .ant-select-selector, .ant-input-affix-wrapper, .ant-btn-default { background: var(--surface); }
 .ant-drawer .ant-drawer-content, .ant-modal .ant-modal-content { background: var(--surface); }
 .ant-form-item-label > label { color: var(--secondary) !important; }
