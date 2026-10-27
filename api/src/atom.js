@@ -8,6 +8,7 @@ const localDate = (value, timezone) => {
 };
 const actor = role => ({ CLIENTE: 'cliente', ASESOR: 'humano', BOT: 'bot' })[role] || 'sistema';
 const mediaType = type => ({ file: 'archivo', call: 'llamada', geopoint: 'ubicación' })[type] || null;
+const normalizeIdentity = value => String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
 
 export function mapAtomConversation(row, events, country, timezone) {
   const startedAt = iso(row.FechaInicioUtc || row.FechaUltimaActividadUtc);
@@ -19,7 +20,9 @@ export function mapAtomConversation(row, events, country, timezone) {
     if (!['text', 'quickReply', 'interactive', 'template', 'file', 'call', 'geopoint'].includes(event.TipoOrigen)) continue;
     const text = String(event.Texto || '').trim() || (type ? `[${type}]` : '');
     if (!text) continue;
-    messages.push({ id: String(event.IdEvento), actor: actor(event.RolEmisor), text, timestamp: iso(event.FechaHoraUtc) });
+    // Algunos eventos de Atom traen RolEmisor=ASESOR aunque DeOrigen sea el cliente.
+    const isClientOrigin = row.ClienteNombre && normalizeIdentity(event.DeOrigen) === normalizeIdentity(row.ClienteNombre);
+    messages.push({ id: String(event.IdEvento), actor: isClientOrigin ? 'cliente' : actor(event.RolEmisor), text, timestamp: iso(event.FechaHoraUtc) });
   }
   return {
     id: String(row.IdConversacion), sourceId: row.IdExternoAtom, demo: false,
@@ -28,6 +31,7 @@ export function mapAtomConversation(row, events, country, timezone) {
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
     date: localDate(startedAt, timezone), startedAt,
     endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : iso(row.FechaUltimaActividadUtc),
+    completed: !!row.FechaFinUtc,
     channel: row.CanalNombre || 'Sin canal', topics: [], media: [...media], messages,
     sourceUrl: null, evaluationId: null,
   };
@@ -51,7 +55,7 @@ export class AtomReader {
     const ids = [...byDocument.keys()];
     for (let offset = 0; offset < ids.length; offset += 300) {
       const batch = ids.slice(offset, offset + 300);
-      const [eventRows] = await this.pool.query(`SELECT IdDocumento, IdEvento, FechaHoraUtc, Texto, TipoOrigen, RolEmisor FROM ${e} WHERE IdDocumento IN (${batch.map(() => '?').join(',')}) ORDER BY FechaHoraUtc, NumeroFila`, batch);
+      const [eventRows] = await this.pool.query(`SELECT IdDocumento, IdEvento, FechaHoraUtc, Texto, TipoOrigen, RolEmisor, DeOrigen FROM ${e} WHERE IdDocumento IN (${batch.map(() => '?').join(',')}) ORDER BY FechaHoraUtc, NumeroFila`, batch);
       for (const row of eventRows) byDocument.get(String(row.IdDocumento))?.push(row);
     }
     const conversations = rows.map(row => {

@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones futuras y la auditoría viven en `dbPulsosAtom`. Las evaluaciones automáticas todavía no se ejecutan.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI está implementado y se validó sobre cinco conversaciones reales; permanece cerrado por defecto para impedir nuevos lotes accidentales.
 
 ## Abrir y ejecutar
 
@@ -43,7 +43,7 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Histórico y Búsqueda:** filtros de fechas, país, asistente, prioridad, estado y variable; búsqueda de mensajes con apertura de evidencia en contexto.
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
-- **Evaluaciones:** interfaz a demanda y horario diario configurable. Muestra los requisitos pendientes y bloquea la ejecución automática hasta completar Atom, IA y procesamiento de lotes.
+- **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. El horario diario se puede guardar, pero su ejecución automática sigue inactiva.
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -57,6 +57,7 @@ Con `DEMO_MODE=true`, la pantalla de acceso permite entrar como administrador o 
 | Consultar todos los países, conversaciones y catálogo | Sí | Sí |
 | Refutar, levantar y deshacer flags con comentario | Sí | Sí |
 | Crear y modificar variables / activar lotes | Sí | No |
+| Iniciar evaluaciones a demanda, cuando estén habilitadas | Sí | No |
 | Guardar horario diario | Sí | No |
 
 Cada edición del catálogo conserva una versión. Las evaluaciones hacen referencia a las versiones utilizadas. Las revisiones humanas se agregan al historial sin sobrescribir la evidencia del resultado original. Los cambios concurrentes detectados devuelven un conflicto en lugar de reemplazar silenciosamente una versión reciente.
@@ -71,7 +72,8 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 | --- | --- |
 | `APP_DB_*` | Base MySQL propia `dbPulsosAtom`: cuentas, catálogo, versiones, evaluaciones y auditoría. |
 | `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente de lectura a conversaciones, eventos y países. El catálogo de países proviene de `dbSomos3c_2.tblCatalogoPaises`. |
-| `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Configuración reservada del servicio de IA; el adaptador se implementará después. |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_MS` | OpenAI Responses API con salida JSON Schema estricta. La clave permanece solo en `api/.env`. |
+| `OPENAI_EVALUATION_ENABLED` | Bloqueo explícito de transferencia; `false` por defecto. Se activa solo al habilitar nuevos lotes de evaluación. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
 | `APP_TIMEZONE` | Zona horaria de presentación; el horario diario también conserva su propia zona. |
 
@@ -91,9 +93,13 @@ Una conexión ausente o fallida no activa el modo demo como respaldo. En la cone
 
 El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
-### Trabajo pendiente de integración
+### Evaluación con OpenAI
 
-La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto para evitar repetir la lectura completa en cada petición; no se guardan transcripciones en Pulso. Faltan los evaluadores de IA y código, el tratamiento de dependencias/no aplicabilidad de cada variable y un procesador de lotes con reintentos, control de duplicados y programación diaria. La evaluación inicial cubrirá las 12 variables acordadas, con pruebas sobre conversaciones reales autorizadas.
+La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las 12 definiciones activas, a Responses API. Solicita `store: false`, valida que los resultados incluyan las 12 variables y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. No se ha ejecutado todavía sobre conversaciones reales.
+
+La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md). La programación diaria y los reintentos automáticos siguen pendientes.
+
+Solo se seleccionan conversaciones con fecha de cierre en Atom. Una conversación cuyo documento ya esté disponible pero todavía no tenga `FechaFinUtc` permanece pendiente; así no se marca prematuramente la ausencia de respuesta al último mensaje.
 
 El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Antes de consultar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador actual carga el histórico completo de Atom y el estado completo de Pulso. Esta entrega todavía no es una liberación de producción.
 
@@ -110,7 +116,7 @@ npm test
 npm run build
 ```
 
-Hay 16 pruebas de API y 1 del servidor web: importación, roles, formularios, persistencia demo, versiones, lotes atómicos, evidencia, revisiones, separación de bases, mapeo de Atom, búsqueda, filtros, ausencia de simulación en modo real, rutas y proxy. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
+Las pruebas de API cubren importación, roles, formularios, persistencia demo, versiones, evidencia, revisiones, separación de bases, mapeo de Atom, filtros y el contrato estructurado del evaluador. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
 
 ## Organización
 

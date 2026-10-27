@@ -145,7 +145,8 @@ test('las evaluaciones y el scheduler no reportan ejecuciones sin integración',
   const response = await admin.get('/pulso/api/evaluations').expect(200);
   assert.equal(response.body.status.ready, false);
   assert.equal(response.body.jobs.length, 0);
-  await write(supervisor, 'post', '/evaluations', { scope: 'new' }).expect(409);
+  await write(supervisor, 'post', '/evaluations', { scope: 'new' }).expect(403);
+  await write(admin, 'post', '/evaluations', { scope: 'new' }).expect(409);
   const { version, ...settings } = response.body.settings;
   await write(admin, 'patch', '/evaluations/settings', { ...settings, dailyEnabled: true, expectedVersion: version }).expect(409);
   const saved = await write(admin, 'patch', '/evaluations/settings', { ...settings, dailyTime: '08:30', expectedVersion: version }).expect(200);

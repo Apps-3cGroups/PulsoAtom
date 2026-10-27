@@ -7,19 +7,22 @@ import { AppError } from './errors.js';
 import { tokenHash, newToken, verifyPassword, publicUser, requireUser, requireAdmin } from './auth.js';
 import { countries } from './data/seed.js';
 import { createCatalogSchema, updateCatalogSchema, batchSchema, validateCatalog, saveCatalogVersion, ensureVersion, listQuerySchema, filteredConversations, summarize, priorityOrder, conversationView, recordReview, reviewSchema } from './domain.js';
+import { evaluatorFromEnv } from './evaluator.js';
+import { startEvaluationBatch } from './evaluation-service.js';
 
 const prefix = '/pulso/api';
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
+const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(100).default(20) }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
 export const integrationStatus = () => ({
-  ready: false,
+  ready: process.env.OPENAI_EVALUATION_ENABLED === 'true' && !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.ATOM_DB_HOST && process.env.APP_DB_HOST),
   atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_CONVERSATIONS_TABLE && process.env.ATOM_MESSAGES_TABLE && process.env.ATOM_COUNTRIES_TABLE),
-  aiConfigured: !!(process.env.AI_BASE_URL && process.env.AI_MODEL),
-  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), 'Configurar y validar el servicio de IA con las variables seleccionadas.', 'Habilitar el procesador de evaluaciones y su programación diaria.'],
+  aiConfigured: !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL),
+  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), ...(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? [] : ['Configurar OpenAI para la evaluación.']), ...(process.env.OPENAI_EVALUATION_ENABLED === 'true' ? [] : ['La transferencia de conversaciones a OpenAI está deshabilitada.'])],
 });
 
-export function createApp(store, config) {
+export function createApp(store, config, evaluator = evaluatorFromEnv()) {
   const app = express();
   const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
@@ -40,7 +43,7 @@ export function createApp(store, config) {
   app.get(`${prefix}/health`, async (_req, res) => {
     let storageReady = true;
     try { await store.read(); } catch { storageReady = false; }
-    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: false });
+    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: !config.demo && !!store.readWithConversations && evaluator.configured && process.env.OPENAI_EVALUATION_ENABLED === 'true' });
   });
   app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
@@ -188,8 +191,13 @@ export function createApp(store, config) {
     });
     res.json({ settings });
   });
-  app.post(`${prefix}/evaluations`, (_req, _res) => {
-    throw new AppError(409, 'La evaluación real está pendiente de integración. No se ha creado ninguna ejecución.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+  app.post(`${prefix}/evaluations`, requireAdmin, async (req, res) => {
+    if (process.env.OPENAI_EVALUATION_ENABLED !== 'true') throw new AppError(409, 'La transferencia de conversaciones a OpenAI aún no está habilitada.', 'EVALUATION_DISABLED');
+    if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
+    const input = evaluationRequestSchema.parse(req.body);
+    const { job, completion } = await startEvaluationBatch(store, evaluator, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max });
+    completion.catch(error => console.error('Error en ejecución de Pulso:', error.code || error.name));
+    res.status(202).json({ job });
   });
   app.use((_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ruta no encontrada.' } }));
   app.use((error, _req, res, _next) => {
