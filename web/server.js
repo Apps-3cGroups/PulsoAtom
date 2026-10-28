@@ -22,7 +22,8 @@ export function createWebServer({ apiTarget = process.env.API_PROXY_TARGET || pr
   app.use((_req, res) => res.status(404).send(`Ruta no encontrada. Abre ${basePath}.`));
   return app;
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const entryPoint = process.env.pm_exec_path || process.argv[1];
+if (entryPoint && path.resolve(entryPoint) === fileURLToPath(import.meta.url)) {
   const host = process.env.WEB_HOST || '127.0.0.1';
   const port = Number(process.env.PORT || process.env.WEB_PORT || 3000);
   const { basePath } = resolveWebPaths(process.env);
