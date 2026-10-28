@@ -171,7 +171,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
       mode: config.demo ? 'demo' : 'real', metadata: state.metadata, timezone: config.timezone,
       countries: (state.countries || countries).map(({ code, name }) => ({ code, name })),
       agents: [...new Map(state.conversations.map(c => [c.agent.id, { ...c.agent, country: c.country }])).values()],
-      catalog: state.catalog.map(({ id, name, family, phase, mark, active, version }) => ({ id, name, family, phase, mark, active, version })),
+      catalog: state.catalog.map(({ id, name, family, phase, mark, type, active, version }) => ({ id, name, family, phase, mark, type, active, version })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
       integrations: integrationStatus(),
     });
