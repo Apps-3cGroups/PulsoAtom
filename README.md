@@ -39,7 +39,7 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 
 ## Lo que incluye
 
-- **Resumen:** indicadores, conversaciones prioritarias y mapa por país, asistente y fecha. Las prioridades históricas no tienen contador de vencimiento.
+- **Resumen:** indicadores y mapa por país, asistente y fecha. Cada conversación abre una vista rápida con alertas, evidencia y revisiones humanas; permite refutar los flags vigentes que muestra. Para leer los mensajes completos y realizar otras revisiones, se abre la conversación completa.
 - **Histórico y Búsqueda:** filtros de fechas, país, asistente, prioridad, estado y variable; búsqueda de mensajes con apertura de evidencia en contexto.
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
