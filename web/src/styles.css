@@ -390,3 +390,70 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 @media (max-width: 1200px) { .metric-detail, .metric-label { font-size: 12px; } }
 @media (max-width: 980px) { .attention-bottom { font-size: 12px; } }
 @media (max-width: 700px) { .metric-detail, .metric-label, .attention-bottom, .map-footer, .period-note, .app-footer, .login-brand > .eyebrow, .login-intro > .eyebrow { font-size: 12px; } }
+
+/* El Resumen es un tablero de una pantalla; las demás rutas conservan su desplazamiento normal. */
+.summary-shell { height: 100dvh; min-height: 0; overflow: hidden; }
+.summary-shell .topbar { min-height: 58px; flex: none; }
+.summary-shell .demo-banner { flex: none; padding-block: 5px; }
+.summary-shell .workspace { min-height: 0; overflow: hidden; padding-block: 10px; }
+.summary-shell .app-footer { display: none; }
+.summary-page { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.summary-page > .page-heading { flex: none; margin-bottom: 9px; }
+.summary-page > .page-heading .eyebrow { margin-bottom: 3px; }
+.summary-page > .page-heading p { margin-top: 3px; }
+.summary-page .metrics-grid { flex: none; gap: 8px; margin-bottom: 9px; }
+.summary-page .metric-card { padding: 9px 12px; }
+.summary-page .metric-card > strong { font-size: 25px; margin-top: 5px; }
+.summary-page .metric-detail { margin-top: 4px; line-height: 1.2; font-size: 10px; }
+.summary-page .priority-section { flex: none; margin-bottom: 9px; }
+.summary-page .priority-section .section-heading { margin-bottom: 5px; }
+.summary-page .priority-grid { gap: 8px; }
+.summary-page .attention-card { padding: 7px 10px; }
+.summary-page .attention-event, .summary-page .attention-bottom { margin-top: 4px; }
+.summary-page .priority-extra { margin-top: 3px; font-size: 10px; }
+.summary-page .calm-state { padding: 9px 12px; }
+.summary-page .overview-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.summary-page .overview-header { flex: none; padding: 8px 12px 0; }
+.summary-page .overview-header h2 { font-size: 17px; margin-top: 2px; }
+.summary-page .overview-controls { flex: none; padding: 7px 12px; gap: 7px; }
+.summary-page .segmented-range button { padding: 4px 9px; }
+.summary-page .map-legend { flex: none; padding: 4px 12px; gap: 3px; }
+.summary-page .legend-toggle { padding: 2px 5px; }
+.summary-page .conversation-map { flex: 1; min-height: 0; max-height: none; overflow: auto; padding-inline: 12px; }
+.summary-page .map-head { padding-block: 6px 5px; }
+.summary-page .country-lanes { padding-block: 4px; }
+.summary-page .country-title { margin-bottom: 2px; }
+.summary-page .agent-lane { min-height: 20px; }
+.summary-page .conversation-cell { width: 31px; height: 19px; min-height: 19px; padding: 1px; }
+.summary-page .day-cells { gap: 2px; padding-block: 1px; }
+.summary-page .map-footer { flex: none; padding: 5px 12px; font-size: 10px; }
+@media (max-width: 980px) {
+  .summary-shell .topbar { min-height: 0; padding-top: 5px; }
+  .summary-shell .topbar nav { min-height: 31px; }
+  .summary-page .priority-grid { gap: 4px; }
+  .summary-page .attention-card { padding: 5px 8px; }
+  .summary-page .attention-bottom { display: none; }
+}
+@media (max-width: 700px) {
+  .summary-shell .workspace { padding: 6px 8px; }
+  .summary-page > .page-heading { margin-bottom: 5px; }
+  .summary-page > .page-heading p { display: none; }
+  .summary-page .metrics-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; margin-bottom: 5px; }
+  .summary-page .metrics-grid > div:last-child { grid-column: auto; display: block; }
+  .summary-page .metric-card { min-width: 0; padding: 5px; }
+  .summary-page .metric-label { font-size: 9px; line-height: 1.1; }
+  .summary-page .metric-card > strong { font-size: 18px; margin-top: 3px; }
+  .summary-page .metric-detail { display: none; }
+  .summary-page .priority-section { margin-bottom: 5px; }
+  .summary-page .priority-section .section-heading > .muted,
+  .summary-page .priority-extra { display: none; }
+  .summary-page .attention-card { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .summary-page .attention-top { min-width: 0; }
+  .summary-page .attention-top b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .summary-page .attention-event { margin-top: 0; }
+  .summary-page .attention-bottom { display: none; }
+  .summary-page .overview-header { padding: 5px 8px 0; }
+  .summary-page .overview-controls { padding: 4px 8px; }
+  .summary-page .map-legend { padding: 3px 8px; }
+  .summary-page .map-footer { padding: 4px 8px; }
+}
