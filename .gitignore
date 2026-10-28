@@ -225,6 +225,7 @@ dist/
 .env
 .env.*
 !.env.example
+.env_backups/
 .data/
 .local/
 coverage/
