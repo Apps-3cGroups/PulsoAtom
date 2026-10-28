@@ -185,18 +185,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .quick-view-review-body { padding: 12px 13px 14px; }
 .quick-view-review-body > p { line-height: 1.55; margin: 0 0 9px; }
 .quick-view-review-body > p strong { color: var(--ink); }
-.quick-view-review-body > .ant-btn { margin-top: 4px; }
 .quick-view-status { display: inline-flex; margin-bottom: 10px; padding: 3px 7px; border-radius: 4px; background: #e8f0fb; color: var(--refuted); font-size: 11px; font-weight: 600; }
 .quick-view-review:has(.mark-human) .quick-view-status { background: #f0eafb; color: var(--human); }
 .quick-view-author { color: var(--muted); font-size: 11px; }
 .quick-view-evidence-list { margin: 8px 0 12px; }
-.quick-view-raise { display: flex; gap: 8px; margin-top: 12px; }
-.quick-view-raise .ant-select { flex: 1; min-width: 0; }
-.quick-view-messages { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 7px; }
-.quick-view-messages article { padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.quick-view-messages article:last-child { border-bottom: 0; }
-.quick-view-messages article > div { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
-.quick-view-messages article p { margin-top: 5px; line-height: 1.5; }
 .quick-view-evidence { margin: 0 0 9px; padding: 13px 15px; border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; background: var(--surface-raised); }
 .quick-view-evidence p { line-height: 1.55; }
 .quick-view-evidence footer { margin-top: 9px; color: var(--muted); font-size: 11px; }
