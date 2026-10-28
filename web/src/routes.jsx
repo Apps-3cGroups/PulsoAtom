@@ -25,7 +25,7 @@ export default function PortalRoutes() {
       <Route path="*" element={<div className="not-found">
         <h1>Esta página no existe</h1>
         <p>Vuelve al resumen para continuar.</p>
-        <Button type="primary" onClick={() => navigate('/')}>Ir al resumen</Button>
+        <Button type="primary" onClick={() => navigate({ pathname: '/' })}>Ir al resumen</Button>
       </div>} />
     </Routes>
   </Suspense>;

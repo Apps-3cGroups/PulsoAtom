@@ -6,6 +6,7 @@ import { evaluatorFromEnv } from './src/evaluator.js';
 import { startDailyScheduler } from './src/daily-scheduler.js';
 import { Somos3cIdentity, Somos3cPersonIdentity } from './src/identity.js';
 
+// CAMBIAR AQUÍ LA RUTA BASE DEL PORTAL: BASE_PATH en api/.env.
 const options = databaseConfig();
 const atomOptions = config.demo ? null : atomDatabaseConfig();
 const identityOptions = config.demo ? null : identityDatabaseConfig();
@@ -16,7 +17,7 @@ const app = createApp(store, config, evaluator, identity);
 const stopScheduler = !config.demo && atomOptions && process.env.OPENAI_EVALUATION_ENABLED === 'true' && evaluator.configured
   ? startDailyScheduler(store, evaluator) : () => {};
 const server = app.listen(config.port, config.host, () => {
-  console.log(`Pulso API: http://${config.host}:${config.port}/pulso/api/health`);
+  console.log(`Pulso API: http://${config.host}:${config.port}${config.basePath}/api/health`);
   console.log(config.demo ? 'Modo demostración: datos sintéticos, guardado local separado.' : atomOptions ? 'Modo real: histórico de Atom en lectura y evaluaciones en Pulso.' : 'Modo real: falta configurar el origen Atom.');
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => {

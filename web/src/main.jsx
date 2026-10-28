@@ -5,5 +5,6 @@ import { BrowserRouter } from 'react-router-dom';
 import 'antd/dist/reset.css';
 import App from './App';
 import './styles.css';
+import { basePath } from './config';
 
-ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename="/pulso"><App /></BrowserRouter></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById('root')).render(<React.StrictMode><BrowserRouter basename={basePath}><App /></BrowserRouter></React.StrictMode>);

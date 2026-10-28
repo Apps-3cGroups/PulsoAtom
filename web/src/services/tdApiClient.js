@@ -1,4 +1,6 @@
-const base = '/pulso/api/integrations/td';
+import { apiBaseUrl } from '../config.js';
+
+const base = `${apiBaseUrl}/integrations/td`;
 const result = (success, message, data = null, error = null) => ({ success, message, data, error });
 
 export async function tdApiRequest(path, { method = 'GET', query, body, responseType = 'json', signal } = {}) {

@@ -8,7 +8,7 @@ import { matchesSomos3cPassword } from '../src/identity.js';
 
 const origin = 'http://127.0.0.1:3000';
 const hash = value => createHash('sha512').update(value).digest('hex');
-const write = (client, method, path, body) => client[method](`/pulso/api${path}`).set('Origin', origin).send(body);
+const write = (client, method, path, body) => client[method](`/pulsoAtom/api${path}`).set('Origin', origin).send(body);
 
 test('el hash Somos3C se verifica sin aceptar formatos desconocidos', () => {
   assert.equal(matchesSomos3cPassword(hash('clave segura'), 'clave segura'), true);
@@ -41,13 +41,13 @@ test('el superadministrador de origen concede y revoca acceso desde Pulso', asyn
   const grant = await write(admin, 'post', '/access/grants', { externalId: 2, role: 'supervisor' }).expect(201);
   assert.equal(grant.body.grant.role, 'supervisor');
   await write(other, 'post', '/auth/login', { username: 'supervisor', password: 'clave-supervisora' }).expect(200);
-  await other.get('/pulso/api/catalog').expect(200);
+  await other.get('/pulsoAtom/api/catalog').expect(200);
   source.get(2).changeRequired = true;
-  await other.get('/pulso/api/catalog').expect(401);
+  await other.get('/pulsoAtom/api/catalog').expect(401);
   source.get(2).changeRequired = false;
   await write(other, 'post', '/access/lookup', { username: 'jefe' }).expect(403);
   await write(admin, 'patch', '/access/grants/somos3c%3A2', { active: false }).expect(200);
-  await other.get('/pulso/api/catalog').expect(401);
+  await other.get('/pulsoAtom/api/catalog').expect(401);
   assert.equal((await store.read()).users.find(user => user.externalId === 2).passwordHash, undefined);
 });
 
@@ -59,10 +59,10 @@ test('una cuenta por correo de tblPersonas usa el permiso propio de Pulso', asyn
   const store = { async read() { return structuredClone(state); }, async transaction(fn) { const draft = structuredClone(state); const result = await fn(draft); state = draft; return result; } };
   const app = createApp(store, { demo: false, origin, sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' }, { configured: false }, identity);
   const client = request.agent(app);
-  assert.equal((await client.get('/pulso/api/meta')).body.authMode, 'somos3c-email');
+  assert.equal((await client.get('/pulsoAtom/api/meta')).body.authMode, 'somos3c-email');
   await write(client, 'post', '/auth/login', { username: person.username, password: 'clave-correcta' }).expect(200);
-  assert.equal((await client.get('/pulso/api/auth/me')).body.user.role, 'admin');
+  assert.equal((await client.get('/pulsoAtom/api/auth/me')).body.user.role, 'admin');
   person.active = false;
-  await client.get('/pulso/api/auth/me').expect(401);
+  await client.get('/pulsoAtom/api/auth/me').expect(401);
   assert.equal(state.users[0].passwordHash, undefined);
 });

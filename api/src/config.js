@@ -1,14 +1,16 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { normalizeBasePath } from './basePath.js';
 
 export const apiRoot = fileURLToPath(new URL('../', import.meta.url));
 dotenv.config({ path: path.join(apiRoot, '.env'), quiet: true });
 const bool = (value, fallback = false) => value === undefined ? fallback : value === 'true';
 export const config = {
   demo: bool(process.env.DEMO_MODE, true),
+  basePath: normalizeBasePath(process.env.BASE_PATH || '/pulsoAtom'),
   host: process.env.API_HOST || '127.0.0.1',
-  port: Number(process.env.API_PORT || 4001),
+  port: Number(process.env.PORT || process.env.API_PORT || 4001),
   origin: process.env.PUBLIC_ORIGIN || 'http://127.0.0.1:3000',
   sessionHours: Number(process.env.SESSION_HOURS || 8),
   secureCookie: bool(process.env.COOKIE_SECURE),

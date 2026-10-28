@@ -11,8 +11,8 @@ import { evaluatorFromEnv } from './evaluator.js';
 import { startEvaluationBatch } from './evaluation-service.js';
 import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
+import { normalizeBasePath } from './basePath.js';
 
-const prefix = '/pulso/api';
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
 const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
@@ -27,6 +27,8 @@ export const integrationStatus = () => ({
 });
 
 export function createApp(store, config, evaluator = evaluatorFromEnv(), identity = null, tdServices = {}) {
+  const basePath = normalizeBasePath(config.basePath);
+  const prefix = `${basePath}/api`;
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
@@ -71,7 +73,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     }
     next();
   });
-  const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: config.secureCookie, path: '/pulso', maxAge: config.sessionHours * 3600000 };
+  const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: config.secureCookie, path: basePath, maxAge: config.sessionHours * 3600000 };
   async function signIn(req, res, user) {
     const token = newToken();
     await store.transaction(state => {
@@ -121,7 +123,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
   app.get(`${prefix}/auth/me`, requireUser, (req, res) => res.json({ user: req.user, mode: config.demo ? 'demo' : 'real' }));
   app.post(`${prefix}/auth/logout`, async (req, res) => {
     if (req.sessionId) await store.transaction(state => { state.sessions = state.sessions.filter(s => s.id !== req.sessionId); return null; });
-    res.clearCookie(cookieName, { path: '/pulso', httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
+    res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
   mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });

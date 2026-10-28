@@ -25,7 +25,7 @@ function Portal({ user, onLogout }) {
   const { message } = AntApp.useApp();
   const bootstrap = bootstrapRequest.data;
   setDisplayTimezone(bootstrap?.timezone);
-  const logout = async () => { try { await api('/auth/logout', { method: 'POST', body: {} }); onLogout(); navigate('/'); } catch (error) { message.error(error.message); } };
+  const logout = async () => { try { await api('/auth/logout', { method: 'POST', body: {} }); onLogout(); navigate({ pathname: '/' }); } catch (error) { message.error(error.message); } };
   useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); }, [location.pathname]);
   const links = [['/', 'Resumen'], ['/historico', 'Histórico'], ['/conversacion', 'Conversación'], ['/busqueda', 'Búsqueda'], ['/catalogo', 'Catálogo'], ['/evaluaciones', 'Evaluaciones'], ...(user.role === 'admin' && bootstrap?.mode === 'real' ? [['/accesos', 'Accesos']] : [])];
   if (!bootstrap && !bootstrapRequest.error) return <LoadingState fullScreen />;

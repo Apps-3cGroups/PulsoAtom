@@ -12,7 +12,7 @@ import { hashPassword, verifyPassword } from '../src/auth.js';
 
 let directory, store, app, admin, supervisor;
 const config = { demo: true, origin: 'http://127.0.0.1:3000', sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' };
-const write = (agent, method, url, body) => agent[method](`/pulso/api${url}`).set('Origin', config.origin).send(body);
+const write = (agent, method, url, body) => agent[method](`/pulsoAtom/api${url}`).set('Origin', config.origin).send(body);
 const editable = item => Object.fromEntries(['name', 'family', 'type', 'mark', 'definition', 'method', 'phase', 'condition', 'polarity', 'active'].map(key => [key, item[key]]));
 before(async () => {
   directory = await mkdtemp(path.join(tmpdir(), 'pulso-api-test-'));
@@ -37,22 +37,22 @@ test('Excel: 130 variables únicas, 17 familias y 12 P1/P2 de fase 1 activas', (
   assert.ok(initialCatalog.some(v => v.condition.includes('resultado_conversacion')));
 });
 test('la autenticación protege las rutas y el rol supervisor no puede escribir el catálogo', async () => {
-  await request(app).get('/pulso/api/catalog').expect(401);
-  await supervisor.get('/pulso/api/catalog').expect(200);
+  await request(app).get('/pulsoAtom/api/catalog').expect(401);
+  await supervisor.get('/pulsoAtom/api/catalog').expect(200);
   await write(supervisor, 'post', '/catalog', {}).expect(403);
   await write(supervisor, 'patch', '/catalog/cliente_molesto', {}).expect(403);
   await write(supervisor, 'post', '/catalog/batch-status', {}).expect(403);
   await write(supervisor, 'patch', '/evaluations/settings', {}).expect(403);
-  await admin.post('/pulso/api/catalog').set('Origin', 'https://untrusted.example').send({}).expect(403);
+  await admin.post('/pulsoAtom/api/catalog').set('Origin', 'https://untrusted.example').send({}).expect(403);
   const signed = await write(request(app), 'post', '/auth/demo', { role: 'admin' });
   assert.match(signed.headers['set-cookie'][0], /HttpOnly/);
   assert.match(signed.headers['set-cookie'][0], /SameSite=Strict/);
-  assert.match(signed.headers['set-cookie'][0], /Path=\/pulso/);
+  assert.match(signed.headers['set-cookie'][0], /Path=\/pulsoAtom/);
 });
 test('las rutas TD exigen administrador y permanecen cerradas en demostración', async () => {
-  await request(app).get('/pulso/api/integrations/td/mail/health').expect(401);
-  await supervisor.get('/pulso/api/integrations/td/mail/health').expect(403);
-  const health = await admin.get('/pulso/api/integrations/td/mail/health').expect(409);
+  await request(app).get('/pulsoAtom/api/integrations/td/mail/health').expect(401);
+  await supervisor.get('/pulsoAtom/api/integrations/td/mail/health').expect(403);
+  const health = await admin.get('/pulsoAtom/api/integrations/td/mail/health').expect(409);
   assert.equal(health.body.error.code, 'DEMO_MODE');
   await write(supervisor, 'post', '/integrations/td/mail/send', { to: 'test@example.com', subject: 'Prueba', text: 'Hola' }).expect(403);
   await write(admin, 'post', '/integrations/td/s3/upload', { fileName: 'a.txt', fileText: 'Hola' }).expect(409);
@@ -69,7 +69,7 @@ test('alta, validación de duplicados y guardado conservado al reabrir el archiv
   await reopened.close();
 });
 test('una edición crea versión, detecta conflicto y conserva evaluaciones anteriores', async () => {
-  const list = await admin.get('/pulso/api/catalog?q=cliente_molesto');
+  const list = await admin.get('/pulsoAtom/api/catalog?q=cliente_molesto');
   const item = list.body.items.find(v => v.id === 'cliente_molesto');
   const state = await store.read();
   const conversation = state.conversations.find(c => c.evaluationId);
@@ -82,7 +82,7 @@ test('una edición crea versión, detecta conflicto y conserva evaluaciones ante
   const historical = conversationView(updated, conversation, undefined, true).variables.find(v => v.id === item.id);
   assert.equal(historical.version, 1);
   assert.equal(historical.name, previous.name);
-  const history = await admin.get(`/pulso/api/catalog/${item.id}/history`).expect(200);
+  const history = await admin.get(`/pulsoAtom/api/catalog/${item.id}/history`).expect(200);
   assert.deepEqual(history.body.items.map(v => v.version), [2, 1]);
 });
 test('la activación por lotes es atómica, no habilita plantillas y valida versiones', async () => {
@@ -101,44 +101,44 @@ test('la activación por lotes es atómica, no habilita plantillas y valida vers
 test('refutar y deshacer preservan la evidencia original y el historial', async () => {
   const state = await store.read();
   const candidate = filteredConversations(state, {}).find(c => c.marks.some(m => ['p1', 'p2'].includes(m.kind)) && !state.reviews.some(r => r.conversationId === c.id));
-  const detail = (await admin.get(`/pulso/api/conversations/${candidate.id}`)).body.conversation;
+  const detail = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   const variable = detail.variables.find(v => ['p1', 'p2'].includes(v.kind));
   const body = { variableId: variable.id, evaluationId: detail.evaluation.id, expectedReviewId: null, action: 'refutar', reason: 'falta_contexto', comment: 'El contexto permite descartar este evento.' };
   const review = await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, body).expect(201);
-  let changed = (await admin.get(`/pulso/api/conversations/${candidate.id}`)).body.conversation;
+  let changed = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   assert.equal(changed.variables.find(v => v.id === variable.id).kind, 'refuted');
   assert.deepEqual(changed.variables.find(v => v.id === variable.id).result.evidence, variable.result.evidence);
   await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, body).expect(409);
   await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, { ...body, action: 'deshacer', expectedReviewId: review.body.review.id, reason: 'otro', comment: 'Restablecer la evaluación después de revisar.' }).expect(201);
-  changed = (await admin.get(`/pulso/api/conversations/${candidate.id}`)).body.conversation;
+  changed = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   assert.equal(changed.variables.find(v => v.id === variable.id).kind, variable.kind);
   assert.deepEqual(changed.reviews.map(r => r.action), ['refutar', 'deshacer']);
 });
 test('un flag humano requiere evidencia propia y nunca modifica el resultado base', async () => {
   const state = await store.read();
   const candidate = filteredConversations(state, {}).find(c => c.evaluated && !c.marks.length);
-  const c = (await admin.get(`/pulso/api/conversations/${candidate.id}`)).body.conversation;
+  const c = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   const v = c.variables.find(v => v.enabledInEvaluation && v.result.value === 0 && v.polarity === 'negativo');
   const input = { variableId: v.id, evaluationId: c.evaluation.id, expectedReviewId: null, action: 'levantar', reason: 'omision_del_modelo', comment: 'La evidencia muestra una omisión del modelo.' };
   await write(supervisor, 'post', `/conversations/${c.id}/reviews`, input).expect(422);
   await write(supervisor, 'post', `/conversations/${c.id}/reviews`, { ...input, messageId: 'another-conversation-message' }).expect(422);
   await write(supervisor, 'post', `/conversations/${c.id}/reviews`, { ...input, messageId: c.messages[0].id }).expect(201);
-  const updated = (await admin.get(`/pulso/api/conversations/${c.id}`)).body.conversation;
+  const updated = (await admin.get(`/pulsoAtom/api/conversations/${c.id}`)).body.conversation;
   assert.equal(updated.variables.find(item => item.id === v.id).result.value, 0);
   assert.equal(updated.variables.find(item => item.id === v.id).kind, 'human');
 });
 test('filtros, paginación y búsquedas usan el mismo alcance y distinguen pendientes', async () => {
-  const response = await admin.get('/pulso/api/conversations?country=HN&from=2026-10-24&to=2026-10-25&pageSize=5').expect(200);
+  const response = await admin.get('/pulsoAtom/api/conversations?country=HN&from=2026-10-24&to=2026-10-25&pageSize=5').expect(200);
   assert.equal(response.body.items.length, 5);
   assert.ok(response.body.total > 5);
   assert.ok(response.body.items.every(c => c.country === 'HN' && c.date >= '2026-10-24' && c.date <= '2026-10-25'));
-  const search = await admin.get('/pulso/api/search?q=confirmar').expect(200);
+  const search = await admin.get('/pulsoAtom/api/search?q=confirmar').expect(200);
   assert.ok(search.body.items.some(c => c.excerpt?.text.toLowerCase().includes('confirmar')));
-  await admin.get('/pulso/api/conversations?from=2026-10-26&to=2026-10-20').expect(422);
-  await admin.get('/pulso/api/conversations?from=2026-02-31').expect(422);
-  const pending = await admin.get('/pulso/api/conversations?status=pending').expect(200);
+  await admin.get('/pulsoAtom/api/conversations?from=2026-10-26&to=2026-10-20').expect(422);
+  await admin.get('/pulsoAtom/api/conversations?from=2026-02-31').expect(422);
+  const pending = await admin.get('/pulsoAtom/api/conversations?status=pending').expect(200);
   assert.ok(pending.body.total > 0 && pending.body.items.every(c => !c.evaluated));
-  const c = (await admin.get(`/pulso/api/conversations/${pending.body.items[0].id}`)).body.conversation;
+  const c = (await admin.get(`/pulsoAtom/api/conversations/${pending.body.items[0].id}`)).body.conversation;
   assert.ok(c.variables.every(v => v.result.value === null && v.result.status === 'no_evaluado'));
   const blank = summarize([]);
   assert.equal(blank.alertPercent, null); assert.equal(blank.refutedPercent, null);
@@ -150,7 +150,7 @@ test('filtros, paginación y búsquedas usan el mismo alcance y distinguen pendi
   assert.equal(metrics.withAlerts, views.filter(c => c.p1 + c.p2 > 0).length);
 });
 test('las evaluaciones y el scheduler no reportan ejecuciones sin integración', async () => {
-  const response = await admin.get('/pulso/api/evaluations').expect(200);
+  const response = await admin.get('/pulsoAtom/api/evaluations').expect(200);
   assert.equal(response.body.status.ready, false);
   assert.equal(response.body.jobs.length, 0);
   await write(supervisor, 'post', '/evaluations', { scope: 'new' }).expect(403);
@@ -164,7 +164,7 @@ test('las evaluaciones y el scheduler no reportan ejecuciones sin integración',
 });
 test('modo real sin conexión no utiliza datos demo como respaldo', async () => {
   const real = createApp(new UnconfiguredStore(), { ...config, demo: false });
-  await request(real).get('/pulso/api/health').expect(503);
+  await request(real).get('/pulsoAtom/api/health').expect(503);
   await write(request(real), 'post', '/auth/demo', { role: 'admin' }).expect(404);
   await write(request(real), 'post', '/auth/login', { email: 'real@example.test', password: 'not-a-real-password' }).expect(503);
   assert.equal(createState(false).conversations.length, 0);
@@ -178,7 +178,7 @@ test('contraseñas se verifican sin guardar texto plano y cerrar sesión revoca 
   assert.equal(verifyPassword('wrong', hash), false);
   const agent = request.agent(app);
   await write(agent, 'post', '/auth/demo', { role: 'supervisor' });
-  await agent.get('/pulso/api/auth/me').expect(200);
+  await agent.get('/pulsoAtom/api/auth/me').expect(200);
   await write(agent, 'post', '/auth/logout', {}).expect(204);
-  await agent.get('/pulso/api/auth/me').expect(401);
+  await agent.get('/pulsoAtom/api/auth/me').expect(401);
 });
