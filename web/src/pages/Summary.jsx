@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Drawer, Select, Tooltip } from 'antd';
+import { Select, Tooltip } from 'antd';
 import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
 import { PageHeading, LoadingState, ErrorState, EmptyState, Mark, PriorityTag, dateText, timeText, previousDate } from '../components/common';
+import QuickView from '../components/QuickView';
 
 const legends = [['p1', 'P1'], ['p2', 'P2'], ['refuted', 'Refutado'], ['human', 'Por humano'], ['media', 'Multimedia'], ['coaching', 'Coaching']];
 const variableOptions = catalog => [
@@ -41,6 +42,7 @@ export default function Summary() {
   const openHistory = code => navigate(`/historico?${queryString({ from, to, country: code })}`);
   const toggle = kind => setVisible(current => current.includes(kind) ? current.filter(v => v !== kind) : [...current, kind]);
   const metrics = data?.metrics;
+  const selectedView = data?.conversations?.find(c => c.id === selected?.id) || selected;
   const groups = bootstrap.countries.filter(c => !country || country === c.code);
   return <div className="summary-page"><PageHeading eyebrow="VISIÓN REGIONAL" title="Resumen de conversaciones" description="Identifica lo que requiere atención y explora la evidencia." actions={<div className="period-note"><CalendarOutlined /><span>{latest ? `${dateText(from)} — ${dateText(to)}` : 'Sin datos cargados'}</span></div>} />{error ? <ErrorState error={error} retry={reload} /> : loading ? <LoadingState /> : <>
     <div className="metrics-grid">
@@ -62,20 +64,7 @@ export default function Summary() {
           return <Tooltip key={c.id} title={selected ? null : <div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>{timeText(c.startedAt)} · {c.channel}</span><span>{!c.evaluated ? 'No evaluada' : c.marks.length ? c.marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : 'Sin flags en el checklist evaluado'}</span></div>}><button className={`conversation-cell ${!c.evaluated ? 'pending-cell' : ''} ${selected?.id === c.id ? 'selected-cell' : ''}`} aria-label={`Vista rápida de ${c.client.name}, ${agent.name}, ${day}, ${c.evaluated ? `${c.p1} P1 y ${c.p2} P2` : 'no evaluada'}`} aria-pressed={selected?.id === c.id} onClick={event => { selectedCell.current = event.currentTarget; setSelected(c); }}>{!c.evaluated ? <span>?</span> : kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
         })}</div>)}</div></div>)}</section>;
       })}</div></div>}<div className="map-footer"><span><span className="mini-rectangle" />Sin flags en las variables evaluadas</span><span>Más reciente a la izquierda <ArrowRightOutlined /> más antiguo</span></div></section>
-    <QuickView selected={selected} onClose={closeQuickView} onOpen={() => open(selected)} />
+    <QuickView selected={selectedView} onClose={closeQuickView} onOpen={() => open(selectedView)} onSaved={reload} />
   </>}</div>;
 }
 function Metric({ value, label, detail, accent, title }) { return <Tooltip title={title}><div className={`metric-card ${accent ? 'metric-attention' : ''}`}><div className="metric-label">{label}{accent && <span className="attention-dot" />}</div><strong>{value}</strong><div className="metric-detail">{detail}</div></div></Tooltip>; }
-
-function QuickView({ selected, onClose, onOpen }) {
-  const request = useApi(selected ? `/conversations/${encodeURIComponent(selected.id)}` : null);
-  const conversation = request.data?.conversation;
-  const current = conversation?.id === selected?.id ? conversation : null;
-  const alerts = (current?.variables || []).filter(item => ['P1', 'P2'].includes(item.priority) && ['p1', 'p2', 'human'].includes(item.kind)).sort((a, b) => (a.priority === 'P1' ? 0 : 1) - (b.priority === 'P1' ? 0 : 1));
-  const main = alerts[0];
-  const evidence = main?.review?.action === 'levantar' ? [main.review.evidence] : (main?.result?.evidence || []);
-  return <Drawer className="quick-view-drawer" title="Vista rápida" placement="right" width="min(440px, 100vw)" open={!!selected} onClose={onClose} mask={false} styles={{ body: { padding: 0 } }} footer={<Button type="primary" block onClick={onOpen} disabled={!selected}>Ver conversación completa <ArrowRightOutlined /></Button>}>
-    {selected && <><div className="quick-view-intro"><span className="eyebrow">CONVERSACIÓN · {selected.country}</span><h2>{selected.client.name}</h2><p>{selected.agent.name} · {dateText(selected.date)} · {timeText(selected.startedAt)}</p><p>{selected.channel}{selected.client.phoneLast4 ? ` · Cliente …${selected.client.phoneLast4}` : ''}</p><div className="quick-view-priorities">{selected.evaluated ? <>{selected.p1 > 0 && <PriorityTag priority="P1" count={selected.p1} />}{selected.p2 > 0 && <PriorityTag priority="P2" count={selected.p2} />}{selected.p1 + selected.p2 === 0 && <span className="quick-view-neutral">Sin P1/P2 vigentes</span>}</> : <span className="quick-view-neutral">Pendiente de evaluación</span>}</div></div>
-      <div className="quick-view-content">{request.error ? <ErrorState error={request.error} retry={request.reload} /> : request.loading || !current ? <LoadingState /> : !current.evaluated ? <div className="quick-view-empty">Todavía no hay resultados del checklist. Puedes consultar los mensajes en la conversación completa.</div> : <><section><h3>Alertas vigentes</h3>{alerts.length ? <div className="quick-view-alerts">{alerts.map(item => <div key={item.id} className="quick-view-alert"><Mark kind={item.kind} /><span>{item.name}</span><PriorityTag priority={item.priority} /></div>)}</div> : <p className="quick-view-empty">Sin alertas P1/P2 vigentes en las variables evaluadas.</p>}</section><section><h3>Evidencia principal</h3>{evidence.filter(Boolean).length ? evidence.filter(Boolean).map((item, index) => <blockquote className="quick-view-evidence" key={`${item.messageId}-${index}`}><p>“{item.quote}”</p><footer>{main.name} · {timeText(current.messages.find(message => message.id === item.messageId)?.timestamp)}</footer></blockquote>) : <p className="quick-view-empty">No hay una cita de evidencia para mostrar en esta vista.</p>}</section></>}</div></>}
-  </Drawer>;
-}
