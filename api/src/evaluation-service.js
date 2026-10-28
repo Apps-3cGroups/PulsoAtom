@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
+import { evaluateCodeVariable, supportsCodeVariable } from './code-evaluator.js';
+
+const supportsAiVariable = variable => variable.type === 'Flag' && ['IA', 'IA + código'].includes(variable.method);
+const supportsVariable = variable => supportsAiVariable(variable) || supportsCodeVariable(variable);
 
 export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter } = {}) {
   return state.conversations.filter(c => c.messages.length && c.completed !== false && (!from || c.date >= from) && (!to || c.date <= to)
@@ -8,12 +12,14 @@ export function eligibleConversations(state, { from, to, country, pendingOnly = 
 
 export async function evaluateConversation(store, evaluator, conversation, catalog, { replace = false } = {}) {
   const variables = catalog.filter(v => v.active);
-  const answer = await evaluator.evaluate(conversation, variables);
+  if (!variables.length || variables.some(variable => !supportsVariable(variable))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
+  const aiVariables = variables.filter(supportsAiVariable);
+  const answer = aiVariables.length ? await evaluator.evaluate(conversation, aiVariables) : { results: [], model: null, responseId: null, usage: null };
   const evaluation = {
     id: randomUUID(), conversationId: conversation.id, createdAt: new Date().toISOString(), demo: false,
     model: answer.model, providerResponseId: answer.responseId, usage: answer.usage,
     catalogVersions: catalog.map(v => ({ id: v.id, version: v.version, active: v.active })),
-    results: answer.results,
+    results: [...answer.results, ...variables.filter(supportsCodeVariable).map(variable => evaluateCodeVariable(conversation, variable))],
   };
   await store.transaction(state => {
     if (!replace && state.evaluations.some(e => e.conversationId === conversation.id)) throw new AppError(409, 'La conversación ya tiene una evaluación guardada.', 'ALREADY_EVALUATED');
@@ -31,7 +37,7 @@ export async function startEvaluationBatch(store, evaluator, { from, to, country
   const state = await store.readWithConversations();
   const catalog = state.catalog;
   const active = catalog.filter(v => v.active);
-  if (!active.length || active.some(v => v.type !== 'Flag' || !['IA', 'IA + código'].includes(v.method))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
+  if (!active.length || active.some(variable => !supportsVariable(variable))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
   let candidates = eligibleConversations(state, { from, to, country, pendingOnly, sourceChangedAfter });
   if (conversationIds) {
     if (!Array.isArray(conversationIds) || !conversationIds.length || new Set(conversationIds).size !== conversationIds.length) throw new AppError(422, 'La lista de conversaciones para revisión es inválida.', 'INVALID_RECHECK');

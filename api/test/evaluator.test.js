@@ -4,6 +4,7 @@ import { initialCatalog } from '../src/data/seed.js';
 import { OpenAIEvaluator, evaluationSchema, validateEvaluation } from '../src/evaluator.js';
 import { eligibleConversations, runEvaluationBatch } from '../src/evaluation-service.js';
 import { createState } from '../src/data/seed.js';
+import { evaluateCodeVariable } from '../src/code-evaluator.js';
 
 const variables = initialCatalog.filter(v => v.active);
 const conversation = { id: 'atom-1', date: '2026-10-27', messages: [{ id: 'm1', actor: 'cliente', text: 'Voy a cancelar mi pedido.' }, { id: 'm2', actor: 'humano', text: 'Revisaré el estado.' }] };
@@ -36,6 +37,27 @@ test('la regla de código evita marcar falta de respuesta si el último mensaje 
   raw.results.asistente_no_respondio_ultimo_mensaje = { status: 'evaluado', value: 1, reason: 'El cliente escribió.', evidence_message_ids: ['m1'] };
   const result = validateEvaluation(raw, variables, conversation).find(r => r.variableId === 'asistente_no_respondio_ultimo_mensaje');
   assert.equal(result.value, 0); assert.deepEqual(result.evidence, []);
+});
+
+test('cuenta únicamente mensajes del cliente y combina código con la evaluación de IA', async () => {
+  const metric = initialCatalog.find(v => v.id === 'num_mensajes_cliente');
+  const withMetric = { ...metric, active: true };
+  assert.equal(evaluateCodeVariable({ messages: [{ actor: 'cliente' }, { actor: 'bot' }, { actor: 'humano' }, { actor: 'cliente' }] }, withMetric).value, 2);
+  assert.equal(evaluateCodeVariable({ messages: [{ actor: 'humano' }] }, withMetric).value, 0);
+  const state = createState(false);
+  state.catalog = state.catalog.map(v => v.id === metric.id ? withMetric : v);
+  state.conversations = [{ ...conversation, completed: true }];
+  const store = { async readWithConversations() { return structuredClone(state); }, async read() { return structuredClone(state); }, async transaction(fn) { return fn(state); } };
+  const evaluator = { configured: true, async evaluate(_conversation, selected) {
+    assert.equal(selected.length, 12);
+    assert.ok(selected.every(v => v.method !== 'Código'));
+    return { results: validateEvaluation(answer(), selected, conversation), model: 'test-model', responseId: 'test-response' };
+  } };
+  const job = await runEvaluationBatch(store, evaluator, { max: 1 });
+  assert.equal(job.status, 'completed');
+  assert.equal(state.evaluations[0].results.length, 13);
+  assert.equal(state.evaluations[0].results.find(result => result.variableId === metric.id).value, 1);
+  assert.equal(state.evaluations[0].catalogVersions.find(v => v.id === metric.id).active, true);
 });
 
 test('el lote histórico selecciona pendientes y guarda solo evaluaciones propias', async () => {
