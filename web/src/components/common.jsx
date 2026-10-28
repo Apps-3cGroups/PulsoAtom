@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Select, Input, Skeleton, Tag, Tooltip } from 'antd';
+import { Alert, Button, Empty, Select, Input, Tag, Tooltip } from 'antd';
 import { ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { usePortal } from '../hooks';
 
@@ -7,8 +7,8 @@ export function setDisplayTimezone(timezone) { TZ = timezone || 'America/Tegucig
 export const dateText = (value, options = {}) => value ? new Intl.DateTimeFormat('es-HN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: TZ, ...options }).format(new Date(value.length === 10 ? `${value}T12:00:00-06:00` : value)) : 'Sin carga';
 export const timeText = value => value ? new Intl.DateTimeFormat('es-HN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: TZ }).format(new Date(value)) : '—';
 export function previousDate(date, days) { const value = new Date(`${date}T12:00:00Z`); value.setUTCDate(value.getUTCDate() - days); return value.toISOString().slice(0, 10); }
-export function Brand({ compact = false }) {
-  return <span className="brand"><svg width="25" height="30" viewBox="0 0 25 30" aria-hidden="true"><rect x="4" y="1" width="17" height="28" rx="6" fill="var(--surface-raised)" stroke="var(--border-strong)"/><circle cx="12.5" cy="10" r="4.4" fill="var(--p1)"/><circle cx="12.5" cy="21" r="3.2" fill="none" stroke="var(--muted)" strokeWidth="1.7"/></svg>{!compact && <b>Pulso<span className="brand-period">.</span></b>}</span>;
+export function Brand({ compact = false, animated = false }) {
+  return <span className={`brand${animated ? ' brand-animated' : ''}`}><svg width="25" height="30" viewBox="0 0 25 30" aria-hidden="true"><rect x="4" y="1" width="17" height="28" rx="6" fill="var(--surface-raised)" stroke="var(--border-strong)"/><circle className="brand-red-dot" cx="12.5" cy="10" r="4.4" fill="var(--p1)"/><circle cx="12.5" cy="21" r="3.2" fill="none" stroke="var(--muted)" strokeWidth="1.7"/></svg>{!compact && <b>Pulso<span className="brand-period">.</span></b>}</span>;
 }
 const markNames = { p1: 'P1 del sistema', p2: 'P2 del sistema', human: 'Levantado por humano', refuted: 'Refutado por humano', coaching: 'Coaching', media: 'Multimedia' };
 export function Mark({ kind, label, small = false }) { return <span className={`mark mark-${kind} ${small ? 'mark-small' : ''}`} role="img" aria-label={label || markNames[kind]} />; }
@@ -16,7 +16,7 @@ export function PriorityTag({ priority, count }) { return <span className={`prio
 export function Marks({ conversation, limit = 5 }) { return <span className="marks-inline">{conversation.marks.slice(0, limit).map(m => <Tooltip key={m.id} title={`${m.name}${m.priority ? ` · ${m.priority}` : ''}`}><span><Mark kind={m.kind} /></span></Tooltip>)}{conversation.marks.length > limit && <span className="small muted">+{conversation.marks.length - limit}</span>}{conversation.media.length > 0 && <Tooltip title={`Multimedia: ${conversation.media.join(', ')}`}><span><Mark kind="media" /></span></Tooltip>}{!conversation.evaluated && <Tag className="neutral-tag">No evaluada</Tag>}{conversation.evaluated && !conversation.marks.length && !conversation.media.length && <span className="muted small">Sin flags</span>}</span>; }
 export function PageHeading({ eyebrow, title, description, actions }) { return <div className="page-heading"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1>{description && <p>{description}</p>}</div>{actions && <div className="heading-actions">{actions}</div>}</div>; }
 export function ErrorState({ error, retry }) { return <div className="state-box"><Alert type="error" showIcon message="No pudimos cargar esta información" description={error?.message || 'Intenta nuevamente.'} action={retry && <Button onClick={retry} icon={<ReloadOutlined />}>Reintentar</Button>} /></div>; }
-export function LoadingState() { return <div className="loading-panel" aria-label="Cargando información" aria-busy="true"><Skeleton active paragraph={{ rows: 6 }} /></div>; }
+export function LoadingState({ fullScreen = false }) { return <div className={`pulso-loader${fullScreen ? ' pulso-loader-fullscreen' : ' loading-panel'}`} role="status" aria-label="Cargando Pulso" aria-busy="true"><Brand animated /><span className="pulso-loader-caption">Cargando información…</span></div>; }
 export function EmptyState({ title = 'No hay conversaciones en este período', description = 'Prueba con otro rango de fechas o ajusta los filtros.', action }) { return <div className="empty-panel"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<><strong>{title}</strong><p>{description}</p></>}>{action}</Empty></div>; }
 export function Filters({ value, onChange, withPriority = true, withStatus = false, withVariable = false }) {
   const { bootstrap } = usePortal();
