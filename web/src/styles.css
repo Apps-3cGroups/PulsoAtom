@@ -129,6 +129,22 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .segmented-range button[aria-pressed='true'] { color: var(--ink); background: var(--surface-hover); box-shadow: 0 1px 3px #0001; }
 .segmented-range button:hover { color: var(--ink); }
 .map-variable { width: 220px; }
+.summary-variable-menu .ant-select-item-group {
+  margin: 7px 4px 2px;
+  padding: 8px 9px 6px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  border-radius: 5px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.summary-variable-menu .variable-group-heading { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+.summary-variable-menu .variable-group-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--coach); }
+.summary-variable-menu .group-p1 .variable-group-dot { background: var(--p1); }
+.summary-variable-menu .group-p2 .variable-group-dot { background: var(--p2); }
+.summary-variable-menu .group-positivas .variable-group-dot { background: var(--accent); }
+.summary-variable-menu .ant-select-item-option-grouped { padding-left: 25px; }
 .map-legend { display: flex; align-items: center; gap: 7px; padding: 11px 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); flex-wrap: wrap; background: color-mix(in srgb, var(--surface-raised) 40%, var(--surface)); }
 .map-legend > .control-label { margin-right: 8px; }
 .legend-toggle { display: flex; align-items: center; gap: 7px; color: var(--muted); padding: 4px 7px; font-size: 12px; background: transparent; border: 1px solid transparent; border-radius: 5px; }
