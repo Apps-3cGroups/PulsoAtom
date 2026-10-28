@@ -55,3 +55,23 @@ export function atomDatabaseConfig() {
     },
   };
 }
+
+export function identityDatabaseConfig() {
+  if (!process.env.IDENTITY_DB_NAME) return null;
+  const atom = atomDatabaseConfig();
+  if (!atom) return null;
+  const identifier = value => {
+    if (!/^[A-Za-z0-9_]+$/.test(value || '')) throw new Error('Nombre de tabla o base de identidad inválido.');
+    return value;
+  };
+  return {
+    mode: process.env.IDENTITY_MODE || 'portal-user',
+    connection: { ...atom.connection, database: identifier(process.env.IDENTITY_DB_NAME) },
+    tables: {
+      users: identifier(process.env.IDENTITY_USERS_TABLE || 'tblUsuariosPortal'),
+      userRoles: identifier(process.env.IDENTITY_USER_ROLES_TABLE || 'tblUsuarioRoles'),
+      roles: identifier(process.env.IDENTITY_ROLES_TABLE || 'tblRoles'),
+      people: identifier(process.env.IDENTITY_PEOPLE_TABLE || 'tblPersonas'),
+    },
+  };
+}

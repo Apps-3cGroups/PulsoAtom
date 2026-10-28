@@ -8,6 +8,7 @@ const Conversations = lazy(() => import('./pages/Conversations'));
 const Conversation = lazy(() => import('./pages/Conversation'));
 const Catalog = lazy(() => import('./pages/Catalog'));
 const Evaluations = lazy(() => import('./pages/Evaluations'));
+const Access = lazy(() => import('./pages/Access'));
 
 export default function PortalRoutes() {
   const navigate = useNavigate();
@@ -20,6 +21,7 @@ export default function PortalRoutes() {
       <Route path="/conversacion/:id" element={<Conversation />} />
       <Route path="/catalogo" element={<Catalog />} />
       <Route path="/evaluaciones" element={<Evaluations />} />
+      <Route path="/accesos" element={<Access />} />
       <Route path="*" element={<div className="not-found">
         <h1>Esta página no existe</h1>
         <p>Vuelve al resumen para continuar.</p>

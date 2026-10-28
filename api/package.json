@@ -10,7 +10,10 @@
     "test": "node --test test/*.test.js",
     "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/seed.js",
-    "user:create": "node scripts/create-user.js"
+    "user:create": "node scripts/create-user.js",
+    "access:bootstrap": "node scripts/bootstrap-access.js",
+    "eval:sample": "node scripts/evaluate-sample.js",
+    "eval:country": "node scripts/evaluate-country.js"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

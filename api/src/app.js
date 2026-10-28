@@ -7,25 +7,36 @@ import { AppError } from './errors.js';
 import { tokenHash, newToken, verifyPassword, publicUser, requireUser, requireAdmin } from './auth.js';
 import { countries } from './data/seed.js';
 import { createCatalogSchema, updateCatalogSchema, batchSchema, validateCatalog, saveCatalogVersion, ensureVersion, listQuerySchema, filteredConversations, summarize, priorityOrder, conversationView, recordReview, reviewSchema } from './domain.js';
+import { evaluatorFromEnv } from './evaluator.js';
+import { startEvaluationBatch } from './evaluation-service.js';
+import { matchesSomos3cPassword } from './identity.js';
+import { mountTdRoutes } from './td-routes.js';
 
 const prefix = '/pulso/api';
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
+const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
+const grantSchema = z.object({ externalId: z.number().int().positive(), role: z.enum(['admin', 'supervisor']) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
+const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(100).default(20) }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
 export const integrationStatus = () => ({
-  ready: false,
+  ready: process.env.OPENAI_EVALUATION_ENABLED === 'true' && !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.ATOM_DB_HOST && process.env.APP_DB_HOST),
   atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_CONVERSATIONS_TABLE && process.env.ATOM_MESSAGES_TABLE && process.env.ATOM_COUNTRIES_TABLE),
-  aiConfigured: !!(process.env.AI_BASE_URL && process.env.AI_MODEL),
-  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), 'Configurar y validar el servicio de IA con las variables seleccionadas.', 'Habilitar el procesador de evaluaciones y su programación diaria.'],
+  aiConfigured: !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL),
+  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), ...(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? [] : ['Configurar OpenAI para la evaluación.']), ...(process.env.OPENAI_EVALUATION_ENABLED === 'true' ? [] : ['La transferencia de conversaciones a OpenAI está deshabilitada.'])],
 });
 
-export function createApp(store, config) {
+export function createApp(store, config, evaluator = evaluatorFromEnv(), identity = null, tdServices = {}) {
   const app = express();
+  const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
-  app.use(express.json({ limit: '1mb' }));
+  const tdUploadPath = `${prefix}/integrations/td/s3/upload`;
+  const tdMailPath = `${prefix}/integrations/td/mail/send`;
+  const standardJson = express.json({ limit: '1mb' });
+  app.use((req, res, next) => [tdUploadPath, tdMailPath].includes(req.path) ? next() : standardJson(req, res, next));
   app.use(cookieParser());
   app.use(prefix, (req, _res, next) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -40,16 +51,23 @@ export function createApp(store, config) {
   app.get(`${prefix}/health`, async (_req, res) => {
     let storageReady = true;
     try { await store.read(); } catch { storageReady = false; }
-    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: false });
+    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: !config.demo && !!store.readWithConversations && evaluator.configured && process.env.OPENAI_EVALUATION_ENABLED === 'true' });
   });
-  app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', timezone: config.timezone, version: '0.1.0' }));
+  app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
     const token = req.cookies[cookieName];
     if (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token)) {
       const state = await store.read();
       const session = state.sessions.find(s => s.id === tokenHash(token) && Date.parse(s.expiresAt) > Date.now());
       const user = session && state.users.find(u => u.id === session.userId && u.active);
-      if (user) { req.user = publicUser(user); req.sessionId = session.id; }
+      if (user) {
+        if (identity && user.externalId) {
+          const source = await identity.byId(user.externalId);
+          if (!source?.active || source.changeRequired || source.blocked || (!user.externalGrant && !source.sourceRoles.includes('super_admin'))) return next();
+          req.user = publicUser({ ...user, role: source.sourceRoles.includes('super_admin') ? 'admin' : user.role, name: source.name });
+        } else req.user = publicUser(user);
+        req.sessionId = session.id;
+      }
     }
     next();
   });
@@ -62,7 +80,7 @@ export function createApp(store, config) {
     });
     res.cookie(cookieName, token, cookieOptions).json({ user: publicUser(user), mode: config.demo ? 'demo' : 'real' });
   }
-  const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { code: 'RATE_LIMIT', message: 'Demasiados intentos. Intenta de nuevo en unos minutos.' } } });
+  const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { code: 'RATE_LIMIT', message: 'Demasiados intentos. Intenta de nuevo en unos minutos.' } } });
   app.post(`${prefix}/auth/demo`, loginLimiter, async (req, res) => {
     if (!config.demo) throw new AppError(404, 'La demostración está deshabilitada.');
     const { role } = z.object({ role: z.enum(['admin', 'supervisor']) }).strict().parse(req.body);
@@ -73,6 +91,27 @@ export function createApp(store, config) {
   });
   app.post(`${prefix}/auth/login`, loginLimiter, async (req, res) => {
     if (config.demo) throw new AppError(409, 'Usa uno de los accesos de demostración.');
+    if (identity) {
+      const input = externalLoginSchema.parse(req.body);
+      const source = await identity.lookup(input.username, { credentials: true });
+      if (!source || !matchesSomos3cPassword(source.passwordHash, input.password)) throw new AppError(401, 'Usuario o contraseña incorrectos.', 'INVALID_CREDENTIALS');
+      if (!source.active || source.blocked) throw new AppError(403, 'La cuenta de origen está inactiva o bloqueada.', 'SOURCE_ACCOUNT_BLOCKED');
+      if (source.changeRequired) throw new AppError(403, 'Debes actualizar tu contraseña en el portal de origen antes de entrar a Pulso.', 'PASSWORD_CHANGE_REQUIRED');
+      const user = await store.transaction(state => {
+        const id = externalUserId(source.id);
+        let current = state.users.find(item => item.id === id);
+        const sourceAdmin = source.sourceRoles.includes('super_admin');
+        if (!sourceAdmin && (!current?.externalGrant || !current.active)) throw new AppError(403, 'Tu usuario aún no tiene acceso a Pulso.', 'PULSO_ACCESS_REQUIRED');
+        if (!current) {
+          current = { id, externalId: source.id, externalGrant: false, email: `${id.replace(':', '-')}@pulso.local`, name: source.name, role: 'admin', active: true, createdAt: new Date().toISOString() };
+          state.users.push(current);
+        }
+        current.name = source.name;
+        if (sourceAdmin) current.active = true;
+        return { ...current, role: sourceAdmin ? 'admin' : current.role };
+      });
+      return signIn(req, res, user);
+    }
     const input = loginSchema.parse(req.body);
     const state = await store.read();
     const user = state.users.find(u => u.email.toLowerCase() === input.email.toLowerCase() && u.active);
@@ -85,6 +124,46 @@ export function createApp(store, config) {
     res.clearCookie(cookieName, { path: '/pulso', httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
+  mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });
+  app.get(`${prefix}/access/grants`, requireAdmin, async (_req, res) => {
+    if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
+    const state = await store.read();
+    res.json({ items: state.users.filter(user => user.externalId && user.externalGrant).map(({ id, externalId, name, role, active }) => ({ id, externalId, name, role, active })) });
+  });
+  app.post(`${prefix}/access/lookup`, requireAdmin, async (req, res) => {
+    if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
+    const { username } = z.object({ username: z.string().trim().min(1).max(254) }).strict().parse(req.body);
+    const source = await identity.lookup(username);
+    if (!source) throw new AppError(404, 'No se encontró el usuario en Somos3C.', 'NOT_FOUND');
+    res.json({ user: { id: source.id, username: source.username, name: source.name, active: source.active, changeRequired: source.changeRequired, blocked: source.blocked } });
+  });
+  app.post(`${prefix}/access/grants`, requireAdmin, async (req, res) => {
+    if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
+    const input = grantSchema.parse(req.body);
+    const source = await identity.byId(input.externalId);
+    if (!source?.active) throw new AppError(422, 'El usuario de origen no está activo.', 'SOURCE_ACCOUNT_BLOCKED');
+    if (source.sourceRoles.includes('super_admin')) throw new AppError(409, 'El superadministrador de origen ya tiene acceso administrativo.', 'SOURCE_ADMIN');
+    const grant = await store.transaction(state => {
+      const id = externalUserId(source.id);
+      let user = state.users.find(item => item.id === id);
+      if (!user) { user = { id, externalId: source.id, email: `${id.replace(':', '-')}@pulso.local`, createdAt: new Date().toISOString() }; state.users.push(user); }
+      Object.assign(user, { name: source.name, role: input.role, active: true, externalGrant: true, updatedBy: req.user.id, updatedAt: new Date().toISOString() });
+      return { id, externalId: source.id, name: source.name, role: user.role, active: true };
+    });
+    res.status(201).json({ grant });
+  });
+  app.patch(`${prefix}/access/grants/:id`, requireAdmin, async (req, res) => {
+    if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
+    const input = z.object({ role: z.enum(['admin', 'supervisor']).optional(), active: z.boolean().optional() }).strict().refine(value => value.role !== undefined || value.active !== undefined).parse(req.body);
+    if (req.params.id === req.user.id && (input.active === false || input.role === 'supervisor')) throw new AppError(409, 'No puedes retirar tu propio acceso administrativo.', 'SELF_ACCESS');
+    const grant = await store.transaction(state => {
+      const user = state.users.find(item => item.id === req.params.id && item.externalGrant);
+      if (!user) throw new AppError(404, 'Acceso no encontrado.', 'NOT_FOUND');
+      Object.assign(user, input, { updatedBy: req.user.id, updatedAt: new Date().toISOString() });
+      return { id: user.id, externalId: user.externalId, name: user.name, role: user.role, active: user.active };
+    });
+    res.json({ grant });
+  });
   app.get(`${prefix}/bootstrap`, async (_req, res) => {
     const state = await readHistory();
     const dates = state.conversations.map(c => c.date).sort();
@@ -92,7 +171,7 @@ export function createApp(store, config) {
       mode: config.demo ? 'demo' : 'real', metadata: state.metadata, timezone: config.timezone,
       countries: (state.countries || countries).map(({ code, name }) => ({ code, name })),
       agents: [...new Map(state.conversations.map(c => [c.agent.id, { ...c.agent, country: c.country }])).values()],
-      catalog: state.catalog.map(({ id, name, family, phase, mark, active, version }) => ({ id, name, family, phase, mark, active, version })),
+      catalog: state.catalog.map(({ id, name, family, phase, mark, type, active, version }) => ({ id, name, family, phase, mark, type, active, version })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
       integrations: integrationStatus(),
     });
@@ -180,16 +259,21 @@ export function createApp(store, config) {
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled) throw new AppError(409, 'La programación no puede activarse hasta configurar la IA y el procesador de evaluaciones.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !integrationStatus().ready || !evaluator.configured)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y OpenAI en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
     const settings = await store.transaction(state => {
       ensureVersion(state.settings, expectedVersion);
-      state.settings = { ...input, version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
+      state.settings = { ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
       return state.settings;
     });
     res.json({ settings });
   });
-  app.post(`${prefix}/evaluations`, (_req, _res) => {
-    throw new AppError(409, 'La evaluación real está pendiente de integración. No se ha creado ninguna ejecución.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+  app.post(`${prefix}/evaluations`, requireAdmin, async (req, res) => {
+    if (process.env.OPENAI_EVALUATION_ENABLED !== 'true') throw new AppError(409, 'La transferencia de conversaciones a OpenAI aún no está habilitada.', 'EVALUATION_DISABLED');
+    if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
+    const input = evaluationRequestSchema.parse(req.body);
+    const { job, completion } = await startEvaluationBatch(store, evaluator, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max });
+    completion.catch(error => console.error('Error en ejecución de Pulso:', error.code || error.name));
+    res.status(202).json({ job });
   });
   app.use((_req, res) => res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Ruta no encontrada.' } }));
   app.use((error, _req, res, _next) => {

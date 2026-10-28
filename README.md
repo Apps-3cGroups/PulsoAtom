@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones futuras y la auditoría viven en `dbPulsosAtom`. Las evaluaciones automáticas todavía no se ejecutan.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI está implementado y se validó sobre cinco conversaciones reales; permanece cerrado por defecto para impedir nuevos lotes accidentales.
 
 ## Abrir y ejecutar
 
@@ -43,7 +43,7 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Histórico y Búsqueda:** filtros de fechas, país, asistente, prioridad, estado y variable; búsqueda de mensajes con apertura de evidencia en contexto.
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
-- **Evaluaciones:** interfaz a demanda y horario diario configurable. Muestra los requisitos pendientes y bloquea la ejecución automática hasta completar Atom, IA y procesamiento de lotes.
+- **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. El horario diario se puede guardar, pero su ejecución automática sigue inactiva.
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -57,6 +57,7 @@ Con `DEMO_MODE=true`, la pantalla de acceso permite entrar como administrador o 
 | Consultar todos los países, conversaciones y catálogo | Sí | Sí |
 | Refutar, levantar y deshacer flags con comentario | Sí | Sí |
 | Crear y modificar variables / activar lotes | Sí | No |
+| Iniciar evaluaciones a demanda, cuando estén habilitadas | Sí | No |
 | Guardar horario diario | Sí | No |
 
 Cada edición del catálogo conserva una versión. Las evaluaciones hacen referencia a las versiones utilizadas. Las revisiones humanas se agregan al historial sin sobrescribir la evidencia del resultado original. Los cambios concurrentes detectados devuelven un conflicto en lugar de reemplazar silenciosamente una versión reciente.
@@ -71,19 +72,24 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 | --- | --- |
 | `APP_DB_*` | Base MySQL propia `dbPulsosAtom`: cuentas, catálogo, versiones, evaluaciones y auditoría. |
 | `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente de lectura a conversaciones, eventos y países. El catálogo de países proviene de `dbSomos3c_2.tblCatalogoPaises`. |
-| `AI_PROVIDER`, `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` | Configuración reservada del servicio de IA; el adaptador se implementará después. |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_MS` | OpenAI Responses API con salida JSON Schema estricta. La clave permanece solo en `api/.env`. |
+| `OPENAI_EVALUATION_ENABLED` | Bloqueo explícito de transferencia; `false` por defecto. Se activa solo al habilitar nuevos lotes de evaluación. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
 | `APP_TIMEZONE` | Zona horaria de presentación; el horario diario también conserva su propia zona. |
+| `TD_API_BASE_URL` | URL base de la API TD para S3 y SMTP. Se configura solo en `api/.env`; no se envía al navegador. También se acepta la clave heredada `URL-Base`. |
 
 Para usar la base propia en otra instalación:
 
 1. Crear la base MySQL `dbPulsosAtom` con `utf8mb4`, usando una cuenta autorizada para aplicar migraciones.
-2. Completar `APP_DB_*` y cambiar `DEMO_MODE=false`.
-3. Desde `api/`, ejecutar `npm run db:migrate`, `npm run db:seed` y `npm run user:create`.
-4. `user:create` solicita nombre, correo, rol y contraseña en una terminal interactiva. La contraseña se oculta al escribir y se guarda con scrypt. No hay contraseñas reales predeterminadas ni registro público.
-5. Reiniciar la API y entrar con la cuenta creada. El histórico real se lee desde Atom; las conversaciones de demostración nunca se importan.
+2. Completar `APP_DB_*` y la sección `IDENTITY_*`; después cambiar `DEMO_MODE=false` cuando exista una cuenta inicial habilitada.
+3. Desde `api/`, ejecutar `npm run db:migrate`, `npm run db:seed` y `npm run access:bootstrap -- <correo exacto>`.
+4. Reiniciar la API y entrar con el correo y contraseña existentes de Somos3C. El histórico real se lee desde Atom; las conversaciones de demostración nunca se importan.
 
-Una conexión ausente o fallida no activa el modo demo como respaldo. En la conexión facilitada se verificaron las 16 tablas, el seed de 130 variables y la lectura de 233 conversaciones de Atom. `DEMO_MODE` permanece en `true` hasta crear una cuenta real para iniciar sesión.
+Una conexión ausente o fallida no activa el modo demo como respaldo. En la conexión facilitada se verificaron las 16 tablas, el seed de 130 variables y la lectura de 233 conversaciones de Atom. La instalación local ya usa `DEMO_MODE=false` y tiene un administrador inicial autorizado. El archivo `.env` local no se versiona.
+
+La autenticación real usa `IDENTITY_MODE=person-email`: busca el correo en `dbSomos3c_2.tblPersonas`, comprueba que identifique una sola persona activa y verifica su contraseña contra el hash SHA-512 existente. El correo `mario.cruz@farmavalue.com` existe en esa tabla y tiene acceso activo a los portales Call Center y Atom, pero no figura en `dbSomos3c_2.tblUsuariosPortal`; por eso Pulso no usa esa última tabla para su ingreso. Los permisos de Pulso se guardan en su propia tabla `users`, sin copiar hashes. Un administrador gestiona las concesiones en **Accesos**: busca por correo exacto, asigna administrador o supervisor, edita el rol y activa o inactiva. Las sesiones se guardan en Pulso y se revalidan contra la cuenta de origen en cada solicitud. No se ha cambiado ninguna cuenta ni contraseña de Somos3C.
+
+Para autorizar al primer administrador en otra instalación, ejecuta `cd api && npm run access:bootstrap -- <correo exacto>`. El comando solo funciona si Pulso todavía no tiene un administrador activo; después, los demás accesos se gestionan en el portal.
 
 ### Origen Atom confirmado
 
@@ -91,9 +97,21 @@ Una conexión ausente o fallida no activa el modo demo como respaldo. En la cone
 
 El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
-### Trabajo pendiente de integración
+### Servicios TD: S3 y SMTP
 
-La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto para evitar repetir la lectura completa en cada petición; no se guardan transcripciones en Pulso. Faltan los evaluadores de IA y código, el tratamiento de dependencias/no aplicabilidad de cada variable y un procesador de lotes con reintentos, control de duplicados y programación diaria. La evaluación inicial cubrirá las 12 variables acordadas, con pruebas sobre conversaciones reales autorizadas.
+Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`. Exportan `uploadFileToS3`, `getS3TemporaryUrl`, `downloadS3File`, `checkMailHealth`, `sendMail` y `sendSimpleMail`; todas devuelven `{ success, message, data, error }`. La API TD no recibe JWT. El cliente usa únicamente `TD_API_BASE_URL`, HTTPS, un tiempo límite y errores normalizados. `s3Key` no admite `/` ni `\`; la caducidad máxima del enlace es 604800 segundos y el cuerpo de subida tiene un límite de 50 MB.
+
+En modo real, un administrador autenticado puede usar las rutas `/pulso/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
+
+### Evaluación con OpenAI
+
+La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las 12 definiciones activas, a Responses API. Solicita `store: false`, valida que los resultados incluyan las 12 variables y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
+
+La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). En esta instalación local ya se autorizó y habilitó para futuros lotes, y el portal está configurado en modo real. Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda de hasta 20 conversaciones. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md).
+
+La programación diaria se configura en el portal por un administrador. Al activarla, Pulso guarda la fecha de inicio y solo considera conversaciones completadas que Atom haya creado o actualizado desde entonces; el histórico anterior puede evaluarse a demanda. El servidor revisa el horario cada minuto en la zona seleccionada, procesa hasta 100 pendientes por día y registra una única ejecución por fecha. Debe estar encendido a la hora programada. El horario se debe fijar después de la carga diaria de Atom; la programación permanece inactiva hasta confirmarlo. Los fallos individuales quedan registrados y pueden retomarse manualmente mediante un lote de pendientes. La revisión automática de todas las conversaciones pendientes por encima del límite diario y los reintentos automáticos todavía no están implementados.
+
+Solo se seleccionan conversaciones con fecha de cierre en Atom. Una conversación cuyo documento ya esté disponible pero todavía no tenga `FechaFinUtc` permanece pendiente; así no se marca prematuramente la ausencia de respuesta al último mensaje.
 
 El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Antes de consultar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador actual carga el histórico completo de Atom y el estado completo de Pulso. Esta entrega todavía no es una liberación de producción.
 
@@ -110,7 +128,7 @@ npm test
 npm run build
 ```
 
-Hay 16 pruebas de API y 1 del servidor web: importación, roles, formularios, persistencia demo, versiones, lotes atómicos, evidencia, revisiones, separación de bases, mapeo de Atom, búsqueda, filtros, ausencia de simulación en modo real, rutas y proxy. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
+Las pruebas de API cubren importación, roles, formularios, persistencia demo, versiones, evidencia, revisiones, separación de bases, mapeo de Atom, filtros y el contrato estructurado del evaluador. El detalle y las verificaciones manuales están en [docs/QA.md](docs/QA.md).
 
 ## Organización
 
