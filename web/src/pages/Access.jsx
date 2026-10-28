@@ -3,7 +3,7 @@ import { Alert, App, Button, Form, Input, Popconfirm, Select, Table, Tag } from 
 import { SearchOutlined, UserAddOutlined } from '@ant-design/icons';
 import { api } from '../services/api';
 import { useApi, usePortal } from '../hooks';
-import { EmptyState, ErrorState, LoadingState, PageHeading } from '../components/common';
+import { EmptyState, ErrorState, LoadingState, PageHeading, tableLoading } from '../components/common';
 
 const roles = [{ value: 'supervisor', label: 'Supervisor' }, { value: 'admin', label: 'Administrador' }];
 
@@ -49,12 +49,12 @@ export default function Access() {
       {found && <div className="access-found"><div><b>{found.name}</b><span>{found.username} · {found.active ? 'Activo en Somos3C' : 'Inactivo en Somos3C'}</span>{found.changeRequired && <Tag color="orange">Debe cambiar su clave en Somos3C</Tag>}{found.blocked && <Tag color="red">Cuenta bloqueada en Somos3C</Tag>}</div><Select aria-label="Rol en Pulso" value={role} onChange={setRole} options={roles} style={{ width: 160 }} /><Button type="primary" icon={<UserAddOutlined />} loading={saving === 'new'} disabled={!found.active || found.blocked} onClick={grant}>{request.data.items.some(item => item.externalId === found.id) ? 'Actualizar acceso' : 'Dar acceso'}</Button></div>}
     </section>
     <section className="table-panel"><div className="table-panel-head"><h2>Usuarios con acceso</h2><span className="muted small">{request.data.items.length} registros</span></div>
-      <Table rowKey="id" dataSource={request.data.items} pagination={{ pageSize: 10 }} columns={[
+      <Table loading={tableLoading(request.loading)} rowKey="id" dataSource={request.data.items} pagination={{ pageSize: 10 }} columns={[
         { title: 'Usuario', dataIndex: 'name' },
         { title: 'Rol', render: (_, item) => <Select aria-label={`Rol de ${item.name}`} value={item.role} options={roles} disabled={saving === item.id || item.id === user.id} onChange={value => update(item, { role: value })} style={{ width: 160 }} /> },
         { title: 'Estado', render: (_, item) => <Tag color={item.active ? 'green' : 'default'}>{item.active ? 'Activo' : 'Inactivo'}</Tag> },
         { title: 'Acceso', render: (_, item) => item.active ? <Popconfirm title="¿Inactivar este acceso?" description={`${item.name} dejará de entrar a Pulso.`} okText="Inactivar" cancelText="Cancelar" onConfirm={() => update(item, { active: false })}><Button size="small" danger disabled={item.id === user.id || saving === item.id}>Inactivar</Button></Popconfirm> : <Button size="small" disabled={saving === item.id} onClick={() => update(item, { active: true })}>Activar</Button> },
-      ]} locale={{ emptyText: <EmptyState title="Sin accesos asignados" description="Busca un usuario de Somos3C para darle acceso a Pulso." /> }} />
+      ]} locale={{ emptyText: request.loading ? null : <EmptyState title="Sin accesos asignados" description="Busca un usuario de Somos3C para darle acceso a Pulso." /> }} />
     </section>
   </div>;
 }

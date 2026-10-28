@@ -189,10 +189,19 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .loading-panel { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); min-height: 240px; }
 .pulso-loader { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; }
 .pulso-loader-fullscreen { min-height: 100dvh; padding: 24px; background: var(--bg); }
-.pulso-loader .brand { gap: 17px; }
-.pulso-loader .brand svg { width: 64px; height: 77px; overflow: visible; }
-.pulso-loader .brand b { font-size: clamp(42px, 7vw, 58px); }
+.pulso-loading-mark { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; }
+.pulso-loading-mark .brand { gap: 17px; }
+.pulso-loading-mark .brand svg { width: 64px; height: 77px; overflow: visible; }
+.pulso-loading-mark .brand b { font-size: clamp(42px, 7vw, 58px); }
+.ant-spin .pulso-loading-mark-compact.ant-spin-dot { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; width: max-content; height: auto; max-width: 100%; position: static; margin: auto; }
+.pulso-loading-mark-compact { gap: 11px; }
+.pulso-loading-mark-compact .brand { gap: 10px; }
+.pulso-loading-mark-compact .brand svg { width: 42px; height: 50px; }
+.pulso-loading-mark-compact .brand b { font-size: 35px; }
+.pulso-loading-mark-compact .pulso-loader-caption { font-size: 11px; }
 .pulso-loader-caption { color: var(--muted); font-size: 13px; letter-spacing: .02em; }
+.table-panel .ant-table-placeholder td { height: 220px; }
+.workspace > .pulso-loader { min-height: min(68dvh, 640px); }
 .brand-animated .brand-red-dot { animation: pulso-dot-bounce 1.4s infinite; }
 .brand-animated .brand-dot-halo { opacity: 0; transform-box: fill-box; transform-origin: center; animation: pulso-dot-halo 1.4s ease-out infinite; }
 @keyframes pulso-dot-bounce {
@@ -432,6 +441,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .summary-shell .workspace { min-height: 0; overflow: hidden; padding-block: 10px; }
 .summary-shell .app-footer { display: none; }
 .summary-page { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.summary-page > .pulso-loader { flex: 1; min-height: 0; }
 .summary-page > .page-heading { flex: none; margin-bottom: 9px; }
 .summary-page > .page-heading .eyebrow { margin-bottom: 3px; }
 .summary-page > .page-heading p { margin-top: 3px; }
