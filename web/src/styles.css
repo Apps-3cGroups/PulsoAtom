@@ -499,8 +499,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 }
 
 /* Multiple model views share the same compact header and viewport budget. */
-.model-view-selector, .comparison-heading-actions, .conversation-heading-actions { display: flex; align-items: center; gap: 8px; }
-.model-view-selector > .ant-select { width: 240px; }
+.comparison-heading-actions, .conversation-heading-actions { display: flex; align-items: center; gap: 8px; }
 .summary-heading-actions { display: flex; align-items: flex-end; flex-direction: column; gap: 4px; }
 .summary-heading-actions .period-note { font-size: 11px; }
 .evaluation-provenance { padding: 9px 12px; border: 1px solid var(--border); background: var(--surface-raised); border-radius: 7px; margin-bottom: 12px; color: var(--secondary); }
@@ -590,5 +589,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .validation-submit { display: flex; align-items: center; gap: 15px; justify-content: space-between; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--surface); }
 .validation-submit > span { color: var(--muted); font-size: 11px; }
 @media (max-height: 800px) and (min-width: 981px) { .comparison-page .page-heading h1 { font-size: 24px; } .quality-card { padding-top: 8px; } .quality-numbers strong { font-size: 22px; } .quality-card footer { padding-block: 5px; } }
-@media (max-width: 1100px) { .model-view-selector > .ant-select { width: 185px; } .model-controls-grid { grid-template-columns: 1fr; } .quality-numbers { gap: 14px; } .comparison-heading-actions .ant-btn { padding-inline: 10px; } }
-@media (max-width: 800px) { .model-view-selector > .ant-select { width: 180px; } .comparison-page .page-heading h1 { font-size: 22px; } .comparison-page .page-heading p { display: none; } .comparison-toolbar { flex-wrap: wrap; gap: 5px; } .comparison-toolbar .ant-select { width: 100%; } .validation-entry-grid { grid-template-columns: 1fr; overflow: auto; } .validation-intro { padding: 16px; } .validation-intro > .anticon, .validation-intro p { display: none; } .validation-intro h2 { max-width: none; font-size: 21px; } .validation-progress { padding: 7px 0; margin-bottom: 8px; } .validation-intro, .comparison-cases { overflow: visible; } .quality-strip { overflow-x: auto; } .quality-card { min-width: 230px; } .comparison-filters { overflow-x: auto; } .comparison-filters .ant-select { flex: none; } .validation-grid { grid-template-columns: 1fr; overflow: auto; } .validation-transcript { min-height: 240px; } .validation-checklist { min-height: 400px; } .sample-filters { grid-template-columns: 1fr; gap: 0; } .conversation-heading-actions { flex-wrap: wrap; } }
+@media (max-width: 1100px) { .model-controls-grid { grid-template-columns: 1fr; } .quality-numbers { gap: 14px; } .comparison-heading-actions .ant-btn { padding-inline: 10px; } }
+@media (max-width: 800px) { .comparison-page .page-heading h1 { font-size: 22px; } .comparison-page .page-heading p { display: none; } .comparison-toolbar { flex-wrap: wrap; gap: 5px; } .comparison-toolbar .ant-select { width: 100%; } .validation-entry-grid { grid-template-columns: 1fr; overflow: auto; } .validation-intro { padding: 16px; } .validation-intro > .anticon, .validation-intro p { display: none; } .validation-intro h2 { max-width: none; font-size: 21px; } .validation-progress { padding: 7px 0; margin-bottom: 8px; } .validation-intro, .comparison-cases { overflow: visible; } .quality-strip { overflow-x: auto; } .quality-card { min-width: 230px; } .comparison-filters { overflow-x: auto; } .comparison-filters .ant-select { flex: none; } .validation-grid { grid-template-columns: 1fr; overflow: auto; } .validation-transcript { min-height: 240px; } .validation-checklist { min-height: 400px; } .sample-filters { grid-template-columns: 1fr; gap: 0; } .conversation-heading-actions { flex-wrap: wrap; } }
+
+.internal-tools-intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 22px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.internal-tools-intro h2 { margin: 6px 0; font-size: 20px; }
+.internal-tools-intro p { margin: 0; color: var(--muted); max-width: 700px; }
+@media (max-width: 800px) { .internal-tools-intro { flex-direction: column; align-items: flex-start; } }

@@ -60,8 +60,8 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
 - **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. El horario diario se puede guardar, pero su ejecución automática sigue inactiva.
-- **Comparación:** muestras de hasta 20 conversaciones y tres modelos, evidencia por variable y validación a ciegas. Los resultados comparativos no reemplazan la evaluación operativa.
-- **Perfiles y contingencia:** principal/respaldo versionados en Evaluaciones, intentos auditados y selector de resultados guardados en Resumen, Histórico, Búsqueda y Conversación.
+- **Comparación interna (solo admin):** en Evaluaciones → Herramientas internas, muestras de hasta 20 conversaciones y tres modelos, evidencia por variable y validación a ciegas. Los resultados comparativos no reemplazan la evaluación operativa.
+- **Un único resultado oficial:** Resumen, Histórico, Búsqueda y Conversación muestran el seguimiento con dictámenes humanos, sin selector de modelos. Perfiles, respaldo e intentos permanecen en las herramientas internas de Evaluaciones.
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -78,7 +78,8 @@ Con `DEMO_MODE=true`, la pantalla de acceso permite entrar como administrador o 
 | Iniciar evaluaciones a demanda, cuando estén habilitadas | Sí | No |
 | Guardar horario diario o política principal/respaldo | Sí | No |
 | Crear o reanudar muestras comparativas | Sí | No |
-| Consultar comparaciones y guardar dictámenes humanos | Sí | Sí |
+| Consultar modelos, comparaciones e intentos internos | Sí | No |
+| Guardar dictámenes humanos mediante el enlace de una conversación | Sí | Sí |
 
 Cada edición del catálogo conserva una versión. Las evaluaciones hacen referencia a las versiones utilizadas. Las revisiones humanas se agregan al historial sin sobrescribir la evidencia del resultado original. Los cambios concurrentes detectados devuelven un conflicto en lugar de reemplazar silenciosamente una versión reciente.
 

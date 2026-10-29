@@ -2,14 +2,16 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, Form, Input, Radio, Select } from 'antd';
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useApi } from '../hooks';
+import { useApi, usePortal } from '../hooks';
 import { api } from '../services/api';
 import { PageHeading, ErrorState, LoadingState, timeText } from '../components/common';
 
 export default function Validation() {
   const { sampleId, conversationId } = useParams();
+  const { user } = usePortal();
+  const isAdmin = user.role === 'admin';
   const request = useApi(`/comparisons/${sampleId}/validation/${encodeURIComponent(conversationId)}`);
-  const sample = useApi(`/comparisons/${sampleId}`);
+  const sample = useApi(isAdmin ? `/comparisons/${sampleId}` : null);
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false), [error, setError] = useState(null), [saved, setSaved] = useState(null);
   const [form] = Form.useForm();
@@ -28,8 +30,8 @@ export default function Validation() {
       setSaved(result.validation); sample.reload();
     } catch (e) { setError(e); } finally { setBusy(false); }
   };
-  return <div className="validation-page"><PageHeading eyebrow="VALIDACIÓN HUMANA" title={data.conversation.clientName} description={`${data.conversation.agentName} · ${data.conversation.country} · ${data.conversation.id}`} actions={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate(`/comparacion?sample=${sampleId}`)}>Volver a la muestra</Button>} />
-    {saved ? <div className="validation-saved"><CheckCircleOutlined /><h2>Dictamen guardado</h2><p>Se conservó tu criterio y su evidencia como validación {saved.mode === 'blind' ? 'a ciegas' : 'asistida'}.</p><div><Button onClick={() => navigate(`/comparacion?sample=${sampleId}&reveal=1&case=${encodeURIComponent(conversationId)}`)}>Ver respuestas de este caso</Button>{next && <Button type="primary" onClick={() => { setSaved(null); setError(null); form.resetFields(); navigate(`/comparacion/${sampleId}/validar/${encodeURIComponent(next.conversationId)}`); }}>Validar siguiente <ArrowRightOutlined /></Button>}</div></div> : <>
+  return <div className="validation-page"><PageHeading eyebrow="VALIDACIÓN HUMANA" title={data.conversation.clientName} description={`${data.conversation.agentName} · ${data.conversation.country} · ${data.conversation.id}`} actions={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate(isAdmin ? `/comparacion?sample=${sampleId}` : '/')}>{isAdmin ? 'Volver a la muestra' : 'Volver al resumen'}</Button>} />
+    {saved ? <div className="validation-saved"><CheckCircleOutlined /><h2>Dictamen guardado</h2><p>Se conservó tu criterio y su evidencia como validación {saved.mode === 'blind' ? 'a ciegas' : 'asistida'}.</p><div><Button onClick={() => navigate(isAdmin ? `/comparacion?sample=${sampleId}&reveal=1&case=${encodeURIComponent(conversationId)}` : `/conversacion/${encodeURIComponent(conversationId)}`)}>{isAdmin ? 'Ver respuestas de este caso' : 'Ver resultado oficial'}</Button>{next && <Button type="primary" onClick={() => { setSaved(null); setError(null); form.resetFields(); navigate(`/comparacion/${sampleId}/validar/${encodeURIComponent(next.conversationId)}`); }}>Validar siguiente <ArrowRightOutlined /></Button>}</div></div> : <>
       <div className="validation-mode"><SafetyCertificateOutlined /><span>{data.mode === 'blind' ? 'Validación a ciegas · Las respuestas de IA permanecen ocultas.' : 'Validación asistida · Ya consultaste resultados equivalentes o guardaste un dictamen en este caso.'}</span><b>{progress}/{data.variables.length} variables</b></div>
       {error && <Alert showIcon type="error" message={error.message} />}
       <div className="validation-grid"><section className="validation-transcript"><div className="panel-heading"><h2>Conversación completa</h2><span>{data.conversation.messages.length} mensajes</span></div><div className="transcript-scroll">{data.conversation.messages.map(m => <article key={m.id} className={`chat-message actor-${m.actor}`}><div className="chat-meta"><b>{{ cliente: 'Cliente', humano: 'Asistente', bot: 'Bot', sistema: 'Sistema' }[m.actor] || m.actor}</b><span>{timeText(m.timestamp)}</span></div><p>{m.text}</p></article>)}</div></section>

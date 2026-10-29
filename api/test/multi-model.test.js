@@ -177,7 +177,7 @@ test('las reglas híbridas comunes y las métricas de código no inflan los voto
 test('la selección aleatoria incluye casos evaluados con y sin flags cuando existen', async () => {
   const { state, store, c } = fixture();
   state.conversations = Array.from({ length: 10 }, (_, i) => ({ ...c, id: `c${i}`, evaluationId: `e${i}` }));
-  state.evaluations = state.conversations.map((c, i) => ({ id: c.evaluationId, conversationId: c.id, createdAt: '2026-10-20', results: [{ status: 'evaluado', value: i === 0 ? 1 : 0 }] }));
+  state.evaluations = state.conversations.map((c, i) => ({ id: c.evaluationId, conversationId: c.id, createdAt: '2026-10-20', results: [{ variableId: state.catalog.find(v => v.type === 'Flag').id, status: 'evaluado', value: i === 0 ? 1 : 0 }, { variableId: 'num_mensajes_cliente', status: 'evaluado', value: 1 }] }));
   const job = await compare(store, registry((c, v) => answer(c, v), (c, v) => answer(c, v)), { max: 2, random: true });
   assert.equal(job.caseCount, 2); assert.ok(job.conversationIds.includes('c0')); assert.equal(new Set(job.conversationIds).size, 2);
 });

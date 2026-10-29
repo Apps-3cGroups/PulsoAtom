@@ -2,16 +2,16 @@
 
 ## Flujo de uso
 
-1. Resumen abre en **Operativa**: evaluación oficial más dictámenes humanos compatibles. El selector consulta resultados originales guardados de un perfil; muestra cobertura y pendientes. No ejecuta IA.
-2. En **Evaluaciones**, un administrador guarda el modelo principal y un respaldo distinto. Solo las ejecuciones nuevas toman esa política. Cada cambio conserva versión y autor.
-3. Para comparar, configura al menos dos perfiles y crea una muestra de 1–20 conversaciones, con 2–3 modelos, país y período. También puedes elegir IDs concretos buscando en el selector. La selección aleatoria incluye casos históricos con y sin flags cuando ambos existen y el tamaño lo permite; no pretende estimar prevalencia de todo Atom.
+1. Resumen, Histórico, Búsqueda y Conversación muestran **un único resultado oficial** con los dictámenes humanos compatibles. No tienen selector de modelo ni accesos al comparativo. Los enlaces antiguos con `modelProfileId` vuelven a la vista oficial.
+2. **Evaluaciones** es solo para administradores. Abre en **Evaluar conversaciones**, con lotes y programación diaria. En **Herramientas internas**, el administrador guarda el modelo principal y un respaldo distinto. Solo las ejecuciones nuevas toman esa política. Cada cambio conserva versión y autor.
+3. El botón **Ver comparaciones guardadas** abre el laboratorio interno. Para comparar, configura al menos dos perfiles y crea una muestra de 1–20 conversaciones, con 2–3 modelos, país y período. También puedes elegir IDs concretos buscando en el selector. La selección aleatoria incluye casos históricos con y sin flags cuando ambos existen y el tamaño lo permite; no pretende estimar prevalencia de todo Atom.
 4. La muestra fija miembros, contenido mediante SHA-256, checklist versionado, instrucciones y perfiles. Ningún modelo ve las respuestas de los demás. Los cálculos comunes se muestran aparte.
 5. Entra a **Validar** antes de **Ver comparación**. Lee la transcripción y guarda todas las variables con evento presente, ausente o contexto insuficiente. Cada respuesta requiere motivo; un evento presente requiere un mensaje de evidencia.
 6. Después de guardar puedes revelar solo ese caso y continuar con el siguiente sin exponer los restantes. Consultar predicciones equivalentes o revisar un dictamen previamente enviado identifica la revisión como **asistida**.
 7. **Ver comparación** abre los resultados guardados. Filtra acuerdos, discrepancias, pendientes, prioridad o variable. Pulsa una fila para ver razones, citas y dictamen común.
 8. En el historial de Evaluaciones, **Detalle** muestra intentos. **Reanudar pendientes y fallidos** conserva éxitos y verifica el origen. Un trabajo sin latido durante 10 minutos se identifica como interrumpido al consultar su estado.
 
-Las refutaciones siguen disponibles en la vista rápida operativa. Los flags nuevos requieren leer la conversación completa o guardar un checklist completo en validación. La vista original de un modelo no permite cambiar sus respuestas.
+Las refutaciones siguen disponibles en la vista rápida operativa. Los flags nuevos requieren leer la conversación completa o guardar un checklist completo en validación. El laboratorio y los endpoints de perfiles, comparaciones e intentos requieren administrador. Los supervisores conservan la revisión operativa y pueden guardar un dictamen a ciegas mediante el enlace de validación de una conversación, sin acceso a las predicciones comparativas.
 
 ## Configuración del backend
 
@@ -29,7 +29,7 @@ GEMINI_EVALUATION_ENABLED=false
 
 Usar un ID de modelo que soporte el contrato de salida estructurada y habilitarlo únicamente al autorizar su uso. Reiniciar la API después de cambiar el entorno. No basta con elegir el perfil en la interfaz para configurarlo.
 
-Sin `AI_MODEL_PROFILES` se registran `openai-default` y `gemini-default`. Se pueden definir hasta 12 perfiles mediante JSON; cada `envPrefix` apunta a variables `*_API_KEY`, `*_BASE_URL`, `*_TIMEOUT_MS` y `*_EVALUATION_ENABLED`. Mantener IDs estables y modelos exactos. El selector distingue revisiones de configuración mediante su huella. Los valores de configuración y las claves no salen del backend.
+Sin `AI_MODEL_PROFILES` se registran `openai-default` y `gemini-default`. Se pueden definir hasta 12 perfiles mediante JSON; cada `envPrefix` apunta a variables `*_API_KEY`, `*_BASE_URL`, `*_TIMEOUT_MS` y `*_EVALUATION_ENABLED`. Mantener IDs estables y modelos exactos. Cada perfil conserva su revisión de configuración mediante una huella. Los valores de configuración y las claves no salen del backend.
 
 ```json
 [
@@ -75,7 +75,7 @@ Los endpoints siguientes son relativos a `${BASE_PATH}/api`: `/pulso/api` para l
 | `GET /evaluations/:id/attempts` | Tareas e intentos persistidos. |
 | `POST /evaluations/:id/resume` | Reanudación explícita, solo admin. |
 
-`/summary`, `/conversations` y `/conversations/:id` aceptan `modelProfileId` igual al `viewId` de `/models`. Sin parámetro consultan la operación. Consultar predicciones registra exposición, nunca llama a IA. El endpoint operativo `POST /evaluations` acepta también `idempotencyKey`.
+`/summary`, `/conversations`, `/search` y `/conversations/:id` conservan la consulta técnica por `modelProfileId` solo para administradores. Las pantallas operativas siempre consultan sin ese parámetro y muestran el resultado oficial. Consultar predicciones registra exposición, nunca llama a IA. El endpoint operativo `POST /evaluations` acepta también `idempotencyKey`.
 
 ## Despliegue y pruebas
 

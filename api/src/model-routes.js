@@ -14,14 +14,14 @@ const reportFailure = completion => completion.catch(error => console.error('Err
 
 export function mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory }) {
   const ready = () => { if (!config.demo && !store.readWithConversations) throw new AppError(409, 'Configura la lectura de Atom.', 'INTEGRATION_PENDING'); };
-  app.get(`${prefix}/comparison-candidates`, async (req, res) => {
+  app.get(`${prefix}/comparison-candidates`, requireAdmin, async (req, res) => {
     const query = z.object({ q: z.string().max(200).optional(), country: z.string().max(10).optional(), from: date.optional(), to: date.optional() }).parse(req.query);
     const state = await readHistory();
     const candidates = state.conversations.filter(c => c.messages.length && c.completed !== false && (!query.country || c.country === query.country) && (!query.from || c.date >= query.from) && (!query.to || c.date <= query.to)
       && (!query.q || `${c.id} ${c.client.name} ${c.agent.name}`.toLowerCase().includes(query.q.toLowerCase())));
     res.json({ total: candidates.length, items: candidates.slice(0, 100).map(c => ({ id: c.id, clientName: c.client.name, country: c.country, date: c.date })) });
   });
-  app.get(`${prefix}/models`, async (_req, res) => {
+  app.get(`${prefix}/models`, requireAdmin, async (_req, res) => {
     const state = await store.read();
     const profiles = registry.list();
     for (const e of state.evaluations) {
@@ -46,7 +46,7 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
     });
     res.json({ policy });
   });
-  app.get(`${prefix}/comparisons`, async (req, res) => {
+  app.get(`${prefix}/comparisons`, requireAdmin, async (req, res) => {
     await recoverEvaluationJobs(store);
     const state = ensureEvaluationState(await store.read());
     res.json({ items: [...state.comparisons].reverse().map(s => sampleSummary(state, s, req.user.id)) });
@@ -57,7 +57,7 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
     const { job, completion } = await startEvaluationBatch(store, registry, { ...input, purpose: 'comparison', random: !input.conversationIds, pendingOnly: false, author: req.user });
     reportFailure(completion); res.status(202).json({ job });
   });
-  app.get(`${prefix}/comparisons/:id`, async (req, res) => {
+  app.get(`${prefix}/comparisons/:id`, requireAdmin, async (req, res) => {
     await recoverEvaluationJobs(store);
     const state = ensureEvaluationState(await readHistory(true));
     const sample = findComparison(state, req.params.id);
@@ -91,7 +91,7 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
     const { job, completion } = await resumeEvaluationBatch(store, registry, req.params.id);
     reportFailure(completion); res.status(202).json({ job });
   });
-  app.get(`${prefix}/evaluations/:id/attempts`, async (req, res) => {
+  app.get(`${prefix}/evaluations/:id/attempts`, requireAdmin, async (req, res) => {
     const state = ensureEvaluationState(await store.read());
     res.json({ tasks: state.tasks.filter(t => t.jobId === req.params.id), attempts: state.attempts.filter(a => a.jobId === req.params.id) });
   });

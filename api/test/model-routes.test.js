@@ -30,7 +30,7 @@ after(async () => { await store.close(); await rm(directory, { recursive: true, 
 
 test('permisos y política versionada: solo administrador configura y ejecuta', async () => {
   await request(app).get('/pulso/api/models').expect(401);
-  const profiles = (await supervisor.get('/pulso/api/models').expect(200)).body;
+  const profiles = (await admin.get('/pulso/api/models').expect(200)).body;
   assert.equal(profiles.profiles.filter(p => p.available).length, 3);
   assert.doesNotMatch(JSON.stringify(profiles), /apiKey|Authorization|baseUrl|password/);
   const policy = { primaryId: 'demo-gpt', fallbackId: 'demo-gemini', expectedVersion: 1 };
@@ -44,16 +44,16 @@ test('permisos y política versionada: solo administrador configura y ejecuta', 
 });
 
 test('la API de validación y el listado previo a revelar no filtran predicciones', async () => {
-  const sample = (await supervisor.get(`/pulso/api/comparisons/${sampleId}`).expect(200)).body;
+  const sample = (await admin.get(`/pulso/api/comparisons/${sampleId}`).expect(200)).body;
   assert.deepEqual(sample.rows, []); assert.deepEqual(sample.metrics, []); assert.deepEqual(sample.codeResults, []);
-  const candidates = (await supervisor.get('/pulso/api/comparison-candidates').expect(200)).body;
+  const candidates = (await admin.get('/pulso/api/comparison-candidates').expect(200)).body;
   assert.deepEqual(Object.keys(candidates.items[0]).sort(), ['clientName', 'country', 'date', 'id']);
   const blind = (await supervisor.get(`/pulso/api/comparisons/${sampleId}/validation/${caseIds[0]}`).expect(200)).body;
   assert.equal(blind.mode, 'blind');
   assert.doesNotMatch(JSON.stringify(blind), /"(?:result|results|flags|predictions|cells|models|evidence|verdict)":/);
-  await supervisor.get(`/pulso/api/comparisons/${sampleId}?reveal=true&conversationId=${caseIds[1]}`).expect(200);
-  assert.equal((await supervisor.get(`/pulso/api/comparisons/${sampleId}/validation/${caseIds[0]}`)).body.mode, 'blind');
-  assert.equal((await supervisor.get(`/pulso/api/comparisons/${sampleId}/validation/${caseIds[1]}`)).body.mode, 'assisted');
+  await admin.get(`/pulso/api/comparisons/${sampleId}?reveal=true&conversationId=${caseIds[1]}`).expect(200);
+  assert.equal((await admin.get(`/pulso/api/comparisons/${sampleId}/validation/${caseIds[0]}`)).body.mode, 'blind');
+  assert.equal((await admin.get(`/pulso/api/comparisons/${sampleId}/validation/${caseIds[1]}`)).body.mode, 'assisted');
 });
 
 test('consulta por modelo no ejecuta IA ni cambia la referencia operativa', async () => {
@@ -117,4 +117,18 @@ test('consultar una predicción heredada marca la revisión posterior como asist
   await supervisor.get(`/pulso/api/conversations/${conversationId}`).expect(200);
   assert.equal((await supervisor.get(url).expect(200)).body.mode, 'assisted');
   assert.equal((await store.read()).evaluations.find(e => e.id === 'legacy-exposure-test').sourceHash, undefined);
+});
+
+
+test('supervisión consulta el resultado oficial y revisa, pero no accede a herramientas de modelos', async () => {
+  for (const route of ['/models', '/comparisons', `/comparisons/${sampleId}?reveal=true`, '/comparison-candidates', '/evaluations', `/evaluations/${sampleId}/attempts`]) {
+    await supervisor.get(`/pulso/api${route}`).expect(403);
+  }
+  for (const route of ['/summary', '/conversations', '/search', `/conversations/${caseIds[0]}`]) {
+    await supervisor.get(`/pulso/api${route}?modelProfileId=demo-gpt`).expect(403);
+    await supervisor.get(`/pulso/api${route}`).expect(200);
+  }
+  const official = (await supervisor.get(`/pulso/api/conversations/${caseIds[0]}`).expect(200)).body.conversation;
+  assert.equal(official.rawModelView, false);
+  await supervisor.get(`/pulso/api/comparisons/${sampleId}/validation/${caseIds[0]}`).expect(200);
 });

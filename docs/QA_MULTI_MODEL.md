@@ -8,12 +8,14 @@ La entrega está lista para revisión funcional local. Se implementaron perfiles
 
 Se integraron los cambios de despliegue de `origin/main` hasta `ed2c0b6`. La aplicación admite `/pulso` en la prueba local y `/pulsoAtom` en producción mediante configuración.
 
+El ajuste posterior concentra modelos y comparaciones en administración y presenta un único resultado oficial. Véase [QA del enfoque de resultados](QA_RESULTADO_OFICIAL.md).
+
 ## Estado general
 
 | Área | Estado | Evidencia |
 | --- | --- | --- |
 | Arquitectura y configuración | Aprobado | `web/` y `api/` independientes; claves solo en backend; `.env` excluidos de Git. |
-| API, permisos y persistencia | Aprobado | 61 pruebas API aprobadas; migración 002 aplicada y comprobada en `dbPulsosAtom`. |
+| API, permisos y persistencia | Aprobado | 62 pruebas API aprobadas; migración 002 aplicada y comprobada en `dbPulsosAtom`. |
 | Rutas y despliegue | Aprobado localmente | 8 pruebas web aprobadas, incluyendo proxy, recargas y arranque mediante PM2; compilaciones para ambos prefijos. |
 | Comparación y validación | Aprobado con datos sintéticos | Muestras de 2 y 3 modelos; discrepancias, evidencia, revisión a ciegas y revisión asistida comprobadas. |
 | Contingencia | Aprobado por pruebas automatizadas | Reintentos limitados, identidad del respaldo, fallos dobles, abstención, rechazo de seguridad y reanudación. |
@@ -35,7 +37,7 @@ No quedaron defectos críticos o altos reproducidos en el alcance validado. Los 
 
 ## QA checklist
 
-- [x] Selector de modelo consulta datos guardados, no ejecuta IA ni modifica referencias operativas.
+- [x] Las pantallas operativas muestran solo el resultado oficial y eliminan el parámetro de modelo de enlaces antiguos; la consulta técnica de API por modelo exige administrador.
 - [x] Modelos habilitados separados de perfiles históricos y de los perfiles sintéticos de demo.
 - [x] Políticas versionadas con control de concurrencia; supervisor no puede configurar ni iniciar lotes.
 - [x] Muestras de hasta 20 conversaciones y 2–3 modelos diferentes; filtros de país, período y selección manual.
@@ -59,7 +61,7 @@ No quedaron defectos críticos o altos reproducidos en el alcance validado. Los 
 - [x] Carga de pantallas y tablas conserva la animación de Pulso.
 - [x] Resumen conserva el mapa como protagonista; tabla y paneles tienen desplazamiento interno.
 - [x] Filtros, drawer de evidencia y tránsito entre resumen, histórico, comparación y validación comprobados.
-- [x] Compilación y 69 pruebas automatizadas aprobadas (61 API + 8 web).
+- [x] Compilación y 70 pruebas automatizadas aprobadas (62 API + 8 web).
 - [ ] Prueba real conjunta OpenAI + Gemini, una vez configurado Gemini.
 - [ ] Conexión efectiva a modelos locales.
 - [ ] Prueba de carga con el volumen de producción previsto.
@@ -82,9 +84,9 @@ Se crearon ocho tablas y 16 referencias a evaluaciones operativas existentes. No
 
 La inspección en navegador confirmó dimensiones del documento iguales al viewport en las tres pantallas y tamaños solicitados. El área interna de comparación mide 259, 374 y 554 px de alto respectivamente. Transcripción y checklist conservan desplazamiento independiente; el drawer mantiene sus acciones accesibles. La comprobación final detectó y corrigió una lectura de `revealed` sobre datos nulos al entrar sin muestra seleccionada; se verificó de nuevo la entrada a comparación.
 
-![Comparación con tres perfiles sintéticos a 1440×900](pulso-comparacion-demo.png)
+![Resumen de resultados oficiales de demostración](pulso-resultados-demo.png)
 
-Los porcentajes de esta imagen pertenecen a una prueba sintética de formularios y métricas; no describen la calidad de GPT, Gemini ni de un modelo local real.
+La imagen corresponde al histórico sintético de demostración, separado de Atom. La comparación de modelos permanece como herramienta interna, accesible desde Evaluaciones.
 
 ## Prompts para cerrar pendientes
 

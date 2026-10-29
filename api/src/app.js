@@ -248,6 +248,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   };
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     const state = await readHistory();
     const conversations = filteredConversations(state, query);
     await expose(state, req.user.id, state.conversations.filter(c => conversations.some(v => v.id === c.id)), query.modelProfileId);
@@ -256,6 +257,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   });
   const list = (search = false) => async (req, res) => {
     const query = listQuerySchema.parse(req.query);
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     const state = await readHistory();
     const items = filteredConversations(state, query, search);
     await expose(state, req.user.id, state.conversations.filter(c => items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize).some(v => v.id === c.id)), query.modelProfileId);
@@ -268,6 +270,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const conversation = state.conversations.find(c => c.id === req.params.id);
     if (!conversation) throw new AppError(404, 'No se encontró esta conversación.', 'NOT_FOUND');
     const query = listQuerySchema.parse(req.query);
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     await expose(state, req.user.id, [conversation], query.modelProfileId);
     res.json({ conversation: conversationView(state, conversation, viewContext(state, query.modelProfileId), true) });
   });
@@ -276,7 +279,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const review = await reviewHistory(state => recordReview(state, req.params.id, input, req.user));
     res.status(201).json({ review });
   });
-  app.get(`${prefix}/evaluations`, async (_req, res) => {
+  app.get(`${prefix}/evaluations`, requireAdmin, async (_req, res) => {
     await recoverEvaluationJobs(store);
     const state = await store.read();
     res.json({ status: status(), settings: state.settings, jobs: state.jobs, activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
