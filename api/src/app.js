@@ -284,6 +284,9 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const state = await store.read();
     res.json({ status: status(), settings: state.settings, jobs: state.jobs, activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
   });
+  app.get(`${prefix}/evaluations/settings`, requireAdmin, async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json({ settings: (await store.read()).settings });
+  });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
     if (input.dailyEnabled && (config.demo || !store.readWithConversations || !status().ready)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y un modelo habilitado en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);

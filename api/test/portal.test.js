@@ -43,6 +43,8 @@ test('la autenticación protege las rutas y el rol supervisor no puede escribir 
   await write(supervisor, 'patch', '/catalog/cliente_molesto', {}).expect(403);
   await write(supervisor, 'post', '/catalog/batch-status', {}).expect(403);
   await write(supervisor, 'patch', '/evaluations/settings', {}).expect(403);
+  await supervisor.get('/pulsoAtom/api/evaluations/settings').expect(403);
+  await request(app).get('/pulsoAtom/api/evaluations/settings').expect(401);
   await admin.post('/pulsoAtom/api/catalog').set('Origin', 'https://untrusted.example').send({}).expect(403);
   const signed = await write(request(app), 'post', '/auth/demo', { role: 'admin' });
   assert.match(signed.headers['set-cookie'][0], /HttpOnly/);
@@ -160,6 +162,11 @@ test('las evaluaciones y el scheduler no reportan ejecuciones sin integración',
   const saved = await write(admin, 'patch', '/evaluations/settings', { ...settings, dailyTime: '08:30', expectedVersion: version }).expect(200);
   assert.equal(saved.body.settings.dailyTime, '08:30');
   assert.equal(saved.body.settings.dailyEnabled, false);
+  const checked = await admin.get('/pulsoAtom/api/evaluations/settings').expect(200);
+  assert.equal(checked.headers['cache-control'], 'no-store');
+  assert.deepEqual(checked.body.settings, saved.body.settings);
+  await write(admin, 'patch', '/evaluations/settings', { ...settings, dailyTime: '09:00', expectedVersion: version }).expect(409);
+  assert.deepEqual((await admin.get('/pulsoAtom/api/evaluations/settings')).body.settings, saved.body.settings);
   assert.equal((await store.read()).jobs.length, 0);
 });
 test('modo real sin conexión no utiliza datos demo como respaldo', async () => {

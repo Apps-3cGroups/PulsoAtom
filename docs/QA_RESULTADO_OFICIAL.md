@@ -75,3 +75,13 @@ No se detectó desplazamiento exterior del Resumen en los tres tamaños comproba
 ## Recomendaciones prioritarias antes de liberar a producción
 
 Confirmar la migración 002 en la base del servidor y presentar primero el Resumen. El laboratorio se reserva para el trabajo interno del administrador. No se requiere otra migración para este ajuste.
+
+## Corrección de programación diaria — 29 de octubre de 2026
+
+- Estado: cumple. Criticidad: alta.
+  Hallazgo: una interrupción de la respuesta al guardar mostraba un error genérico; el interruptor conservaba el borrador mientras la etiqueta mostraba el estado anterior. En la base real se verificó que la programación ya estaba activa a las 07:00 de America/Tegucigalpa, versión 2. No fue posible identificar retrospectivamente la causa exacta de la interrupción; API y MySQL respondieron durante el diagnóstico.
+  Comportamiento esperado: distinguir el estado confirmado de los cambios sin guardar y verificar la persistencia antes de reintentar una escritura.
+  Corrección: etiqueta de estado guardado y aviso de cambios pendientes; consulta administrativa sin caché para verificar el horario; tiempo de espera acotado; recuperación ante respuesta perdida, inválida o error del proxy. La escritura no se repite automáticamente. Los conflictos conservan el borrador y recuperan la versión vigente. Un fallo de actualización del historial no desmonta el formulario.
+  Evidencia: 62 pruebas API y 19 web aprobadas. Incluyen respuesta perdida tras guardar, JSON truncado, gateway timeout, ausencia de conexión, conflicto de versión, permisos, validación y propagación PATCH por el proxy. Compilaciones /pulso y /pulsoAtom correctas.
+  Validación visual: demo administrativa, cambio de zona horaria, aviso pendiente, guardado, interrupción deliberada de la API demo, comprobación del estado al reconectar y restauración de Tegucigalpa. La base real solo se consultó; no se cambió su programación ni se iniciaron lotes manuales.
+  Recomendación: publicar web y API juntas. No requiere migraciones. La sesión real puede requerir iniciar sesión nuevamente; la demo se mantiene separada de los datos reales.

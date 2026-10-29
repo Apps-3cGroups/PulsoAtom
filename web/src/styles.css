@@ -394,8 +394,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .evaluation-dates .ant-input { margin-top: 6px; }
 .schedule-toggle { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 0 21px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
 .schedule-toggle b { display: block; font-size: 12px; font-weight: 500; }
-.schedule-toggle span:not(.ant-switch-inner):not(.ant-switch-inner-checked):not(.ant-switch-inner-unchecked) { font-size: 12px; color: var(--muted); }
+.schedule-toggle > div > span:not(.ant-tag) { font-size: 12px; color: var(--muted); }
 .schedule-toggle div > span { margin-top: 6px; display: block; }
+.schedule-toggle .schedule-draft-tag { display: inline-block; margin-top: 8px; border-color: #ead8a9; background: #fff8e8; color: #755914; }
 .schedule-hint { display: flex; align-items: start; gap: 10px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .schedule-hint > .anticon { margin-top: 3px; }
 .integration-panel { padding: 20px 24px; margin-block: 22px; }

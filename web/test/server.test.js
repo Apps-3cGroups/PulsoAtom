@@ -11,7 +11,9 @@ test('el servidor respeta /pulsoAtom, recarga rutas internas y conserva el prefi
   await writeFile(path.join(directory, 'index.html'), '<!doctype html><html lang="es"><body>Pulso</body></html>');
   await writeFile(path.join(directory, 'asset.js'), 'const pulso = true;');
   const api = express();
+  api.use(express.json());
   api.get('/pulsoAtom/api/probe', (_req, res) => res.json({ reached: true }));
+  api.patch('/pulsoAtom/api/evaluations/settings', (req, res) => res.json({ method: req.method, body: req.body }));
   const backend = api.listen(0, '127.0.0.1');
   await new Promise(resolve => backend.once('listening', resolve));
   const server = createWebServer({ basePath: '/pulsoAtom', dist: directory, apiTarget: `http://127.0.0.1:${backend.address().port}` }).listen(0, '127.0.0.1');
@@ -28,6 +30,9 @@ test('el servidor respeta /pulsoAtom, recarga rutas internas y conserva el prefi
     assert.equal((await fetch(`${origin}/pulsoAtom/missing.js`)).status, 404);
     assert.match(await (await fetch(`${origin}/pulsoAtom/asset.js`)).text(), /pulso = true/);
     assert.deepEqual(await (await fetch(`${origin}/pulsoAtom/api/probe`)).json(), { reached: true });
+    const settings = { dailyEnabled: true, dailyTime: '07:00', timezone: 'America/Tegucigalpa', expectedVersion: 1 };
+    const saved = await fetch(`${origin}/pulsoAtom/api/evaluations/settings`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+    assert.deepEqual(await saved.json(), { method: 'PATCH', body: settings });
   } finally {
     await Promise.all([new Promise(resolve => server.close(resolve)), new Promise(resolve => backend.close(resolve))]);
     await rm(directory, { recursive: true, force: true });
