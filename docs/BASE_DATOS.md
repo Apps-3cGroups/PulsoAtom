@@ -56,3 +56,21 @@ npm run user:create
 ```
 
 Después de crear una cuenta real, se cambia `DEMO_MODE=false` y se reinicia la API. El esquema y el seed ya se verificaron en la conexión proporcionada. El histórico se probó con 233 conversaciones: 165 de Costa Rica, 64 de Honduras y 4 de El Salvador. Falta acordar el criterio de conversación lista para evaluar y cómo tratar ediciones posteriores en la evaluación automática.
+
+
+## Migración 002: modelos, comparación y criterio humano
+
+Ejecutar `npm run db:migrate` desde `api/` antes de iniciar esta versión. No repetir el seed en una instalación existente.
+
+| Tabla nueva | Responsabilidad |
+| --- | --- |
+| `operational_refs` | Evaluación oficial por conversación; se inicializa con la última evaluación operativa histórica. |
+| `comparison_samples` | IDs de conversaciones, huellas, versiones de checklist/instrucciones y perfiles fijados. |
+| `evaluation_tasks` | Una tarea por conversación y perfil solicitado, con estado y resultado asociado. |
+| `evaluation_attempts` | Proveedor, modelo, duración, uso y resultado de cada intento. |
+| `human_verdicts` | Dictámenes comunes e inmutables con autor, fecha, motivo, evidencia y modo ciego/asistido. |
+| `evaluation_exposures` | Registro de qué contenido y versión vio cada revisor para evitar falsas validaciones a ciegas. |
+| `validation_sessions` | Envíos completos de un checklist por revisor y muestra. |
+| `model_policies` | Versiones de la política principal/respaldo. |
+
+Se conserva el patrón de documentos JSON y claves únicas del proyecto. Las evaluaciones nuevas incorporan identidad solicitada/efectiva, huellas y referencias a intentos; las antiguas se mantienen sin inventar estos datos. No se duplican transcripciones de Atom. Los dictámenes se aplican por conversación, huella y versión de variable; los resultados originales permanecen intactos.

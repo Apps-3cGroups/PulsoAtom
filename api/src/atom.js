@@ -67,8 +67,8 @@ export class AtomReader {
     });
     return { conversations, countries, loadedAt: new Date().toISOString() };
   }
-  async read() {
-    if (this.cache && Date.now() - this.cache.time < 60_000) return this.cache.value;
+  async read({ fresh = false } = {}) {
+    if (!fresh && this.cache && Date.now() - this.cache.time < 60_000) return this.cache.value;
     if (!this.pending) this.pending = this.fetch().then(value => { this.cache = { time: Date.now(), value }; return value; }).finally(() => { this.pending = null; });
     return this.pending;
   }

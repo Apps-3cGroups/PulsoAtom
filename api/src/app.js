@@ -6,11 +6,13 @@ import { z, ZodError } from 'zod';
 import { AppError } from './errors.js';
 import { tokenHash, newToken, verifyPassword, publicUser, requireUser, requireAdmin } from './auth.js';
 import { countries } from './data/seed.js';
-import { createCatalogSchema, updateCatalogSchema, batchSchema, validateCatalog, saveCatalogVersion, ensureVersion, listQuerySchema, filteredConversations, summarize, priorityOrder, conversationView, recordReview, reviewSchema } from './domain.js';
-import { evaluatorFromEnv } from './evaluator.js';
-import { startEvaluationBatch } from './evaluation-service.js';
+import { createCatalogSchema, updateCatalogSchema, batchSchema, validateCatalog, saveCatalogVersion, ensureVersion, listQuerySchema, filteredConversations, summarize, priorityOrder, conversationView, viewContext, recordReview, reviewSchema } from './domain.js';
+import { startEvaluationBatch, recoverEvaluationJobs } from './evaluation-service.js';
 import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
+import { registryFromEnv, asRegistry } from './model-registry.js';
+import { mountModelRoutes } from './model-routes.js';
+import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
 
 const cookieName = 'pulso_session';
@@ -18,7 +20,7 @@ const loginSchema = z.object({ email: z.string().trim().email().max(254), passwo
 const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
 const grantSchema = z.object({ externalId: z.number().int().positive(), role: z.enum(['admin', 'supervisor']) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
-const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(100).default(20) }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
+const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(20).default(20), idempotencyKey: z.string().uuid().optional() }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
 export const integrationStatus = () => ({
   ready: process.env.OPENAI_EVALUATION_ENABLED === 'true' && !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.ATOM_DB_HOST && process.env.APP_DB_HOST),
   atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_CONVERSATIONS_TABLE && process.env.ATOM_MESSAGES_TABLE && process.env.ATOM_COUNTRIES_TABLE),
@@ -26,12 +28,14 @@ export const integrationStatus = () => ({
   blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), ...(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? [] : ['Configurar OpenAI para la evaluación.']), ...(process.env.OPENAI_EVALUATION_ENABLED === 'true' ? [] : ['La transferencia de conversaciones a OpenAI está deshabilitada.'])],
 });
 
-export function createApp(store, config, evaluator = evaluatorFromEnv(), identity = null, tdServices = {}) {
+export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}) {
+  const registry = asRegistry(evaluator);
+  const status = () => ({ ...integrationStatus(), aiConfigured: registry.configured, ready: !config.demo && !!store.readWithConversations && registry.configured, blockers: registry.configured ? [] : ['Configura y habilita al menos un modelo de IA.'] });
   const basePath = normalizeBasePath(config.basePath);
   const prefix = `${basePath}/api`;
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
-  const readHistory = () => store.readWithConversations ? store.readWithConversations() : store.read();
+  const readHistory = (fresh = false) => store.readWithConversations ? store.readWithConversations({ fresh }) : store.read();
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
@@ -53,7 +57,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
   app.get(`${prefix}/health`, async (_req, res) => {
     let storageReady = true;
     try { await store.read(); } catch { storageReady = false; }
-    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: !config.demo && !!store.readWithConversations && evaluator.configured && process.env.OPENAI_EVALUATION_ENABLED === 'true' });
+    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: status().ready });
   });
   app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
@@ -126,6 +130,7 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
+  mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory });
   mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });
   app.get(`${prefix}/access/grants`, requireAdmin, async (_req, res) => {
     if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
@@ -229,17 +234,33 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     });
     res.json({ item });
   });
+  const expose = async (state, userId, conversations, profileId) => {
+    const evaluations = conversations.map(c => {
+      const e = selectedEvaluation(state, c, profileId);
+      if (!e) return null;
+      // Viewing a legacy prediction can bias a later review even when its original
+      // input cannot be proven equivalent. Track exposure conservatively, without
+      // promoting the legacy evaluation into the comparable cohort.
+      return e.sourceHash ? e : { ...e, sourceHash: sourceFingerprint(c),
+        catalogVersions: e.catalogVersions.map(v => ({ ...v, active: e.results.some(r => r.variableId === v.id) })) };
+    }).filter(Boolean);
+    if (evaluations.length) await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
+  };
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     const state = await readHistory();
     const conversations = filteredConversations(state, query);
+    await expose(state, req.user.id, state.conversations.filter(c => conversations.some(v => v.id === c.id)), query.modelProfileId);
     const priority = conversations.filter(c => c.p1 || c.p2).sort(priorityOrder);
     res.json({ metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
   });
   const list = (search = false) => async (req, res) => {
     const query = listQuerySchema.parse(req.query);
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     const state = await readHistory();
     const items = filteredConversations(state, query, search);
+    await expose(state, req.user.id, state.conversations.filter(c => items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize).some(v => v.id === c.id)), query.modelProfileId);
     res.json({ items: items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize), total: items.length, page: query.page, pageSize: query.pageSize });
   };
   app.get(`${prefix}/conversations`, list());
@@ -248,32 +269,39 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     const state = await readHistory();
     const conversation = state.conversations.find(c => c.id === req.params.id);
     if (!conversation) throw new AppError(404, 'No se encontró esta conversación.', 'NOT_FOUND');
-    res.json({ conversation: conversationView(state, conversation, undefined, true) });
+    const query = listQuerySchema.parse(req.query);
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
+    await expose(state, req.user.id, [conversation], query.modelProfileId);
+    res.json({ conversation: conversationView(state, conversation, viewContext(state, query.modelProfileId), true) });
   });
   app.post(`${prefix}/conversations/:id/reviews`, async (req, res) => {
     const input = reviewSchema.parse(req.body);
     const review = await reviewHistory(state => recordReview(state, req.params.id, input, req.user));
     res.status(201).json({ review });
   });
-  app.get(`${prefix}/evaluations`, async (_req, res) => {
+  app.get(`${prefix}/evaluations`, requireAdmin, async (_req, res) => {
+    await recoverEvaluationJobs(store);
     const state = await store.read();
-    res.json({ status: integrationStatus(), settings: state.settings, jobs: state.jobs, activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
+    res.json({ status: status(), settings: state.settings, jobs: state.jobs, activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
+  });
+  app.get(`${prefix}/evaluations/settings`, requireAdmin, async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json({ settings: (await store.read()).settings });
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !integrationStatus().ready || !evaluator.configured)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y OpenAI en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !status().ready)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y un modelo habilitado en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
     const settings = await store.transaction(state => {
       ensureVersion(state.settings, expectedVersion);
-      state.settings = { ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
+      state.settings = { ...state.settings, ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
       return state.settings;
     });
     res.json({ settings });
   });
   app.post(`${prefix}/evaluations`, requireAdmin, async (req, res) => {
-    if (process.env.OPENAI_EVALUATION_ENABLED !== 'true') throw new AppError(409, 'La transferencia de conversaciones a OpenAI aún no está habilitada.', 'EVALUATION_DISABLED');
+    if (!registry.configured) throw new AppError(409, 'No hay un modelo configurado y habilitado.', 'EVALUATION_DISABLED');
     if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
     const input = evaluationRequestSchema.parse(req.body);
-    const { job, completion } = await startEvaluationBatch(store, evaluator, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max });
+    const { job, completion } = await startEvaluationBatch(store, registry, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max, idempotencyKey: input.idempotencyKey, author: req.user });
     completion.catch(error => console.error('Error en ejecución de Pulso:', error.code || error.name));
     res.status(202).json({ job });
   });

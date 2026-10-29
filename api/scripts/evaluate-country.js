@@ -1,20 +1,20 @@
 import { config, atomDatabaseConfig, databaseConfig } from '../src/config.js';
 import { MysqlStore, AtomHistoryStore } from '../src/store.js';
 import { AtomReader } from '../src/atom.js';
-import { evaluatorFromEnv } from '../src/evaluator.js';
+import { registryFromEnv } from '../src/model-registry.js';
 import { eligibleConversations, runEvaluationBatch } from '../src/evaluation-service.js';
 
 const country = process.argv[2]?.toUpperCase();
 const max = Number(process.argv[3] || 10);
 const appDb = databaseConfig();
 const atomDb = atomDatabaseConfig();
-const evaluator = evaluatorFromEnv();
+const evaluator = registryFromEnv();
 
-if (!/^[A-Z]{2}$/.test(country || '') || !Number.isInteger(max) || max < 1 || max > 100) {
+if (!/^[A-Z]{2}$/.test(country || '') || !Number.isInteger(max) || max < 1 || max > 20) {
   console.error('Uso: npm run eval:country -- HN 10');
   process.exitCode = 1;
-} else if (!appDb || !atomDb || !evaluator.configured || process.env.OPENAI_EVALUATION_ENABLED !== 'true') {
-  console.error('La evaluación requiere APP_DB_*, ATOM_DB_*, OPENAI_* y OPENAI_EVALUATION_ENABLED=true.');
+} else if (!appDb || !atomDb || !evaluator.configured) {
+  console.error('La evaluación requiere APP_DB_*, ATOM_DB_*, un perfil de IA configurado y habilitado.');
   process.exitCode = 1;
 } else {
   const store = new AtomHistoryStore(new MysqlStore(appDb), new AtomReader(atomDb, config.timezone));

@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI está implementado y se validó sobre cinco conversaciones reales; permanece cerrado por defecto para impedir nuevos lotes accidentales.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. Incluye evaluación operativa, perfiles OpenAI/Gemini, comparación reproducible y validación humana. Los proveedores requieren configuración y habilitación explícita. Consulta [la guía de modelos y comparación](docs/MODELOS_Y_COMPARACION.md).
 
 ## Abrir y ejecutar
 
@@ -60,6 +60,8 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
 - **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. El horario diario se puede guardar, pero su ejecución automática sigue inactiva.
+- **Comparación interna (solo admin):** en Evaluaciones → Herramientas internas, muestras de hasta 20 conversaciones y tres modelos, evidencia por variable y validación a ciegas. Los resultados comparativos no reemplazan la evaluación operativa.
+- **Un único resultado oficial:** Resumen, Histórico, Búsqueda y Conversación muestran el seguimiento con dictámenes humanos, sin selector de modelos. Perfiles, respaldo e intentos permanecen en las herramientas internas de Evaluaciones.
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -74,7 +76,10 @@ Con `DEMO_MODE=true`, la pantalla de acceso permite entrar como administrador o 
 | Refutar, levantar y deshacer flags con comentario | Sí | Sí |
 | Crear y modificar variables / activar lotes | Sí | No |
 | Iniciar evaluaciones a demanda, cuando estén habilitadas | Sí | No |
-| Guardar horario diario | Sí | No |
+| Guardar horario diario o política principal/respaldo | Sí | No |
+| Crear o reanudar muestras comparativas | Sí | No |
+| Consultar modelos, comparaciones e intentos internos | Sí | No |
+| Guardar dictámenes humanos mediante el enlace de una conversación | Sí | Sí |
 
 Cada edición del catálogo conserva una versión. Las evaluaciones hacen referencia a las versiones utilizadas. Las revisiones humanas se agregan al historial sin sobrescribir la evidencia del resultado original. Los cambios concurrentes detectados devuelven un conflicto en lugar de reemplazar silenciosamente una versión reciente.
 
@@ -109,7 +114,7 @@ Para autorizar al primer administrador en otra instalación, ejecuta `cd api && 
 
 ### Origen Atom confirmado
 
-`dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. Falta acordar la URL de apertura en Atom y el criterio exacto para evaluar conversaciones que aún cambian.
+`dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. La conversación se revisa dentro de Pulso. Las muestras nuevas verifican la huella del origen y requieren una nueva muestra si Atom cambia.
 
 El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
@@ -119,13 +124,13 @@ Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Ser
 
 En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
 
-### Evaluación con OpenAI
+### Evaluación operativa y proveedores
 
-La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las 12 definiciones activas, a Responses API. Solicita `store: false`, valida que los resultados incluyan las 12 variables y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
+La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El adaptador OpenAI envía roles, IDs y texto de los mensajes, junto con las definiciones activas compatibles, a Responses API. Gemini usa el mismo contenido y contrato de resultados mediante un adaptador separado. Solicita `store: false`, valida que los resultados incluyan todas las variables solicitadas y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
 
 La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). En esta instalación local ya se autorizó y habilitó para futuros lotes, y el portal está configurado en modo real. Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda de hasta 20 conversaciones. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md).
 
-La programación diaria se configura en el portal por un administrador. Al activarla, Pulso guarda la fecha de inicio y solo considera conversaciones completadas que Atom haya creado o actualizado desde entonces; el histórico anterior puede evaluarse a demanda. El servidor revisa el horario cada minuto en la zona seleccionada, procesa hasta 100 pendientes por día y registra una única ejecución por fecha. Debe estar encendido a la hora programada. El horario se debe fijar después de la carga diaria de Atom; la programación permanece inactiva hasta confirmarlo. Los fallos individuales quedan registrados y pueden retomarse manualmente mediante un lote de pendientes. La revisión automática de todas las conversaciones pendientes por encima del límite diario y los reintentos automáticos todavía no están implementados.
+La programación diaria se configura en el portal por un administrador. Al activarla, Pulso guarda la fecha de inicio y solo considera conversaciones completadas que Atom haya creado o actualizado desde entonces; el histórico anterior puede evaluarse a demanda. El servidor revisa el horario cada minuto en la zona seleccionada, procesa hasta 100 pendientes por día y registra una única ejecución por fecha. Debe estar encendido a la hora programada. El horario se debe fijar después de la carga diaria de Atom; la programación permanece inactiva hasta confirmarlo. Los intentos quedan persistidos: un reintento por modelo y respaldo opcional para fallos técnicos. Los trabajos parciales o interrumpidos se reanudan explícitamente desde su detalle, sin repetir los resultados completados. No se procesan automáticamente más de 100 conversaciones por día.
 
 Solo se seleccionan conversaciones con fecha de cierre en Atom. Una conversación cuyo documento ya esté disponible pero todavía no tenga `FechaFinUtc` permanece pendiente; así no se marca prematuramente la ausencia de respuesta al último mensaje.
 

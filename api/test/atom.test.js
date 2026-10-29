@@ -111,3 +111,14 @@ test('un lote a demanda crea resultados reales y los muestra en la conversación
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
 });
+
+test('la lectura fresca de una muestra omite la caché de navegación', async () => {
+  const { AtomReader } = await import('../src/atom.js');
+  const reader = Object.create(AtomReader.prototype);
+  reader.cache = { time: Date.now(), value: { conversations: ['old'] } };
+  let reads = 0;
+  reader.fetch = async () => { reads++; return { conversations: ['new'] }; };
+  assert.deepEqual((await reader.read()).conversations, ['old']);
+  assert.deepEqual((await reader.read({ fresh: true })).conversations, ['new']);
+  assert.equal(reads, 1);
+});
