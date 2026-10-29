@@ -58,7 +58,9 @@ Comparación: solo el modelo solicitado y un reintento. No se sustituye una colu
 
 Manual: 20 conversaciones como máximo. Diario: 100, según el horario guardado. Los resultados comparativos jamás actualizan `operational_refs`. La programación diaria y OpenAI existentes no se modifican al migrar.
 
-## API bajo `/pulso/api`
+## API bajo la ruta base configurada
+
+Los endpoints siguientes son relativos a `${BASE_PATH}/api`: `/pulso/api` para la prueba local y `/pulsoAtom/api` para el despliegue actual. Configurar `BASE_PATH` en la API y `VITE_BASE_PATH` / `VITE_API_BASE_URL` en web, y recompilar al cambiar el prefijo.
 
 | Método y ruta | Uso |
 | --- | --- |
@@ -80,7 +82,9 @@ Manual: 20 conversaciones como máximo. Diario: 100, según el horario guardado.
 1. Instalar dependencias de `api/` y `web/` por separado.
 2. Desde `api/`: `npm run db:migrate` antes de iniciar esta versión. En una instalación existente no repetir el seed. La migración 002 añade ocho tablas y fija referencias operativas sin reescribir resultados anteriores.
 3. Ejecutar `npm test` en ambas carpetas y `npm run build` en `web/`.
-4. Reiniciar API y servidor web. Recargar las rutas internas funciona bajo `/pulso`.
+4. Reiniciar API y servidor web. Recargar las rutas internas funciona bajo el prefijo configurado.
+
+El workflow de producción existente omite los scripts de base de datos por diseño. Aplicar `npm run db:migrate` usando la conexión del servidor antes de desplegar esta versión; si comparte `dbPulsosAtom` con el ambiente validado, la migración 002 ya está registrada y el comando es idempotente. No se modificó esa política de despliegue.
 
 Para una demo aislada, usar `DEMO_MODE=true` y opcionalmente `DEMO_FILE=/ruta/aislada.json`. Los perfiles GPT, Gemini y Local de demo generan resultados sintéticos identificados; no contactan a ningún proveedor. Nunca copiar ese archivo a la base real.
 

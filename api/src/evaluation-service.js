@@ -51,8 +51,9 @@ function pickCandidates(state, options) {
     candidates = [...candidates];
     for (let i = candidates.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [candidates[i], candidates[j]] = [candidates[j], candidates[i]]; }
     if ((options.max ?? 20) >= 2) {
-      const withFlag = candidates.find(c => selectedEvaluation(state, c)?.results.some(r => r.value === 1));
-      const withoutFlag = candidates.find(c => { const e = selectedEvaluation(state, c); return e && e.results.some(r => r.status === 'evaluado') && !e.results.some(r => r.value === 1); });
+      const hasFlag = e => e?.results.some(r => r.value === 1 && state.catalog.find(v => v.id === r.variableId)?.type === 'Flag');
+      const withFlag = candidates.find(c => hasFlag(selectedEvaluation(state, c)));
+      const withoutFlag = candidates.find(c => { const e = selectedEvaluation(state, c); return e && e.results.some(r => r.status === 'evaluado') && !hasFlag(e); });
       if (withFlag && withoutFlag) candidates = [withFlag, withoutFlag, ...candidates.filter(c => c.id !== withFlag.id && c.id !== withoutFlag.id)];
     }
   }

@@ -12,9 +12,9 @@ import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
 import { registryFromEnv, asRegistry } from './model-registry.js';
 import { mountModelRoutes } from './model-routes.js';
-import { selectedEvaluation, exposeEvaluation } from './evaluation-context.js';
+import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
+import { normalizeBasePath } from './basePath.js';
 
-const prefix = '/pulso/api';
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
 const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
@@ -31,6 +31,8 @@ export const integrationStatus = () => ({
 export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}) {
   const registry = asRegistry(evaluator);
   const status = () => ({ ...integrationStatus(), aiConfigured: registry.configured, ready: !config.demo && !!store.readWithConversations && registry.configured, blockers: registry.configured ? [] : ['Configura y habilita al menos un modelo de IA.'] });
+  const basePath = normalizeBasePath(config.basePath);
+  const prefix = `${basePath}/api`;
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = (fresh = false) => store.readWithConversations ? store.readWithConversations({ fresh }) : store.read();
@@ -75,7 +77,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     }
     next();
   });
-  const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: config.secureCookie, path: '/pulso', maxAge: config.sessionHours * 3600000 };
+  const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: config.secureCookie, path: basePath, maxAge: config.sessionHours * 3600000 };
   async function signIn(req, res, user) {
     const token = newToken();
     await store.transaction(state => {
@@ -125,7 +127,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   app.get(`${prefix}/auth/me`, requireUser, (req, res) => res.json({ user: req.user, mode: config.demo ? 'demo' : 'real' }));
   app.post(`${prefix}/auth/logout`, async (req, res) => {
     if (req.sessionId) await store.transaction(state => { state.sessions = state.sessions.filter(s => s.id !== req.sessionId); return null; });
-    res.clearCookie(cookieName, { path: '/pulso', httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
+    res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
   mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory });
@@ -233,7 +235,15 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ item });
   });
   const expose = async (state, userId, conversations, profileId) => {
-    const evaluations = conversations.map(c => selectedEvaluation(state, c, profileId)).filter(e => e?.sourceHash);
+    const evaluations = conversations.map(c => {
+      const e = selectedEvaluation(state, c, profileId);
+      if (!e) return null;
+      // Viewing a legacy prediction can bias a later review even when its original
+      // input cannot be proven equivalent. Track exposure conservatively, without
+      // promoting the legacy evaluation into the comparable cohort.
+      return e.sourceHash ? e : { ...e, sourceHash: sourceFingerprint(c),
+        catalogVersions: e.catalogVersions.map(v => ({ ...v, active: e.results.some(r => r.variableId === v.id) })) };
+    }).filter(Boolean);
     if (evaluations.length) await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
   };
   app.get(`${prefix}/summary`, async (req, res) => {

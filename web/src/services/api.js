@@ -1,4 +1,4 @@
-const BASE = '/pulso/api';
+import { apiBaseUrl as BASE } from '../config.js';
 export class ApiError extends Error {
   constructor(message, status, code, details) { super(message); this.status = status; this.code = code; this.details = details; }
 }

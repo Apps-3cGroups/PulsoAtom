@@ -11,7 +11,7 @@ import { registryFromEnv } from '../src/model-registry.js';
 import { runEvaluationBatch } from '../src/evaluation-service.js';
 import { sourceFingerprint } from '../src/evaluation-context.js';
 
-const config = { demo: true, origin: 'http://127.0.0.1:3000', sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' };
+const config = { demo: true, basePath: '/pulso', origin: 'http://127.0.0.1:3000', sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' };
 let directory, store, app, admin, supervisor, sampleId, caseIds, calls = 0;
 const models = registryFromEnv({ demo: true });
 for (const p of models.profiles) { const evaluate = p.evaluator.evaluate; p.evaluator.evaluate = (...args) => { calls++; return evaluate(...args); }; }
@@ -97,4 +97,24 @@ test('un reinicio deja visible la reanudación explícita de trabajos vencidos',
   const jobs = (await admin.get('/pulso/api/evaluations').expect(200)).body.jobs;
   assert.equal(jobs.find(j => j.id === 'interrupted-job').status, 'interrupted');
   assert.equal((await store.read()).attempts.find(a => a.id === 'interrupted-attempt').status, 'interrupted');
+});
+
+
+test('consultar una predicción heredada marca la revisión posterior como asistida sin hacerla comparable', async () => {
+  const state = await store.read();
+  const conversationId = state.conversations[2].id;
+  const job = await runEvaluationBatch(store, models, { purpose: 'comparison', modelIds: ['demo-gpt', 'demo-gemini'], conversationIds: [conversationId], max: 1 });
+  await store.transaction(s => {
+    const original = s.evaluations.find(e => e.jobId === job.id);
+    const legacy = { ...original, id: 'legacy-exposure-test', purpose: 'operational', sourceHash: undefined, catalogHash: undefined,
+      catalogVersions: original.catalogVersions.map(({ id, version }) => ({ id, version })) };
+    s.evaluations.push(legacy);
+    s.operationalRefs = s.operationalRefs.filter(r => r.id !== conversationId);
+    s.operationalRefs.push({ id: conversationId, evaluationId: legacy.id });
+  });
+  const url = `/pulso/api/comparisons/${job.id}/validation/${conversationId}`;
+  assert.equal((await supervisor.get(url).expect(200)).body.mode, 'blind');
+  await supervisor.get(`/pulso/api/conversations/${conversationId}`).expect(200);
+  assert.equal((await supervisor.get(url).expect(200)).body.mode, 'assisted');
+  assert.equal((await store.read()).evaluations.find(e => e.id === 'legacy-exposure-test').sourceHash, undefined);
 });

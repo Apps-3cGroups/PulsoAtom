@@ -27,7 +27,7 @@ test('API real de Pulso expone S3 y SMTP solo a una sesión administradora', asy
   const app = createApp(store, { demo: false, origin: 'https://pulso.example', sessionHours: 8, secureCookie: true, timezone: 'America/Tegucigalpa' }, undefined, null, tdServices);
   const admin = request.agent(app);
   const auth = req => req.set('Cookie', `pulso_session=${token}`);
-  const root = '/pulso/api/integrations/td';
+  const root = '/pulsoAtom/api/integrations/td';
   await request(app).get(`${root}/mail/health`).expect(401);
   assert.equal((await auth(admin.get(`${root}/mail/health`)).expect(200)).body.data.connected, true);
   assert.equal((await auth(admin.post(`${root}/s3/upload`)).set('Origin', 'https://pulso.example').send({ fileName: 'a.txt', fileText: 'Hola' }).expect(200)).body.data.s3Key, 'nuevo.txt');

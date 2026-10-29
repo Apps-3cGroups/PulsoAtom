@@ -21,7 +21,7 @@ cp -n .env.example .env
 npm run dev
 ```
 
-Abre **http://127.0.0.1:3000/pulso/**. Las dependencias ya están instaladas en esta entrega y ambos `.env` locales están preparados. Los puertos predeterminados son 3000 para web y 4001 para API.
+Abre **http://127.0.0.1:3000/pulsoAtom/**. Las dependencias ya están instaladas en esta entrega y ambos `.env` locales están preparados. Los puertos predeterminados son 3000 para web y 4001 para API.
 
 Para servir la compilación con Express, detén primero el servidor de desarrollo web:
 
@@ -31,7 +31,23 @@ npm run build
 npm start
 ```
 
-La API debe seguir encendida. Todas las rutas y recursos viven bajo `/pulso`; `/` devuelve 404 deliberadamente. `web/server.js` sirve el frontend y reenvía `/pulso/api` a la API.
+La API debe seguir encendida. Todas las rutas y recursos viven bajo `/pulsoAtom`; `/` devuelve 404 deliberadamente. `web/server.js` sirve el frontend y reenvía `/pulsoAtom/api` a la API.
+
+### Configuración de subruta y PM2
+
+La subruta solicitada es **`/pulsoAtom`**, respetando mayúsculas. Se configura con `BASE_PATH=/pulsoAtom` en `api/.env` y `VITE_BASE_PATH=/pulsoAtom`, `VITE_API_BASE_URL=/pulsoAtom/api` en `web/.env`. Los tres valores deben coincidir y, si cambian, hay que recompilar la web. Las rutas internas, los recursos, el proxy y las cookies conservan ese prefijo.
+
+Ambas aplicaciones aceptan `PORT`: `4001` para API y `3000` para web. El proxy interno se configura con `API_PROXY_TARGET=http://127.0.0.1:4001` en `web/.env`. Se mantienen `API_PORT`, `WEB_PORT` y `API_TARGET` como alternativas para configuraciones anteriores.
+
+El archivo raíz `ecosystem.config.js` define `DEPLOY_ROOT=/var/www/nodeapps` y `PROJECT_FOLDER=PulsoAtom`, con procesos separados `pulso-atom-api` y `pulso-atom-web`. Solo establece `PORT` en sus bloques `env`; cada servidor carga su propio `.env`. Antes de iniciar una instalación real hay que preparar esos archivos y confirmar bases, permisos y la configuración de modo real descrita más abajo.
+
+Después de instalar dependencias y compilar `web`, el arranque previsto desde la raíz del proyecto es:
+
+```sh
+pm2 start ecosystem.config.js
+```
+
+Apache debe conservar `/pulsoAtom` al reenviar hacia el servidor web interno. Esta configuración no despliega el proyecto ni ejecuta migraciones.
 
 ## Repositorio
 
@@ -105,7 +121,7 @@ El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se e
 
 Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`. Exportan `uploadFileToS3`, `getS3TemporaryUrl`, `downloadS3File`, `checkMailHealth`, `sendMail` y `sendSimpleMail`; todas devuelven `{ success, message, data, error }`. La API TD no recibe JWT. El cliente usa únicamente `TD_API_BASE_URL`, HTTPS, un tiempo límite y errores normalizados. `s3Key` no admite `/` ni `\`; la caducidad máxima del enlace es 604800 segundos y el cuerpo de subida tiene un límite de 50 MB.
 
-En modo real, un administrador autenticado puede usar las rutas `/pulso/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
+En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
 
 ### Evaluación operativa y proveedores
 

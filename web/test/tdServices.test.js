@@ -24,8 +24,8 @@ test('servicios web reutilizan rutas de Pulso y normalizan JSON y blob', async (
     assert.equal((await sendMail({ to: 'test@example.com', subject: 'Prueba', text: 'Hola' })).success, true);
     assert.equal((await sendSimpleMail({ to: 'test@example.com', subject: 'Prueba', text: 'Hola' })).success, true);
     assert.deepEqual(requests.map(r => new URL(r.url).pathname), [
-      '/pulso/api/integrations/td/s3/upload', '/pulso/api/integrations/td/s3/url', '/pulso/api/integrations/td/s3/download',
-      '/pulso/api/integrations/td/mail/health', '/pulso/api/integrations/td/mail/send', '/pulso/api/integrations/td/mail/send',
+      '/pulsoAtom/api/integrations/td/s3/upload', '/pulsoAtom/api/integrations/td/s3/url', '/pulsoAtom/api/integrations/td/s3/download',
+      '/pulsoAtom/api/integrations/td/mail/health', '/pulsoAtom/api/integrations/td/mail/send', '/pulsoAtom/api/integrations/td/mail/send',
     ]);
     assert.equal(requests.every(r => r.options.credentials === 'same-origin'), true);
   } finally { globalThis.fetch = previousFetch; globalThis.window = previousWindow; }

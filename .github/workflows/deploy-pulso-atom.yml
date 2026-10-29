@@ -1,0 +1,299 @@
+name: Deploy PulsoAtom
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-pulso-atom-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy PulsoAtom to Server 214
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+    env:
+      DEPLOY_HOST: 10.252.1.214
+      DEPLOY_PORT: "22"
+      DEPLOY_USER: ubuntu
+      REPO: /var/www/nodeapps/PulsoAtom
+      API: /var/www/nodeapps/PulsoAtom/api
+      WEB: /var/www/nodeapps/PulsoAtom/web
+      REPO_URL: https://github.com/Apps-3cGroups/PulsoAtom.git
+      PM2_API_APP: pulso-atom-api
+      PM2_WEB_APP: pulso-atom-web
+
+    steps:
+      - name: Validate required secrets
+        env:
+          TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
+          GH_DEPLOY_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) {
+            throw 'Missing required secret TD_APPS_SSH_KEY.'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:GH_DEPLOY_TOKEN)) {
+            throw 'Missing required secret GH_DEPLOY_TOKEN.'
+          }
+
+      - name: Deploy through SSH
+        env:
+          TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
+          GH_DEPLOY_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          foreach ($tool in @('ssh', 'scp', 'icacls')) {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+              throw "Required command not found on runner: $tool"
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) {
+            throw 'Missing required secret TD_APPS_SSH_KEY.'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:GH_DEPLOY_TOKEN)) {
+            throw 'Missing required secret GH_DEPLOY_TOKEN.'
+          }
+
+          function Invoke-Checked {
+            param(
+              [Parameter(Mandatory = $true)][string]$FilePath,
+              [Parameter(Mandatory = $true)][string[]]$Arguments
+            )
+
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "$FilePath failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          function Protect-PrivateFile {
+            param([Parameter(Mandatory = $true)][string]$Path)
+
+            $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            Invoke-Checked -FilePath 'icacls' -Arguments @($Path, '/inheritance:r')
+            Invoke-Checked -FilePath 'icacls' -Arguments @($Path, '/grant:r', "${identity}:R")
+          }
+
+          $workDir = Join-Path $env:RUNNER_TEMP "pulso-atom-deploy-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+
+          $keyPath = Join-Path $workDir 'td-apps.pem'
+          $tokenPath = Join-Path $workDir 'github-token.txt'
+          $scriptPath = Join-Path $workDir 'deploy-pulso-atom.sh'
+          $knownHostsPath = Join-Path $workDir 'known_hosts'
+          $remoteToken = $null
+          $remoteScriptPath = $null
+          $sshTarget = $null
+          $sshOptions = @()
+
+          try {
+            $key = $env:TD_APPS_SSH_KEY
+            if (($key -notmatch "`n") -and ($key -match '\\n')) {
+              $key = $key -replace '\\n', "`n"
+            }
+            $key = ($key -replace "`r`n", "`n").TrimEnd() + "`n"
+            if ($key -notmatch '-----BEGIN .+ PRIVATE KEY-----' -or $key -notmatch '-----END .+ PRIVATE KEY-----') {
+              throw 'TD_APPS_SSH_KEY does not look like a PEM private key.'
+            }
+
+            [System.IO.File]::WriteAllText($keyPath, $key, [System.Text.Encoding]::ASCII)
+            Protect-PrivateFile -Path $keyPath
+
+            $token = $env:GH_DEPLOY_TOKEN.Trim()
+            [System.IO.File]::WriteAllText($tokenPath, $token, [System.Text.Encoding]::ASCII)
+            Protect-PrivateFile -Path $tokenPath
+
+            $remoteScript = @'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          REPO="__REPO__"
+          API="__API__"
+          WEB="__WEB__"
+          REPO_URL="__REPO_URL__"
+          API_APP="__PM2_API_APP__"
+          WEB_APP="__PM2_WEB_APP__"
+          TOKEN_FILE="${1:-}"
+          ASKPASS=""
+
+          cleanup() {
+            if [ -n "${ASKPASS:-}" ] && [ -f "$ASKPASS" ]; then
+              rm -f "$ASKPASS"
+            fi
+
+            if [ -n "${TOKEN_FILE:-}" ] && [ -f "$TOKEN_FILE" ]; then
+              shred -u "$TOKEN_FILE" 2>/dev/null || rm -f "$TOKEN_FILE"
+            fi
+          }
+          trap cleanup EXIT
+
+          fail() {
+            echo "ERROR: $*" >&2
+            exit 1
+          }
+
+          echo "Deploy target: $(hostname)"
+          echo "Deploy user: $(id -un)"
+          echo "Repository: $REPO"
+          echo "Database scripts: skipped by design."
+
+          [ "$(id -un)" = "td" ] || fail "Remote deploy must run as td."
+          [ -n "$TOKEN_FILE" ] || fail "Token file argument is required."
+          [ -f "$TOKEN_FILE" ] || fail "Token file does not exist: $TOKEN_FILE"
+
+          for required_path in "$REPO/.git" "$API/package.json" "$WEB/package.json" "$API/.env" "$WEB/.env" "$REPO/ecosystem.config.js"; do
+            [ -e "$required_path" ] || fail "Preflight missing required path: $required_path"
+          done
+
+          cd "$REPO"
+
+          [ "$(git symbolic-ref --short HEAD)" = main ] || fail "Deploy checkout must be on main."
+          [ "$(git remote get-url origin)" = "$REPO_URL" ] || fail "Unexpected origin URL; no changes made."
+
+
+          echo "Checking working tree before pull"
+          git status --short
+          status_output="$(git status --porcelain)"
+          if [ -n "$status_output" ]; then
+            fail "Unexpected working tree changes; inspect them before deploying."
+          fi
+
+          ASKPASS="$(mktemp /tmp/pulso-atom-askpass.XXXXXX)"
+          cat > "$ASKPASS" <<'ASKPASS_SCRIPT'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' 'jjosegarcia' ;;
+            *Password*) cat "$GH_TOKEN_FILE" ;;
+            *) printf '\n' ;;
+          esac
+          ASKPASS_SCRIPT
+          chmod 700 "$ASKPASS"
+
+          export GIT_ASKPASS="$ASKPASS"
+          export GH_TOKEN_FILE="$TOKEN_FILE"
+          export GIT_TERMINAL_PROMPT=0
+
+          echo "Pulling main with ff-only"
+          git pull --ff-only origin main
+          [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] || fail "Local commits differ from remote main; deployment stopped."
+
+          unset GIT_ASKPASS GH_TOKEN_FILE GIT_TERMINAL_PROMPT
+
+          echo "Installing API dependencies"
+          npm ci --prefix "$API" --omit=dev --ignore-scripts --no-audit --no-fund
+
+          echo "Installing web dependencies"
+          npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
+
+          echo "Building web"
+          npm run build --prefix "$WEB"
+
+          echo "Restarting PM2 targets"
+          export PM2_HOME=/home/td/.pm2
+          pm2 startOrReload "$REPO/ecosystem.config.js" --update-env >/dev/null
+          pm2 save >/dev/null
+
+          echo "Checking PulsoAtom health and web"
+          curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-connrefused --max-time 15 http://127.0.0.1:4001/pulsoAtom/api/health
+          printf '\n'
+          curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-connrefused --max-time 15 -o /dev/null -w 'WEB HTTP %{http_code}\n' http://127.0.0.1:3000/pulsoAtom/
+
+          echo "Final git status"
+          git status --short --branch
+
+          echo "PM2 target status"
+          pm2 status "$API_APP"
+          pm2 status "$WEB_APP"
+          '@
+
+            $remoteScript = ($remoteScript -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
+            $remoteScript = $remoteScript.
+              Replace('__REPO__', $env:REPO).
+              Replace('__API__', $env:API).
+              Replace('__WEB__', $env:WEB).
+              Replace('__REPO_URL__', $env:REPO_URL).
+              Replace('__PM2_API_APP__', $env:PM2_API_APP).
+              Replace('__PM2_WEB_APP__', $env:PM2_WEB_APP)
+            $remoteScript = $remoteScript -replace "`r`n", "`n" -replace "`r", "`n"
+            [System.IO.File]::WriteAllText($scriptPath, $remoteScript, [System.Text.UTF8Encoding]::new($false))
+
+            $remoteToken = "/tmp/pulso-atom-gh-token-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+            $remoteScriptPath = "/tmp/deploy-pulso-atom-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT).sh"
+            $sshTarget = "$($env:DEPLOY_USER)@$($env:DEPLOY_HOST)"
+            $sshOptions = @(
+              '-i', $keyPath,
+              '-p', $env:DEPLOY_PORT,
+              '-o', 'IdentitiesOnly=yes',
+              '-o', 'BatchMode=yes',
+              '-o', 'ConnectTimeout=15',
+              '-o', 'StrictHostKeyChecking=accept-new',
+              '-o', "UserKnownHostsFile=$knownHostsPath"
+            )
+            $scpOptions = @(
+              '-i', $keyPath,
+              '-P', $env:DEPLOY_PORT,
+              '-o', 'IdentitiesOnly=yes',
+              '-o', 'BatchMode=yes',
+              '-o', 'ConnectTimeout=15',
+              '-o', 'StrictHostKeyChecking=accept-new',
+              '-o', "UserKnownHostsFile=$knownHostsPath"
+            )
+
+            Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @($tokenPath, "${sshTarget}:$remoteToken"))
+            Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @($scriptPath, "${sshTarget}:$remoteScriptPath"))
+
+            $remoteCommand = @"
+          set -u
+          cleanup_remote() {
+            sudo -n rm -f -- '$remoteToken' '$remoteScriptPath' || true
+          }
+          trap cleanup_remote EXIT
+          sudo -n chown td:td '$remoteToken' '$remoteScriptPath' || exit 1
+          sudo -n chmod 600 '$remoteToken' || exit 1
+          sudo -n chmod 700 '$remoteScriptPath' || exit 1
+          sudo -n -u td -H bash '$remoteScriptPath' '$remoteToken'
+          status=`$?
+          exit `$status
+          "@
+            $remoteCommand = $remoteCommand -replace "`r`n", "`n" -replace "`r", "`n"
+
+            Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, $remoteCommand))
+          }
+          finally {
+            if ($sshTarget -and $remoteToken -and $remoteScriptPath -and $sshOptions.Count -gt 0 -and (Test-Path -LiteralPath $keyPath)) {
+              try {
+                & ssh @sshOptions $sshTarget "sudo -n rm -f -- '$remoteToken' '$remoteScriptPath'"
+                if ($LASTEXITCODE -ne 0) {
+                  Write-Warning "Remote temporary credential cleanup is pending on $sshTarget."
+                }
+              }
+              catch {
+                Write-Warning "Remote temporary credential cleanup could not connect to $sshTarget."
+              }
+              $global:LASTEXITCODE = 0
+            }
+            if (Test-Path $workDir) {
+              $cleanupRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+              $cleanupTarget = [System.IO.Path]::GetFullPath($workDir)
+              if (-not $cleanupTarget.StartsWith($cleanupRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Refusing to remove a directory outside RUNNER_TEMP.'
+              }
+              Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          }
