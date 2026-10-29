@@ -8,6 +8,8 @@ const Conversations = lazy(() => import('./pages/Conversations'));
 const Conversation = lazy(() => import('./pages/Conversation'));
 const Catalog = lazy(() => import('./pages/Catalog'));
 const Evaluations = lazy(() => import('./pages/Evaluations'));
+const Comparison = lazy(() => import('./pages/Comparison'));
+const Validation = lazy(() => import('./pages/Validation'));
 const Access = lazy(() => import('./pages/Access'));
 
 export default function PortalRoutes() {
@@ -19,6 +21,8 @@ export default function PortalRoutes() {
       <Route path="/busqueda" element={<Conversations search />} />
       <Route path="/conversacion" element={<Conversation />} />
       <Route path="/conversacion/:id" element={<Conversation />} />
+      <Route path="/comparacion" element={<Comparison />} />
+      <Route path="/comparacion/:sampleId/validar/:conversationId" element={<Validation />} />
       <Route path="/catalogo" element={<Catalog />} />
       <Route path="/evaluaciones" element={<Evaluations />} />
       <Route path="/accesos" element={<Access />} />

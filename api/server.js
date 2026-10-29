@@ -2,7 +2,7 @@ import { config, databaseConfig, atomDatabaseConfig, identityDatabaseConfig } fr
 import { AtomHistoryStore, DemoStore, MysqlStore, UnconfiguredStore } from './src/store.js';
 import { AtomReader } from './src/atom.js';
 import { createApp } from './src/app.js';
-import { evaluatorFromEnv } from './src/evaluator.js';
+import { registryFromEnv } from './src/model-registry.js';
 import { startDailyScheduler } from './src/daily-scheduler.js';
 import { Somos3cIdentity, Somos3cPersonIdentity } from './src/identity.js';
 
@@ -10,10 +10,10 @@ const options = databaseConfig();
 const atomOptions = config.demo ? null : atomDatabaseConfig();
 const identityOptions = config.demo ? null : identityDatabaseConfig();
 const store = config.demo ? await new DemoStore(config.demoFile).init() : options ? atomOptions ? new AtomHistoryStore(new MysqlStore(options), new AtomReader(atomOptions, config.timezone)) : new MysqlStore(options) : new UnconfiguredStore();
-const evaluator = evaluatorFromEnv();
+const evaluator = registryFromEnv({ demo: config.demo });
 const identity = identityOptions ? identityOptions.mode === 'person-email' ? new Somos3cPersonIdentity(identityOptions) : new Somos3cIdentity(identityOptions) : null;
 const app = createApp(store, config, evaluator, identity);
-const stopScheduler = !config.demo && atomOptions && process.env.OPENAI_EVALUATION_ENABLED === 'true' && evaluator.configured
+const stopScheduler = !config.demo && atomOptions && evaluator.configured
   ? startDailyScheduler(store, evaluator) : () => {};
 const server = app.listen(config.port, config.host, () => {
   console.log(`Pulso API: http://${config.host}:${config.port}/pulso/api/health`);

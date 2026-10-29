@@ -13,7 +13,7 @@ export const config = {
   sessionHours: Number(process.env.SESSION_HOURS || 8),
   secureCookie: bool(process.env.COOKIE_SECURE),
   timezone: process.env.APP_TIMEZONE || 'America/Tegucigalpa',
-  demoFile: path.join(apiRoot, '.data', 'demo-store.json'),
+  demoFile: process.env.DEMO_FILE || path.join(apiRoot, '.data', 'demo-store.json'),
 };
 export function databaseConfig() {
   if (!process.env.APP_DB_HOST || !process.env.APP_DB_USER || !process.env.APP_DB_NAME) return null;

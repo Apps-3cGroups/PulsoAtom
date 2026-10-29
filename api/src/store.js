@@ -3,6 +3,7 @@ import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { createState } from './data/seed.js';
 import { missingDatabase } from './errors.js';
+import { ensureEvaluationState } from './evaluation-context.js';
 
 export class DemoStore {
   constructor(filename) { this.filename = filename; this.queue = Promise.resolve(); }
@@ -14,6 +15,7 @@ export class DemoStore {
       if (error.code !== 'ENOENT') throw error;
       this.state = createState(true); await this.persist(this.state);
     }
+    ensureEvaluationState(this.state);
     return this;
   }
   async persist(state) {
@@ -47,6 +49,9 @@ const tables = {
   catalog: 'catalog_items', catalogVersions: 'catalog_versions', catalogAudit: 'catalog_audit',
   users: 'users', sessions: 'sessions', evaluations: 'evaluations',
   reviews: 'review_events', jobs: 'evaluation_jobs',
+  operationalRefs: 'operational_refs', comparisons: 'comparison_samples', tasks: 'evaluation_tasks',
+  attempts: 'evaluation_attempts', verdicts: 'human_verdicts', exposures: 'evaluation_exposures', validations: 'validation_sessions',
+  modelPolicies: 'model_policies',
 };
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
 function emptyState() {
@@ -114,24 +119,25 @@ export class MysqlStore {
 export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
-  async readWithConversations() {
-    const [state, source] = await Promise.all([this.base.read(), this.reader.read()]);
+  async readWithConversations({ fresh = false } = {}) {
+    const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh })]);
     return this.attach(state, source);
   }
   attach(state, source) {
+    ensureEvaluationState(state);
     const latest = new Map();
-    for (const evaluation of state.evaluations) {
+    for (const evaluation of state.evaluations.filter(e => e.purpose !== 'comparison')) {
       const previous = latest.get(evaluation.conversationId);
       if (!previous || evaluation.createdAt > previous.createdAt) latest.set(evaluation.conversationId, evaluation);
     }
-    state.conversations = source.conversations.map(conversation => ({ ...conversation, evaluationId: latest.get(conversation.id)?.id || null }));
+    state.conversations = source.conversations.map(conversation => ({ ...conversation, evaluationId: state.operationalRefs.find(r => r.id === conversation.id)?.evaluationId || latest.get(conversation.id)?.id || null }));
     state.countries = source.countries;
     state.metadata = { ...state.metadata, source: 'Atom', lastLoadedAt: source.loadedAt };
     return state;
   }
   async transaction(fn) { return this.base.transaction(fn); }
   async transactionWithConversations(fn) {
-    const source = await this.reader.read();
+    const source = await this.reader.read({ fresh: true });
     return this.base.transaction(state => fn(this.attach(state, source)));
   }
   async close() { await Promise.all([this.base.close(), this.reader.close()]); }

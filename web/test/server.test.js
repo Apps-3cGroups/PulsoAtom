@@ -18,7 +18,7 @@ test('el servidor respeta /pulso, recarga rutas internas y conserva el prefijo d
   await new Promise(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    for (const route of ['/pulso', '/pulso/catalogo', '/pulso/conversacion/DEMO-MX-0001', '/pulso/evaluaciones']) {
+    for (const route of ['/pulso', '/pulso/catalogo', '/pulso/conversacion/DEMO-MX-0001', '/pulso/evaluaciones', '/pulso/comparacion', '/pulso/comparacion/sample/validar/case']) {
       const response = await fetch(`${origin}${route}`, { headers: { Accept: 'text/html' } });
       assert.equal(response.status, 200);
       assert.match(await response.text(), /<body>Pulso/);

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Select, Tooltip } from 'antd';
 import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, RightOutlined } from '@ant-design/icons';
@@ -6,6 +6,7 @@ import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
 import { PageHeading, LoadingState, ErrorState, EmptyState, Mark, PriorityTag, dateText, timeText, previousDate } from '../components/common';
 import QuickView from '../components/QuickView';
+import ModelViewSelector, { useEvaluationView } from '../components/ModelViewSelector';
 
 const legends = [['p1', 'P1'], ['p2', 'P2'], ['refuted', 'Refutado'], ['human', 'Por humano'], ['media', 'Multimedia'], ['coaching', 'Coaching']];
 const variableOptions = catalog => [
@@ -23,30 +24,32 @@ const variableOptions = catalog => [
 export default function Summary() {
   const { bootstrap } = usePortal();
   const navigate = useNavigate();
+  const { modelProfileId, withView } = useEvaluationView();
   const [range, setRange] = useState(4);
   const [country, setCountry] = useState();
   const [variable, setVariable] = useState();
   const [visible, setVisible] = useState(legends.map(([kind]) => kind));
   const [selected, setSelected] = useState(null);
   const selectedCell = useRef(null);
+  useEffect(() => { setSelected(null); }, [modelProfileId]);
   const latest = bootstrap.dateRange.max;
   const to = latest || new Date().toISOString().slice(0, 10);
   const from = previousDate(to, range - 1);
-  const { data, loading, error, reload } = useApi(`/summary?${queryString({ from, to, country })}`);
+  const { data, loading, error, reload } = useApi(`/summary?${queryString({ from, to, country, modelProfileId })}`);
   const days = useMemo(() => Array.from({ length: range }, (_, i) => previousDate(to, i)), [to, range]);
-  const open = c => navigate(`/conversacion/${encodeURIComponent(c.id)}`);
+  const open = c => navigate(withView(`/conversacion/${encodeURIComponent(c.id)}`));
   const closeQuickView = () => {
     setSelected(null);
     requestAnimationFrame(() => selectedCell.current?.focus());
   };
-  const openHistory = code => navigate(`/historico?${queryString({ from, to, country: code })}`);
+  const openHistory = code => navigate(withView(`/historico?${queryString({ from, to, country: code })}`));
   const toggle = kind => setVisible(current => current.includes(kind) ? current.filter(v => v !== kind) : [...current, kind]);
   const metrics = data?.metrics;
   const selectedView = data?.conversations?.find(c => c.id === selected?.id) || selected;
   const groups = bootstrap.countries.filter(c => !country || country === c.code);
-  return <div className="summary-page"><PageHeading eyebrow="VISIÓN REGIONAL" title="Resumen de conversaciones" description="Identifica lo que requiere atención y explora la evidencia." actions={<div className="period-note"><CalendarOutlined /><span>{latest ? `${dateText(from)} — ${dateText(to)}` : 'Sin datos cargados'}</span></div>} />{error ? <ErrorState error={error} retry={reload} /> : loading ? <LoadingState /> : <>
+  return <div className="summary-page"><PageHeading eyebrow="VISIÓN REGIONAL" title="Resumen de conversaciones" description={modelProfileId ? "Resultados originales de IA · Las conversaciones sin resultado del modelo permanecen pendientes." : "Identifica lo que requiere atención y explora la evidencia."} actions={<div className="summary-heading-actions"><ModelViewSelector /><div className="period-note"><CalendarOutlined /><span>{latest ? `${dateText(from)} — ${dateText(to)}` : 'Sin datos cargados'}</span></div></div>} />{error ? <ErrorState error={error} retry={reload} /> : loading ? <LoadingState /> : <>
     <div className="metrics-grid">
-      <Metric value={metrics.total.toLocaleString('es-HN')} label="Conversaciones" detail={`${metrics.evaluated} evaluadas · ${metrics.pending} pendientes`} />
+      <Metric value={modelProfileId ? `${metrics.evaluated}/${metrics.total}` : metrics.total.toLocaleString('es-HN')} label={modelProfileId ? "Cobertura del modelo" : "Conversaciones"} detail={`${metrics.evaluated} evaluadas · ${metrics.pending} pendientes`} />
       <Metric value={metrics.alertPercent === null ? '—' : `${metrics.alertPercent}%`} label="Con P1 o P2" detail={`${metrics.withAlerts} conversaciones con flags vigentes`} accent title="Conversaciones evaluadas con al menos un P1/P2 vigente, del sistema o humano, divididas entre conversaciones evaluadas del período." />
       <Metric value={metrics.refutedPercent === null ? '—' : `${metrics.refutedPercent}%`} label="Alertas refutadas" detail={`${metrics.refuted} de ${metrics.originalAlerts} alertas del sistema`} title="Flags P1/P2 del sistema refutados por un supervisor, divididos entre todos los flags P1/P2 originales del sistema en el período." />
       <Metric value={metrics.human} label="Levantadas por humanos" detail="Eventos detectados en la revisión" />

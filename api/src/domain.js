@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
+import { selectedEvaluation, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 
 export const catalogFields = z.object({
   name: z.string().trim().min(3).max(160), family: z.string().trim().min(3).max(120),
@@ -26,16 +27,17 @@ export function saveCatalogVersion(state, item, actor, action) {
 export function ensureVersion(item, expected) {
   if (item.version !== expected) throw new AppError(409, 'Otra persona modificó este registro. Recarga la información antes de guardar.', 'VERSION_CONFLICT');
 }
-export function viewContext(state) {
+export function viewContext(state, profileId) {
   return {
+    profileId,
     versions: new Map(state.catalogVersions.map(v => [v.id, v.snapshot])),
     evaluations: new Map(state.evaluations.map(e => [e.id, e])),
     reviews: Map.groupBy ? Map.groupBy(state.reviews, r => r.conversationId) : state.reviews.reduce((m, r) => m.set(r.conversationId, [...(m.get(r.conversationId) || []), r]), new Map()),
   };
 }
 export function conversationView(state, conversation, context = viewContext(state), detail = false) {
-  const evaluation = context.evaluations.get(conversation.evaluationId);
-  const reviews = (context.reviews.get(conversation.id) || []).filter(r => r.evaluationId === evaluation?.id);
+  const evaluation = selectedEvaluation(state, conversation, context.profileId);
+  const reviews = (context.profileId ? [] : context.reviews.get(conversation.id) || []).filter(r => r.evaluationId === evaluation?.id);
   const latest = new Map();
   for (const review of reviews) latest.set(review.variableId, review.action === 'deshacer' ? null : review);
   const resultMap = new Map((evaluation?.results || []).map(r => [r.variableId, r]));
@@ -44,24 +46,30 @@ export function conversationView(state, conversation, context = viewContext(stat
     const definition = context.versions.get(`${ref.id}:${ref.version}`);
     if (!definition) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
     const result = resultMap.get(ref.id) || { variableId: ref.id, status: 'no_evaluado', value: null, evidence: [] };
-    const review = latest.get(ref.id);
+    const verdict = latestVerdict(state, conversation.id, evaluation?.sourceHash, ref.id, ref.version);
+    let review = context.profileId ? null : latest.get(ref.id);
+    if (evaluation?.sourceHash && !context.profileId) {
+      review = verdict && verdict.outcome !== 'reverted' && ((verdict.outcome === 'absent' && result.value === 1) || (verdict.outcome === 'present' && result.value !== 1))
+        ? { ...verdict, action: verdict.outcome === 'absent' ? 'refutar' : 'levantar' } : null;
+    }
     let kind = null;
     if (review?.action === 'refutar') kind = 'refuted';
     else if (review?.action === 'levantar') kind = 'human';
     else if (result.status === 'evaluado' && result.value === 1 && definition.polarity === 'negativo') kind = definition.mark === 'P1' ? 'p1' : definition.mark === 'P2' ? 'p2' : 'coaching';
     const priority = ['P1', 'P2'].includes(definition.mark) ? definition.mark : null;
     const effective = kind && kind !== 'refuted';
-    return { ...definition, enabledInEvaluation: ref.active, result, review: review || null, kind, priority, effective: !!effective };
+    return { ...definition, enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, priority, effective: !!effective };
   });
   const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, effective: v.effective }));
   const p1 = marks.filter(m => m.effective && m.priority === 'P1').length;
   const p2 = marks.filter(m => m.effective && m.priority === 'P2').length;
   const originalAlerts = variables.filter(v => v.result.value === 1 && v.priority && v.polarity === 'negativo').length;
-  const base = { id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, p1, p2, marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.priority).length, human: marks.filter(m => m.kind === 'human').length };
-  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, createdAt: evaluation.createdAt, demo: evaluation.demo, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null, variables, reviews } : base;
+  const base = { id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId, p1, p2, marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.priority).length, human: marks.filter(m => m.kind === 'human').length };
+  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null, variables, reviews } : base;
 }
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
 export const listQuerySchema = z.object({
+  modelProfileId: z.string().max(160).optional(),
   from: dateOnly.optional(), to: dateOnly.optional(), country: z.string().max(10).optional(),
   agent: z.string().max(120).optional(), q: z.string().max(300).optional(), variable: z.string().max(160).optional(),
   priority: z.enum(['P1', 'P2', 'all']).optional(), status: z.enum(['evaluated', 'pending', 'all']).optional(),
@@ -69,7 +77,7 @@ export const listQuerySchema = z.object({
 }).refine(q => !q.from || !q.to || q.from <= q.to, 'La fecha inicial no puede ser posterior a la final.');
 const normalize = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 export function filteredConversations(state, query, textSearch = false) {
-  const context = viewContext(state);
+  const context = viewContext(state, query.modelProfileId);
   return state.conversations.filter(c => (!query.from || c.date >= query.from) && (!query.to || c.date <= query.to) && (!query.country || c.country === query.country) && (!query.agent || c.agent.id === query.agent)).map(c => {
     const view = conversationView(state, c, context);
     if (query.q) {
@@ -94,14 +102,16 @@ export function priorityOrder(a, b) {
 }
 export const reviewSchema = z.object({
   variableId: z.string().max(160), evaluationId: z.string().max(180),
-  expectedReviewId: z.string().nullable(), action: z.enum(['refutar', 'levantar', 'deshacer']),
+  expectedReviewId: z.string().nullable(), expectedVerdictId: z.string().nullable().optional(), action: z.enum(['refutar', 'levantar', 'deshacer']),
   reason: z.enum(['falso_positivo', 'evidencia_mal_interpretada', 'falta_contexto', 'omision_del_modelo', 'otro']),
   comment: z.string().trim().min(5).max(2000), messageId: z.string().max(200).optional(),
 }).strict();
 export function recordReview(state, conversationId, body, user) {
   const conversation = state.conversations.find(c => c.id === conversationId);
   if (!conversation) throw new AppError(404, 'No se encontró la conversación.');
-  if (conversation.evaluationId !== body.evaluationId) throw new AppError(409, 'La evaluación cambió. Recarga la conversación.', 'VERSION_CONFLICT');
+  const evaluation = selectedEvaluation(state, conversation);
+  if (evaluation?.id !== body.evaluationId) throw new AppError(409, 'La evaluación cambió. Recarga la conversación.', 'VERSION_CONFLICT');
+  if (evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation)) throw new AppError(409, 'La conversación cambió en Atom. Evalúa su contenido actual antes de revisar.', 'SOURCE_CHANGED');
   const view = conversationView(state, conversation, undefined, true);
   const variable = view.variables.find(v => v.id === body.variableId);
   if (!variable || !variable.enabledInEvaluation || !['Flag', 'Calculado'].includes(variable.type) || variable.polarity !== 'negativo' || variable.result.status !== 'evaluado') throw new AppError(422, 'Esta variable no tiene un resultado revisable en esta evaluación.');
@@ -114,5 +124,12 @@ export function recordReview(state, conversationId, body, user) {
   const message = conversation.messages.find(m => m.id === body.messageId);
   if (body.action === 'levantar' && !message) throw new AppError(422, 'Selecciona un mensaje de esta conversación como evidencia.');
   const review = { id: randomUUID(), conversationId, evaluationId: body.evaluationId, variableId: body.variableId, action: body.action, reason: body.reason, comment: body.comment, evidence: body.action === 'levantar' ? { messageId: message.id, quote: message.text } : null, authorId: user.id, authorName: user.name, createdAt: new Date().toISOString() };
+  if (evaluation.sourceHash) {
+    ensureEvaluationState(state);
+    const previous = latestVerdict(state, conversationId, evaluation.sourceHash, variable.id, variable.version);
+    if ((previous?.id || null) !== (body.expectedVerdictId || null)) throw new AppError(409, 'El dictamen común cambió. Recarga antes de guardar.', 'VERSION_CONFLICT');
+    state.verdicts.push({ ...review, sourceHash: evaluation.sourceHash, catalogVersion: variable.version,
+      outcome: body.action === 'refutar' ? 'absent' : body.action === 'levantar' ? 'present' : 'reverted', mode: 'assisted', comparisonId: null });
+  }
   state.reviews.push(review); return review;
 }
