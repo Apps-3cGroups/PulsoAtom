@@ -31,7 +31,7 @@ export default function Comparison() {
   const [selected, setSelected] = useState(null), [codeOpen, setCodeOpen] = useState(false);
   useEffect(() => { setSelected(null); setFilter('all'); setPriority('all'); setVariable('all'); }, [id, revealed, caseId]);
   useEffect(() => { if (request.data?.status === 'running') { const timer = setInterval(request.reload, 3000); return () => clearInterval(timer); } }, [request.data?.status, request.reload]);
-  const data = request.data?.id === id && request.data.revealed === revealed ? request.data : null;
+  const data = request.data && request.data.id === id && request.data.revealed === revealed ? request.data : null;
   const reveal = () => setParams({ sample: id, reveal: '1' });
   const validate = conversationId => navigate(`/comparacion/${id}/validar/${encodeURIComponent(conversationId)}`);
   const rows = (data?.rows || []).filter(r => (filter === 'all' || r.agreement === filter) && (priority === 'all' || r.variable.priority === priority) && (variable === 'all' || r.variable.id === variable));

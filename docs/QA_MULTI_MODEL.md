@@ -80,7 +80,7 @@ Se crearon ocho tablas y 16 referencias a evaluaciones operativas existentes. No
 
 ## Evidencia visual
 
-La inspección en navegador confirmó dimensiones del documento iguales al viewport en las tres pantallas y tamaños solicitados. El área interna de comparación mide 259, 374 y 554 px de alto respectivamente. Transcripción y checklist conservan desplazamiento independiente; el drawer mantiene sus acciones accesibles. No se registraron errores de consola en los recorridos de demo comprobados.
+La inspección en navegador confirmó dimensiones del documento iguales al viewport en las tres pantallas y tamaños solicitados. El área interna de comparación mide 259, 374 y 554 px de alto respectivamente. Transcripción y checklist conservan desplazamiento independiente; el drawer mantiene sus acciones accesibles. La comprobación final detectó y corrigió una lectura de `revealed` sobre datos nulos al entrar sin muestra seleccionada; se verificó de nuevo la entrada a comparación.
 
 ![Comparación con tres perfiles sintéticos a 1440×900](pulso-comparacion-demo.png)
 
