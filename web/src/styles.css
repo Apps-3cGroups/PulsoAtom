@@ -407,7 +407,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .integration-item h3 { font-size: 12px; font-weight: 500; }
 .integration-item p { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 7px 0; }
 .jobs-panel { margin-top: 10px; }
-.jobs-panel .ant-table-thead { display: none; }
 .login-page { padding: 34px 5vw 20px; min-height: 100vh; display: flex; flex-direction: column; max-width: 1600px; margin: auto; }
 .login-brand { display: flex; align-items: center; justify-content: space-between; }
 .login-brand .brand b { font-size: 34px; }
