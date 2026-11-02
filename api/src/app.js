@@ -264,7 +264,8 @@ export function createApp(store, config, evaluator = evaluatorFromEnv(), identit
     if (input.dailyEnabled && (config.demo || !store.readWithConversations || !integrationStatus().ready || !evaluator.configured)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y OpenAI en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
     const settings = await store.transaction(state => {
       ensureVersion(state.settings, expectedVersion);
-      state.settings = { ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
+      if (state.settings.evaluationMaintenance) throw new AppError(409, 'Espera a que termine la renovación del histórico.', 'EVALUATION_MAINTENANCE');
+      state.settings = { ...state.settings, ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
       return state.settings;
     });
     res.json({ settings });

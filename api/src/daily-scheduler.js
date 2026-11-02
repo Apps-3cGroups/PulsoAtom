@@ -11,7 +11,7 @@ export function scheduleClock(now, timezone) {
 
 export async function runDailyTick(store, evaluator, now = new Date()) {
   const { settings, jobs } = await store.read();
-  if (!settings.dailyEnabled || !settings.dailyStartedAt) return null;
+  if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
   const clock = scheduleClock(now, settings.timezone);
   if (clock.time < settings.dailyTime || jobs.some(job => job.scheduleDate === clock.date)) return null;
   const { job, completion } = await startEvaluationBatch(store, evaluator, {

@@ -114,15 +114,15 @@ export class MysqlStore {
 export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
-  async readWithConversations() {
-    const [state, source] = await Promise.all([this.base.read(), this.reader.read()]);
+  async readWithConversations({ fresh = false } = {}) {
+    const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh })]);
     return this.attach(state, source);
   }
   attach(state, source) {
     const latest = new Map();
     for (const evaluation of state.evaluations) {
       const previous = latest.get(evaluation.conversationId);
-      if (!previous || evaluation.createdAt > previous.createdAt) latest.set(evaluation.conversationId, evaluation);
+      if (!previous || evaluation.createdAt >= previous.createdAt) latest.set(evaluation.conversationId, evaluation);
     }
     state.conversations = source.conversations.map(conversation => ({ ...conversation, evaluationId: latest.get(conversation.id)?.id || null }));
     state.countries = source.countries;
