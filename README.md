@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI está implementado y se validó sobre cinco conversaciones reales; permanece cerrado por defecto para impedir nuevos lotes accidentales.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI evalúa las variables activas del checklist; cada instalación debe habilitar explícitamente la transferencia mediante su configuración.
 
 ## Abrir y ejecutar
 
@@ -59,7 +59,7 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Histórico y Búsqueda:** filtros de fechas, país, asistente, prioridad, estado y variable; búsqueda de mensajes con apertura de evidencia en contexto.
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
-- **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. El horario diario se puede guardar, pero su ejecución automática sigue inactiva.
+- **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. Programación diaria de hasta 100 conversaciones nuevas o con contenido nuevo, según la política de la instalación.
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -109,7 +109,7 @@ Para autorizar al primer administrador en otra instalación, ejecuta `cd api && 
 
 ### Origen Atom confirmado
 
-`dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. Falta acordar la URL de apertura en Atom y el criterio exacto para evaluar conversaciones que aún cambian.
+`dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. Las conversaciones abiertas pueden evaluarse provisionalmente; nuevos mensajes o el cierre las dejan pendientes de actualización. Una importación idéntica no genera una evaluación nueva.
 
 El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
@@ -121,13 +121,17 @@ En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/
 
 ### Evaluación con OpenAI
 
-La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las 12 definiciones activas, a Responses API. Solicita `store: false`, valida que los resultados incluyan las 12 variables y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
+La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las definiciones activas compatibles con IA, a Responses API. Solicita `store: false`, valida que los resultados incluyan todas las variables solicitadas y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
 
 La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). En esta instalación local ya se autorizó y habilitó para futuros lotes, y el portal está configurado en modo real. Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda de hasta 20 conversaciones. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md).
 
-La programación diaria se configura en el portal por un administrador. Al activarla, Pulso guarda la fecha de inicio y solo considera conversaciones completadas que Atom haya creado o actualizado desde entonces; el histórico anterior puede evaluarse a demanda. El servidor revisa el horario cada minuto en la zona seleccionada, procesa hasta 100 pendientes por día y registra una única ejecución por fecha. Debe estar encendido a la hora programada. El horario se debe fijar después de la carga diaria de Atom; la programación permanece inactiva hasta confirmarlo. Los fallos individuales quedan registrados y pueden retomarse manualmente mediante un lote de pendientes. La revisión automática de todas las conversaciones pendientes por encima del límite diario y los reintentos automáticos todavía no están implementados.
+La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y OpenAI. Los pendientes que superen el límite quedan para días posteriores.
 
-Solo se seleccionan conversaciones con fecha de cierre en Atom. Una conversación cuyo documento ya esté disponible pero todavía no tenga `FechaFinUtc` permanece pendiente; así no se marca prematuramente la ausencia de respuesta al último mensaje.
+Con `includeOpenConversations` y `refreshChangedConversations` habilitados en la configuración persistida, se incluyen conversaciones abiertas y cerradas. Las abiertas muestran «Evaluación provisional». Se compara la huella del texto, roles, IDs, fechas de mensajes, país y estado de cierre: una importación idéntica no repite la IA, mientras un mensaje nuevo o el cierre requieren actualizar el resultado. El horario conserva su fecha de inicio para seleccionar registros nuevos; las conversaciones ya evaluadas cuyo contenido cambió también se actualizan aunque Atom no cambie su fecha de actualización.
+
+Cada resultado conserva su huella y checklist. Si Atom cambia durante la llamada de IA, se rechaza ese resultado y el caso queda pendiente. Si cambia después, el portal advierte «Contenido nuevo» e impide una revisión humana sobre evidencia desactualizada. Una conversación abierta cuyo último mensaje es del cliente no recibe un flag definitivo de falta de respuesta. Los errores transitorios o respuestas inválidas tienen un único reintento; los fallos quedan registrados.
+
+La renovación completa del histórico utiliza comandos separados de los lotes ordinarios: respaldo verificado, limpieza transaccional y evaluación reanudable de una lista fija. Consulta [la guía de operación](docs/OPERACION_EVALUACIONES.md). No se ejecuta una limpieza al desplegar ni al iniciar el servidor.
 
 El almacenamiento MySQL inicial separa entidades en tablas con documentos JSON y conserva sus versiones. Antes de consultar un histórico grande se deben incorporar consultas paginadas en SQL e índices para el volumen real; el adaptador actual carga el histórico completo de Atom y el estado completo de Pulso. Esta entrega todavía no es una liberación de producción.
 

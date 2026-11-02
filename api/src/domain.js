@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
+import { sourceFingerprint } from './source-state.js';
 
 export const catalogFields = z.object({
   name: z.string().trim().min(3).max(160), family: z.string().trim().min(3).max(120),
@@ -57,8 +58,8 @@ export function conversationView(state, conversation, context = viewContext(stat
   const p1 = marks.filter(m => m.effective && m.priority === 'P1').length;
   const p2 = marks.filter(m => m.effective && m.priority === 'P2').length;
   const originalAlerts = variables.filter(v => v.result.value === 1 && v.priority && v.polarity === 'negativo').length;
-  const base = { id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, p1, p2, marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.priority).length, human: marks.filter(m => m.kind === 'human').length };
-  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, createdAt: evaluation.createdAt, demo: evaluation.demo, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null, variables, reviews } : base;
+  const base = { id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), p1, p2, marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.priority).length, human: marks.filter(m => m.kind === 'human').length };
+  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, createdAt: evaluation.createdAt, demo: evaluation.demo, provisional: !!evaluation.provisional, sourceChanged: base.sourceChanged, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null, variables, reviews } : base;
 }
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
 export const listQuerySchema = z.object({
@@ -103,6 +104,7 @@ export function recordReview(state, conversationId, body, user) {
   if (!conversation) throw new AppError(404, 'No se encontró la conversación.');
   if (conversation.evaluationId !== body.evaluationId) throw new AppError(409, 'La evaluación cambió. Recarga la conversación.', 'VERSION_CONFLICT');
   const view = conversationView(state, conversation, undefined, true);
+  if (view.sourceChanged) throw new AppError(409, 'Atom cambió desde la evaluación. Actualiza los resultados antes de revisarlos.', 'SOURCE_CHANGED');
   const variable = view.variables.find(v => v.id === body.variableId);
   if (!variable || !variable.enabledInEvaluation || !['Flag', 'Calculado'].includes(variable.type) || variable.polarity !== 'negativo' || variable.result.status !== 'evaluado') throw new AppError(422, 'Esta variable no tiene un resultado revisable en esta evaluación.');
   const history = view.reviews.filter(r => r.variableId === body.variableId);

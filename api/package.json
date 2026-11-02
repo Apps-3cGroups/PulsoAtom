@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20.19.0" },
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
@@ -13,7 +15,9 @@
     "user:create": "node scripts/create-user.js",
     "access:bootstrap": "node scripts/bootstrap-access.js",
     "eval:sample": "node scripts/evaluate-sample.js",
-    "eval:country": "node scripts/evaluate-country.js"
+    "eval:country": "node scripts/evaluate-country.js",
+    "eval:reset": "node scripts/reset-evaluations.js",
+    "eval:all": "node scripts/evaluate-all.js"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
@@ -24,5 +28,7 @@
     "mysql2": "^3.14.5",
     "zod": "^3.25.76"
   },
-  "devDependencies": { "supertest": "^7.1.4" }
+  "devDependencies": {
+    "supertest": "^7.1.4"
+  }
 }

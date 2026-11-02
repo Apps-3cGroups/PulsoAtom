@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
+import { currentEvaluation, needsEvaluation, sourceFingerprint } from './source-state.js';
 import { evaluateCodeVariable, supportsCodeVariable } from './code-evaluator.js';
 
 const supportsAiVariable = variable => variable.type === 'Flag' && ['IA', 'IA + código'].includes(variable.method);
 const supportsVariable = variable => supportsAiVariable(variable) || supportsCodeVariable(variable);
 
-export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter } = {}) {
-  return state.conversations.filter(c => c.messages.length && c.completed !== false && (!from || c.date >= from) && (!to || c.date <= to)
-    && (!country || c.country === country) && (!pendingOnly || !c.evaluationId) && (!sourceChangedAfter || (c.sourceCreatedAt >= sourceChangedAfter || c.sourceUpdatedAt >= sourceChangedAfter)));
+export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter, includeOpen = state.settings?.includeOpenConversations === true, refreshChanged = state.settings?.refreshChangedConversations === true } = {}) {
+  return state.conversations.filter(c => c.messages.length && (includeOpen || c.completed !== false) && (!from || c.date >= from) && (!to || c.date <= to)
+    && (!country || c.country === country) && (!pendingOnly || needsEvaluation(state, c, refreshChanged)) && (!sourceChangedAfter || (c.sourceCreatedAt >= sourceChangedAfter || c.sourceUpdatedAt >= sourceChangedAfter || (refreshChanged && !!currentEvaluation(state, c)?.sourceHash && needsEvaluation(state, c, true)))));
 }
 
 export async function evaluateConversation(store, evaluator, conversation, catalog, { replace = false } = {}) {
@@ -17,10 +18,14 @@ export async function evaluateConversation(store, evaluator, conversation, catal
   const answer = aiVariables.length ? await evaluator.evaluate(conversation, aiVariables) : { results: [], model: null, responseId: null, usage: null };
   const evaluation = {
     id: randomUUID(), conversationId: conversation.id, createdAt: new Date().toISOString(), demo: false,
+    sourceHash: sourceFingerprint(conversation), provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null,
     model: answer.model, providerResponseId: answer.responseId, usage: answer.usage,
     catalogVersions: catalog.map(v => ({ id: v.id, version: v.version, active: v.active })),
     results: [...answer.results, ...variables.filter(supportsCodeVariable).map(variable => evaluateCodeVariable(conversation, variable))],
   };
+  const fresh = await store.readWithConversations({ fresh: true });
+  const current = fresh.conversations.find(c => c.id === conversation.id);
+  if (!current || sourceFingerprint(current) !== evaluation.sourceHash) throw new AppError(409, 'Atom cambió durante la evaluación. Se conserva pendiente para evaluar el contenido nuevo.', 'SOURCE_CHANGED');
   await store.transaction(state => {
     if (!replace && state.evaluations.some(e => e.conversationId === conversation.id)) throw new AppError(409, 'La conversación ya tiene una evaluación guardada.', 'ALREADY_EVALUATED');
     for (const ref of evaluation.catalogVersions) {
@@ -32,9 +37,10 @@ export async function evaluateConversation(store, evaluator, conversation, catal
   return evaluation;
 }
 
-export async function startEvaluationBatch(store, evaluator, { from, to, country, pendingOnly = true, max = 100, random = false, conversationIds, sourceJobId, sourceChangedAfter, scheduleDate, onProgress } = {}) {
+export async function startEvaluationBatch(store, evaluator, { from, to, country, pendingOnly = true, max = 100, random = false, conversationIds, sourceJobId, sourceChangedAfter, scheduleDate, onProgress, maintenanceId, concurrency = 1 } = {}) {
   if (!evaluator.configured) throw new AppError(503, 'Falta configurar OpenAI.', 'AI_NOT_CONFIGURED');
-  const state = await store.readWithConversations();
+  const state = await store.readWithConversations({ fresh: true });
+  if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const catalog = state.catalog;
   const active = catalog.filter(v => v.active);
   if (!active.length || active.some(variable => !supportsVariable(variable))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
@@ -54,6 +60,7 @@ export async function startEvaluationBatch(store, evaluator, { from, to, country
     total: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), finishedAt: null };
   await store.transaction(draft => {
+    if (draft.settings.evaluationMaintenance && draft.settings.evaluationMaintenance !== maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
     if (scheduleDate) {
       if (!draft.settings.dailyEnabled || draft.settings.dailyStartedAt !== sourceChangedAfter) throw new AppError(409, 'La programación diaria cambió.', 'SCHEDULE_CHANGED');
       if (draft.jobs.some(j => j.scheduleDate === scheduleDate)) throw new AppError(409, 'La ejecución diaria ya se inició.', 'DAILY_ALREADY_STARTED');
@@ -67,14 +74,33 @@ export async function startEvaluationBatch(store, evaluator, { from, to, country
     if (draft.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
     draft.jobs.push(job);
   });
-  const completion = processEvaluationJob(store, evaluator, job, candidates, catalog, pendingOnly, onProgress);
+  const completion = processEvaluationJob(store, evaluator, job, candidates, catalog, pendingOnly, onProgress, concurrency);
   return { job, completion };
 }
 
-async function processEvaluationJob(store, evaluator, job, candidates, catalog, pendingOnly, onProgress) {
-  for (const conversation of candidates) {
+async function processEvaluationJob(store, evaluator, job, candidates, catalog, pendingOnly, onProgress, concurrency = 1) {
+  const queue = [...candidates];
+  const worker = async () => {
+  while (queue.length) {
+    const conversation = queue.shift();
     let error = null;
-    try { await evaluateConversation(store, evaluator, conversation, catalog, { replace: !pendingOnly }); }
+    try {
+      const fresh = await store.readWithConversations({ fresh: true });
+      const current = fresh.conversations.find(c => c.id === conversation.id);
+      if (!current) throw new AppError(409, 'La conversación ya no está disponible en Atom.', 'SOURCE_CHANGED');
+      if (pendingOnly && !needsEvaluation(fresh, current, fresh.settings.refreshChangedConversations === true)) {
+        await store.transaction(draft => { const j = draft.jobs.find(j => j.id === job.id); j.completed++; j.updatedAt = new Date().toISOString(); });
+        continue;
+      }
+      // One retry for transient provider failures or structurally invalid responses.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try { await evaluateConversation(store, evaluator, current, catalog, { replace: !pendingOnly || !!currentEvaluation(fresh, current) }); break; }
+        catch (error) {
+          if (attempt || !['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT'].includes(error.code)) throw error;
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+    }
     catch (caught) { error = caught; }
     await store.transaction(draft => {
       const current = draft.jobs.find(j => j.id === job.id);
@@ -84,6 +110,8 @@ async function processEvaluationJob(store, evaluator, job, candidates, catalog, 
     });
     if (onProgress) await onProgress({ conversationId: conversation.id, error: error?.message || null });
   }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, Math.max(1, Number(concurrency) || 1), candidates.length) }, worker));
   await store.transaction(draft => {
     const current = draft.jobs.find(j => j.id === job.id);
     current.status = current.failed ? (current.completed ? 'partial' : 'failed') : 'completed';
