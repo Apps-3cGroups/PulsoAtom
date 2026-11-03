@@ -4,6 +4,7 @@ import { Button } from 'antd';
 import { usePortal } from './hooks';
 import { LoadingState } from './components/common';
 
+const Active = lazy(() => import('./pages/Active'));
 const Summary = lazy(() => import('./pages/Summary'));
 const Conversations = lazy(() => import('./pages/Conversations'));
 const Conversation = lazy(() => import('./pages/Conversation'));
@@ -20,6 +21,7 @@ export default function PortalRoutes() {
   return <Suspense fallback={<LoadingState />}>
     <Routes>
       <Route path="/" element={<Summary />} />
+      <Route path="/activas" element={<Active />} />
       <Route path="/historico" element={<Conversations />} />
       <Route path="/busqueda" element={<Conversations search />} />
       <Route path="/conversacion" element={<Conversation />} />

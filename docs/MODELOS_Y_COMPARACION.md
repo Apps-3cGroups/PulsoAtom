@@ -11,7 +11,7 @@
 7. **Ver comparación** abre los resultados guardados. Filtra acuerdos, discrepancias, pendientes, prioridad o variable. Pulsa una fila para ver razones, citas y dictamen común.
 8. En el historial de Evaluaciones, **Detalle** muestra intentos. **Reanudar pendientes y fallidos** conserva éxitos y verifica el origen. Un trabajo sin latido durante 10 minutos se identifica como interrumpido al consultar su estado.
 
-Las refutaciones siguen disponibles en la vista rápida operativa. Los flags nuevos requieren leer la conversación completa o guardar un checklist completo en validación. El laboratorio y los endpoints de perfiles, comparaciones e intentos requieren administrador. Los supervisores conservan la revisión operativa y pueden guardar un dictamen a ciegas mediante el enlace de validación de una conversación, sin acceso al laboratorio administrativo. En el detalle operativo sí pueden consultar las dos respuestas del flag.
+Las refutaciones se realizan desde la vista de conversación, a la que se accede directamente al pulsar una conversación en el dashboard. Los flags nuevos requieren leer la conversación completa o guardar un checklist completo en validación. El laboratorio y los endpoints de perfiles, comparaciones e intentos requieren administrador. Los supervisores conservan la revisión operativa y pueden guardar un dictamen a ciegas mediante el enlace de validación de una conversación, sin acceso al laboratorio administrativo. En el detalle operativo sí pueden consultar las dos respuestas del flag.
 
 ## Configuración del backend
 
@@ -101,7 +101,7 @@ En Evaluaciones → Herramientas internas → Revisión y contingencia, seleccio
 - La vista operativa combina las detecciones: una variable detectada por cualquiera aparece una sola vez. No se guardan respuestas agregadas fingiendo que las produjo un modelo.
 - Dos detecciones independientes: **Coinciden 2 modelos**. Una detección frente a un cero: **Discrepancia · requiere revisión**. Fallo o abstención: **comparación incompleta**. No se calcula un porcentaje de certeza.
 - Un cero y una abstención/fallo no equivalen a ausencia confirmada: el resultado agregado queda sin conclusión. Los cálculos se ejecutan una vez por conversación y no votan. Las reglas híbridas muestran la respuesta de IA y el ajuste de código, sin convertir la coincidencia impuesta en consenso.
-- La vista rápida muestra GPT/Gemini, resultado, justificación, citas y versión del criterio. Se puede refutar el flag compartido; levantar uno omitido requiere la conversación completa. Autor, motivo, fecha y evidencia originales se conservan.
+- La vista de conversación permite consultar GPT/Gemini, resultado, justificación, citas y versión del criterio. Se puede refutar el flag compartido; levantar uno omitido requiere la conversación completa. Autor, motivo, fecha y evidencia originales se conservan.
 - Si GPT falla técnicamente tras su reintento, Gemini se evalúa una vez como segunda revisión y puede mantener el resultado operativo. No se llama a Gemini otra vez como un respaldo adicional. Un fallo de configuración, entrada o seguridad del principal no publica al secundario como sustitución automática.
 - **Detalle → Reanudar pendientes y fallidos** reanuda solo las tareas no completadas. Cambios de contenido, checklist, instrucciones, modelo o una ejecución operativa posterior impiden reutilizar un caso incompatible.
 - El historial distingue conversaciones de revisiones: 20 conversaciones en modo dual producen hasta 40 revisiones, además de los reintentos técnicos registrados por separado.

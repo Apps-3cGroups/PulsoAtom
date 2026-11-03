@@ -1,3 +1,4 @@
+import { defaultDateRange } from '../services/dateRange';
 import { ModelControls, JobActions, jobStatus } from '../components/ModelControls';
 import ScheduleCard from '../components/ScheduleCard';
 import { useEffect, useRef, useState } from 'react';
@@ -10,14 +11,15 @@ import { PageHeading, LoadingState, ErrorState, EmptyState, dateText } from '../
 
 export default function Evaluations() {
   const request = useApi('/evaluations');
-  const { user } = usePortal();
+  const { user, bootstrap } = usePortal();
+  const defaults = defaultDateRange(bootstrap.dateRange.max, bootstrap.timezone);
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const section = params.get('seccion') === 'modelos' ? 'models' : 'operation';
   const requestKey = useRef({ body: null, id: null });
   const [scope, setScope] = useState('new');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  const [from, setFrom] = useState(defaults.from);
+  const [to, setTo] = useState(defaults.to);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
   const { message } = App.useApp();
