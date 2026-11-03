@@ -20,7 +20,7 @@ test('el servidor respeta /pulsoAtom, recarga rutas internas y conserva el prefi
   await new Promise(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    for (const route of ['/pulsoAtom', '/pulsoAtom/catalogo', '/pulsoAtom/conversacion/DEMO-MX-0001', '/pulsoAtom/evaluaciones', '/pulsoAtom/comparacion', '/pulsoAtom/comparacion/sample/validar/case']) {
+    for (const route of ['/pulsoAtom', '/pulsoAtom/catalogo', '/pulsoAtom/activas', '/pulsoAtom/conversacion/DEMO-MX-0001', '/pulsoAtom/evaluaciones', '/pulsoAtom/comparacion', '/pulsoAtom/comparacion/sample/validar/case']) {
       const response = await fetch(`${origin}${route}`, { headers: { Accept: 'text/html' } });
       assert.equal(response.status, 200);
       assert.match(await response.text(), /<body>Pulso/);
@@ -52,7 +52,7 @@ test('una subruta alternativa conserva recargas, recursos y el prefijo exacto de
   await new Promise(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    for (const route of ['/operacion/pulsoAtom', '/operacion/pulsoAtom/catalogo', '/operacion/pulsoAtom/conversacion/42']) {
+    for (const route of ['/operacion/pulsoAtom', '/operacion/pulsoAtom/catalogo', '/operacion/pulsoAtom/activas', '/operacion/pulsoAtom/conversacion/42']) {
       const response = await fetch(`${origin}${route}`, { headers: { Accept: 'text/html' } });
       assert.equal(response.status, 200);
       assert.match(await response.text(), /Custom Pulso/);
