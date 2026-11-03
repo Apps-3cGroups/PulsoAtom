@@ -1,3 +1,4 @@
+import { defaultDateRange } from '../services/dateRange';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Input, Table, Tag } from 'antd';
 import { ArrowRightOutlined, SearchOutlined } from '@ant-design/icons';
@@ -12,7 +13,8 @@ export default function Conversations({ search = false }) {
   const query = params.get('q') || '';
   const setQuery = q => setParams(queryString({ ...Object.fromEntries(params), q, page: 1 }), { replace: true });
   const debounced = useDebounced(query);
-  const value = { from: params.get('from') || bootstrap.dateRange.min || '', to: params.get('to') || bootstrap.dateRange.max || '', country: params.get('country') || '', agent: params.get('agent') || '', priority: params.get('priority') || 'all', status: params.get('status') || 'all', variable: params.get('variable') || '', page: Number(params.get('page')) || 1, pageSize: Number(params.get('pageSize')) || 15 };
+  const defaults = defaultDateRange(bootstrap.dateRange.max, bootstrap.timezone);
+  const value = { from: params.get('from') ?? defaults.from, to: params.get('to') ?? defaults.to, country: params.get('country') || '', agent: params.get('agent') || '', priority: params.get('priority') || 'all', status: params.get('status') || 'all', variable: params.get('variable') || '', page: Number(params.get('page')) || 1, pageSize: Number(params.get('pageSize')) || 15 };
   const invalidRange = value.from && value.to && value.from > value.to;
   const request = useApi(invalidRange ? null : `${search ? '/search' : '/conversations'}?${queryString({ ...value, q: debounced })}`);
   const update = next => setParams(queryString({ ...next, q: query }), { replace: true });
