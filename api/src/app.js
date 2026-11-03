@@ -66,9 +66,9 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     next();
   });
   app.get(`${prefix}/health`, async (_req, res) => {
-    let storageReady = true;
-    try { await store.read(); } catch { storageReady = false; }
-    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: status().ready });
+    let storageReady = true, state;
+    try { state = await store.read(); } catch { storageReady = false; }
+    res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: storageReady && status(state).ready });
   });
   app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
