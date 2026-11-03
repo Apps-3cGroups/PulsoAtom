@@ -32,7 +32,8 @@ export default function Summary() {
   const latest = bootstrap.dateRange.max;
   const to = latest || new Date().toISOString().slice(0, 10);
   const from = previousDate(to, range - 1);
-  const { data, loading, error, reload } = useApi(`/summary?${queryString({ from, to, country })}`);
+  const summaryPath = `/summary?${queryString({ from, to, country })}`;
+  const { data, dataPath, error, reload } = useApi(summaryPath);
   const days = useMemo(() => Array.from({ length: range }, (_, i) => previousDate(to, i)), [to, range]);
   const open = c => navigate(`/conversacion/${encodeURIComponent(c.id)}`);
   const closeQuickView = () => {
@@ -44,7 +45,7 @@ export default function Summary() {
   const metrics = data?.metrics;
   const selectedView = data?.conversations?.find(c => c.id === selected?.id) || selected;
   const groups = bootstrap.countries.filter(c => !country || country === c.code);
-  return <div className="summary-page"><PageHeading eyebrow="VISIÓN REGIONAL" title="Resumen de conversaciones" description="Identifica lo que requiere atención y explora la evidencia." actions={<div className="period-note"><CalendarOutlined /><span>{latest ? `${dateText(from)} — ${dateText(to)}` : 'Sin datos cargados'}</span></div>} />{error ? <ErrorState error={error} retry={reload} /> : loading ? <LoadingState /> : <>
+  return <div className="summary-page"><PageHeading eyebrow="VISIÓN REGIONAL" title="Resumen de conversaciones" description="Identifica lo que requiere atención y explora la evidencia." actions={<div className="summary-heading-actions"><div className="period-note"><CalendarOutlined /><span>{latest ? `${dateText(from)} — ${dateText(to)}` : 'Sin datos cargados'}</span></div></div>} />{error ? <ErrorState error={error} retry={reload} /> : !data || dataPath !== summaryPath ? <LoadingState /> : <>
     <div className="metrics-grid">
       <Metric value={metrics.total.toLocaleString('es-HN')} label="Conversaciones" detail={`${metrics.evaluated} evaluadas · ${metrics.pending} pendientes`} />
       <Metric value={metrics.alertPercent === null ? '—' : `${metrics.alertPercent}%`} label="Con P1 o P2" detail={`${metrics.withAlerts} conversaciones con flags vigentes`} accent title="Conversaciones evaluadas con al menos un P1/P2 vigente, del sistema o humano, divididas entre conversaciones evaluadas del período." />

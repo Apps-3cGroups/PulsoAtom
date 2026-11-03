@@ -176,3 +176,10 @@ python3 api/scripts/import-catalog.py \
   --workbook /ruta/Catalogo_variables_calidad_contact_center_v2_1_1.xlsx \
   --prototype /ruta/Pulso_prototipo.html
 ```
+
+
+### Doble revisión GPT / Gemini
+
+La rama de doble revisión añade dos respuestas independientes por conversación y un único flag operativo. Desde el flag se consultan razones y citas lado a lado; la revisión humana conserva los originales. Administración configura doble revisión o principal con respaldo en **Evaluaciones → Herramientas internas**.
+
+Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. La configuración de Gemini y el piloto real permanecen pendientes; no se habilita ni se reevalúa el histórico al instalar. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).

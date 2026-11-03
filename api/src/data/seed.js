@@ -24,6 +24,7 @@ export function createState(demo = true) {
     schemaVersion: 1, catalog,
     catalogVersions: catalog.map(item => ({ id: `${item.id}:1`, itemId: item.id, version: 1, snapshot: structuredClone(item), actor: 'Importación inicial del Excel', createdAt })),
     catalogAudit: [], users: [], sessions: [], conversations: [], evaluations: [], reviews: [], jobs: [],
+    operationalRefs: [], comparisons: [], tasks: [], attempts: [], verdicts: [], exposures: [], validations: [],
     settings: { dailyEnabled: false, dailyTime: '07:00', timezone: 'America/Tegucigalpa', version: 1 },
     metadata: { demo, lastLoadedAt: demo ? createdAt : null, source: demo ? 'Datos de demostración' : 'Atom pendiente de conexión' },
   };

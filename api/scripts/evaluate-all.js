@@ -3,14 +3,14 @@ import path from 'node:path';
 import { apiRoot, config, atomDatabaseConfig, databaseConfig } from '../src/config.js';
 import { MysqlStore, AtomHistoryStore } from '../src/store.js';
 import { AtomReader } from '../src/atom.js';
-import { evaluatorFromEnv } from '../src/evaluator.js';
+import { registryFromEnv } from '../src/model-registry.js';
 import { eligibleConversations, runEvaluationBatch } from '../src/evaluation-service.js';
 import { currentEvaluation, sourceFingerprint } from '../src/source-state.js';
 
 if (!process.argv.includes('--execute') || process.env.OPENAI_EVALUATION_ENABLED !== 'true') throw new Error('Requiere --execute y OPENAI_EVALUATION_ENABLED=true.');
 const base = new MysqlStore(databaseConfig());
 const store = new AtomHistoryStore(base, new AtomReader(atomDatabaseConfig(), config.timezone));
-const evaluator = evaluatorFromEnv();
+const evaluator = registryFromEnv();
 const directory = path.join(apiRoot, '.data', 'backfills');
 let manifest, filename;
 const persist = async () => { await writeFile(`${filename}.tmp`, JSON.stringify(manifest, null, 2), { mode: 0o600 }); await rename(`${filename}.tmp`, filename); };
@@ -35,7 +35,7 @@ try {
       conversationIds: eligibleConversations(state, { pendingOnly: false, includeOpen: true }).map(c=>c.id), jobs: [] };
     await persist();
   }
-  console.log(JSON.stringify({ event: 'start', total: manifest.conversationIds.length, model: evaluator.model, manifest: filename }));
+  console.log(JSON.stringify({ event: 'start', total: manifest.conversationIds.length, models: evaluator.list().map(p=>({id:p.id,model:p.model,available:p.available})), manifest: filename }));
   // A maximum of three passes; failed cases remain explicitly pending, never fabricated.
   for (let pass = 1; pass <= 3; pass++) {
     state = await store.readWithConversations({ fresh: true });
