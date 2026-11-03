@@ -1,14 +1,15 @@
 import { config, atomDatabaseConfig, databaseConfig } from '../src/config.js';
 import { MysqlStore, AtomHistoryStore } from '../src/store.js';
 import { AtomReader } from '../src/atom.js';
-import { evaluatorFromEnv } from '../src/evaluator.js';
+import { registryFromEnv } from '../src/model-registry.js';
+import { selectedEvaluation } from '../src/evaluation-context.js';
 import { runEvaluationBatch } from '../src/evaluation-service.js';
 
 const appDb = databaseConfig();
 const atomDb = atomDatabaseConfig();
-const evaluator = evaluatorFromEnv();
-if (!appDb || !atomDb || !evaluator.configured || process.env.OPENAI_EVALUATION_ENABLED !== 'true') {
-  console.error('La muestra requiere APP_DB_*, ATOM_DB_*, OPENAI_* y OPENAI_EVALUATION_ENABLED=true.');
+const evaluator = registryFromEnv();
+if (!appDb || !atomDb || !evaluator.configured) {
+  console.error('La muestra requiere APP_DB_*, ATOM_DB_*, un perfil de IA configurado y habilitado.');
   process.exitCode = 1;
 } else {
   const store = new AtomHistoryStore(new MysqlStore(appDb), new AtomReader(atomDb, config.timezone));
@@ -24,7 +25,7 @@ if (!appDb || !atomDb || !evaluator.configured || process.env.OPENAI_EVALUATION_
     const state = await store.read();
     console.log(JSON.stringify({ jobId: job.id, status: job.status, completed: job.completed, failed: job.failed,
       results: job.conversationIds.map(id => {
-        const evaluation = state.evaluations.filter(e => e.conversationId === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).at(-1);
+        const evaluation = selectedEvaluation(state, { id });
         return { conversationId: id, evaluated: !!evaluation,
           alerts: evaluation?.results.filter(r => r.value === 1).map(r => ({ variableId: r.variableId, evidenceIds: r.evidence.map(e => e.messageId) })) || [],
           error: job.errors.find(e => e.conversationId === id)?.message || null };

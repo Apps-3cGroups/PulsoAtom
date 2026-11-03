@@ -1,3 +1,4 @@
+import { selectedEvaluation } from './evaluation-context.js';
 import { createHash } from 'node:crypto';
 
 // Hash the evaluable content, not ingestion timestamps. A repeated import is not a new review.
@@ -7,8 +8,8 @@ export const sourceFingerprint = c => createHash('sha256').update(JSON.stringify
 })).digest('hex');
 
 export function currentEvaluation(state, conversation) {
-  return state.evaluations?.find(e => e.id === conversation.evaluationId)
-    || state.evaluations?.slice().reverse().filter(e => e.conversationId === conversation.id && e.purpose !== 'comparison')
+  return selectedEvaluation(state, conversation)
+    || state.evaluations?.slice().reverse().filter(e => e.conversationId === conversation.id && e.purpose !== 'comparison' && !e.taskId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 export function needsEvaluation(state, conversation, refreshChanged = false) {
