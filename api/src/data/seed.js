@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { CATALOG_REVISION, migrateCatalogV5 } from '../catalog-v5.js';
 
 export const initialCatalog = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
+const legacyCatalog = JSON.parse(readFileSync(new URL('./catalog-legacy.json', import.meta.url), 'utf8'));
 export const countries = [
   { code: 'MX', name: 'México', agents: ['Karla Méndez', 'Jorge Salinas', 'Daniela Ruiz'] },
   { code: 'GT', name: 'Guatemala', agents: ['Ana Lucía Pérez', 'Kevin Monzón', 'Gabriela Ixcot'] },
@@ -19,7 +21,8 @@ const situations = [
 ];
 export function createState(demo = true) {
   const createdAt = '2026-10-26T14:00:00.000Z';
-  const catalog = structuredClone(initialCatalog);
+  // Existing synthetic cases remain an explicit historical fixture, never relabelled as v5 results.
+  const catalog = structuredClone(demo ? legacyCatalog : initialCatalog);
   const state = {
     schemaVersion: 1, catalog,
     catalogVersions: catalog.map(item => ({ id: `${item.id}:1`, itemId: item.id, version: 1, snapshot: structuredClone(item), actor: 'Importación inicial del Excel', createdAt })),
@@ -28,7 +31,7 @@ export function createState(demo = true) {
     settings: { dailyEnabled: false, dailyTime: '07:00', timezone: 'America/Tegucigalpa', version: 1 },
     metadata: { demo, lastLoadedAt: demo ? createdAt : null, source: demo ? 'Datos de demostración' : 'Atom pendiente de conexión' },
   };
-  if (!demo) return state;
+  if (!demo) { state.metadata.catalogRevision = CATALOG_REVISION; return state; }
   state.users = [
     { id: 'demo-admin', name: 'Administración demo', email: 'admin@demo.pulso', role: 'admin', active: true },
     { id: 'demo-supervisor', name: 'Supervisión demo', email: 'supervisor@demo.pulso', role: 'supervisor', active: true },
@@ -74,5 +77,6 @@ export function createState(demo = true) {
     if (evaluated && flagged && index % 15 === 0) state.reviews.push({ id: `ref-${id}`, conversationId: id, evaluationId: `eval-${id}`, variableId: situation.flags[0], action: 'refutar', reason: 'falta_contexto', comment: 'Ejemplo de refutación: la frase se refería a una solicitud anterior.', authorId: 'demo-supervisor', authorName: 'Supervisión demo', createdAt });
     if (evaluated && !flagged && index % 11 === 0) state.reviews.push({ id: `human-${id}`, conversationId: id, evaluationId: `eval-${id}`, variableId: 'asistente_no_respondio_ultimo_mensaje', action: 'levantar', reason: 'omision_del_modelo', comment: 'Ejemplo de flag humano: la respuesta no confirma la información solicitada.', evidence: { messageId: messages[0].id, quote: messages[0].text }, authorId: 'demo-supervisor', authorName: 'Supervisión demo', createdAt });
   }
+  migrateCatalogV5(state, { now: createdAt });
   return state;
 }

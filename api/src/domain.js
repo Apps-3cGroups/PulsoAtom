@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
 import { selectedEvaluation, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
+import { classificationOf, catalogAvailability, currentCatalog } from './catalog-presentation.js';
 
 export const catalogFields = z.object({
   name: z.string().trim().min(3).max(160), family: z.string().trim().min(3).max(120),
   type: z.enum(['Flag', 'Métrica', 'Descriptor', 'Calculado']),
-  mark: z.enum(['', 'P1', 'P2', '+', 'cat', 'sis', 't']),
+  mark: z.enum(['', 'Crítico', 'P1', 'P2', '+', 'cat', 'sis', 't']),
   definition: z.string().trim().min(8).max(5000), method: z.enum(['IA', 'Código', 'IA + código', 'Cálculo']),
   phase: z.number().int().min(1).max(3), condition: z.string().trim().max(5000).default(''),
   polarity: z.enum(['negativo', 'positivo', 'contexto']).nullable(), active: z.boolean(),
@@ -15,8 +16,12 @@ export const createCatalogSchema = catalogFields.extend({ variable: z.string().t
 export const updateCatalogSchema = catalogFields.extend({ expectedVersion: z.number().int().positive() });
 export const batchSchema = z.object({ items: z.array(z.object({ id: z.string().max(160), version: z.number().int().positive() })).min(1).max(500), active: z.boolean() }).strict();
 export function validateCatalog(item) {
+  if (item.retired && item.active) throw new AppError(422, 'Una variable retirada no se puede activar.', 'RETIRED_VARIABLE');
   if (item.template && item.active) throw new AppError(422, 'Las plantillas de guion no se pueden activar. Crea una variable con un punto concreto.', 'TEMPLATE_NOT_EVALUABLE');
-  if (['P1', 'P2'].includes(item.mark) && (!['Flag', 'Calculado'].includes(item.type) || item.polarity !== 'negativo')) throw new AppError(422, 'P1 y P2 requieren un flag o calculado con polaridad negativa.', 'INVALID_PRIORITY');
+  const availability = catalogAvailability(item);
+  if (item.active && !availability.canActivate) throw new AppError(422, availability.reason, 'VARIABLE_NOT_READY');
+  if (['Crítico', 'P1', 'P2'].includes(item.mark) && (!['Flag', 'Calculado'].includes(item.type) || item.polarity === 'positivo')) throw new AppError(422, 'La clasificación de alerta requiere un flag o calculado no positivo.', 'INVALID_PRIORITY');
+  if (item.mark === '+' && !['Flag', 'Calculado'].includes(item.type)) throw new AppError(422, 'Solo un flag puede tener una marca positiva.', 'INVALID_POLARITY');
   if (item.mark === '+' && item.polarity !== 'positivo') throw new AppError(422, 'La marca positiva requiere polaridad positiva.', 'INVALID_POLARITY');
 }
 export function saveCatalogVersion(state, item, actor, action) {
@@ -41,7 +46,7 @@ export function conversationView(state, conversation, context = viewContext(stat
   const latest = new Map();
   for (const review of reviews) latest.set(review.variableId, review.action === 'deshacer' ? null : review);
   const resultMap = new Map((evaluation?.results || []).map(r => [r.variableId, r]));
-  const scope = evaluation?.catalogVersions || state.catalog.map(v => ({ id: v.id, version: v.version, active: v.active }));
+  const scope = evaluation?.catalogVersions || currentCatalog(state).map(v => ({ id: v.id, version: v.version, active: v.active }));
   const variables = scope.map(ref => {
     const definition = context.versions.get(`${ref.id}:${ref.version}`);
     if (!definition) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
@@ -52,27 +57,37 @@ export function conversationView(state, conversation, context = viewContext(stat
       review = verdict && verdict.outcome !== 'reverted' && ((verdict.outcome === 'absent' && result.value === 1) || (verdict.outcome === 'present' && result.value !== 1))
         ? { ...verdict, action: verdict.outcome === 'absent' ? 'refutar' : 'levantar' } : null;
     }
+    const classification = classificationOf(definition);
     let kind = null;
-    if (review?.action === 'refutar') kind = 'refuted';
-    else if (review?.action === 'levantar') kind = 'human';
-    else if (result.status === 'evaluado' && result.value === 1 && definition.polarity === 'negativo') kind = definition.mark === 'P1' ? 'p1' : definition.mark === 'P2' ? 'p2' : 'coaching';
-    const priority = ['P1', 'P2'].includes(definition.mark) ? definition.mark : null;
-    const effective = kind && kind !== 'refuted';
-    return { ...definition, enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, priority, effective: !!effective };
+    if (classification && review?.action === 'refutar') kind = 'refuted';
+    else if (classification && review?.action === 'levantar') kind = 'human';
+    else if (classification && result.status === 'evaluado' && result.value === 1) kind = classification;
+    const priority = classification === 'critical' ? 'Crítico' : classification === 'normal' ? 'Normal' : null;
+    const effective = !!kind && kind !== 'refuted';
+    const dualDetected = effective && result.comparison?.agreement === 'agree-positive' && result.comparison?.detections === 2 && result.comparison?.votes === 2 && !result.codeRule;
+    return { ...definition, availability: catalogAvailability(definition), enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected };
   });
-  const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, effective: v.effective }));
-  const p1 = marks.filter(m => m.effective && m.priority === 'P1').length;
-  const p2 = marks.filter(m => m.effective && m.priority === 'P2').length;
-  const originalAlerts = variables.filter(v => v.result.value === 1 && v.priority && v.polarity === 'negativo').length;
-  const base = { provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId, p1, p2, marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.priority).length, human: marks.filter(m => m.kind === 'human').length };
-  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: !!evaluation.modelReviewPending, provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null, variables, reviews } : base;
+  const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, classification: v.classification, origin: v.origin, effective: v.effective, dualDetected: v.dualDetected,
+    comparison: v.result.comparison ? Object.fromEntries(['agreement', 'detections', 'votes', 'expected', 'missing', 'label'].map(k => [k, v.result.comparison[k]])) : null }));
+  const p1 = marks.filter(m => m.effective && m.classification === 'critical').length;
+  const p2 = marks.filter(m => m.effective && m.classification === 'normal').length;
+  const positive = marks.filter(m => m.effective && m.classification === 'positive').length;
+  const originalAlerts = variables.filter(v => v.result.status === 'evaluado' && v.result.value === 1 && ['critical', 'normal'].includes(v.classification)).length;
+  const pendingFlags = evaluation ? variables.filter(v => v.enabledInEvaluation && v.classification && v.result.status !== 'evaluado' && !v.review).length : 0;
+  const evaluationErrors = variables.filter(v => v.enabledInEvaluation && (v.result.error || v.result.comparison?.cells?.some(cell => cell.error))).length;
+  const base = { provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
+    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, evaluationErrors, evaluationIncomplete: !!evaluation && (pendingFlags > 0 || evaluationErrors > 0), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
+  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: !!evaluation.modelReviewPending, provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
+    metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : base;
 }
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
 export const listQuerySchema = z.object({
   modelProfileId: z.string().max(160).optional(),
   from: dateOnly.optional(), to: dateOnly.optional(), country: z.string().max(10).optional(),
   agent: z.string().max(120).optional(), q: z.string().max(300).optional(), variable: z.string().max(160).optional(),
-  priority: z.enum(['P1', 'P2', 'all']).optional(), status: z.enum(['evaluated', 'pending', 'all']).optional(),
+  priority: z.enum(['P1', 'P2', 'Crítico', 'Normal', 'all']).optional(),
+  classification: z.enum(['critical', 'normal', 'positive', 'all']).optional(), agreement: z.enum(['both', 'all']).optional(),
+  status: z.enum(['evaluated', 'pending', 'all']).optional(),
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(15),
 }).refine(q => !q.from || !q.to || q.from <= q.to, 'La fecha inicial no puede ser posterior a la final.');
 const normalize = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -88,14 +103,24 @@ export function filteredConversations(state, query, textSearch = false) {
       view.excerpt = message ? { text: message.text, messageId: message.id, actor: message.actor } : null;
     }
     return view;
-  }).filter(c => c && (!query.priority || query.priority === 'all' || c[query.priority.toLowerCase()] > 0) && (!query.variable || c.marks.some(m => m.id === query.variable)) && (!query.status || query.status === 'all' || (query.status === 'evaluated' ? c.evaluated : !c.evaluated))).sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id));
+  }).filter(c => {
+    if (!c) return false;
+    const classification = query.classification && query.classification !== 'all' ? query.classification
+      : ({ P1: 'critical', P2: 'normal', 'Crítico': 'critical', Normal: 'normal' })[query.priority];
+    const hasMarkFilter = classification || query.variable || query.agreement === 'both';
+    const matches = !hasMarkFilter || c.marks.some(m => (!classification || (m.effective && m.classification === classification))
+      && (!query.variable || m.id === query.variable) && (query.agreement !== 'both' || m.dualDetected));
+    return matches && (!query.status || query.status === 'all' || (query.status === 'evaluated' ? c.evaluated : !c.evaluated));
+  }).sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id));
 }
 export function summarize(conversations) {
   const evaluated = conversations.filter(c => c.evaluated).length;
   const withAlerts = conversations.filter(c => c.p1 || c.p2).length;
   const originalAlerts = conversations.reduce((n, c) => n + c.originalAlerts, 0);
   const refuted = conversations.reduce((n, c) => n + c.refuted, 0);
-  return { total: conversations.length, evaluated, pending: conversations.length - evaluated, withAlerts, alertPercent: evaluated ? Math.round(withAlerts / evaluated * 100) : null, originalAlerts, refuted, refutedPercent: originalAlerts ? Math.round(refuted / originalAlerts * 100) : null, human: conversations.reduce((n, c) => n + c.human, 0), multimedia: conversations.filter(c => c.media.length).length };
+  return { total: conversations.length, evaluated, pending: conversations.length - evaluated, withAlerts, alertPercent: evaluated ? Math.round(withAlerts / evaluated * 100) : null, originalAlerts, refuted, refutedPercent: originalAlerts ? Math.round(refuted / originalAlerts * 100) : null,
+    withPositives: conversations.filter(c => c.positive > 0).length, positives: conversations.reduce((n, c) => n + c.positive, 0), withDualDetection: conversations.filter(c => c.dualDetected).length,
+    human: conversations.reduce((n, c) => n + c.human, 0), multimedia: conversations.filter(c => c.media.length).length };
 }
 export function priorityOrder(a, b) {
   return Number(b.p1 > 0) - Number(a.p1 > 0) || b.p1 - a.p1 || b.p2 - a.p2 || b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id);
@@ -114,7 +139,7 @@ export function recordReview(state, conversationId, body, user) {
   if (evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation)) throw new AppError(409, 'La conversación cambió en Atom. Evalúa su contenido actual antes de revisar.', 'SOURCE_CHANGED');
   const view = conversationView(state, conversation, undefined, true);
   const variable = view.variables.find(v => v.id === body.variableId);
-  if (!variable || !variable.enabledInEvaluation || !['Flag', 'Calculado'].includes(variable.type) || variable.polarity !== 'negativo' || (variable.result.status !== 'evaluado' && !(body.action === 'deshacer' && variable.review))) throw new AppError(422, 'Esta variable no tiene un resultado revisable en esta evaluación.');
+  if (!variable || !variable.enabledInEvaluation || !classificationOf(variable) || (variable.result.status !== 'evaluado' && !(body.action === 'deshacer' && variable.review))) throw new AppError(422, 'Esta variable no tiene un resultado revisable en esta evaluación.');
   const history = view.reviews.filter(r => r.variableId === body.variableId);
   const last = history.at(-1);
   if ((last?.id || null) !== body.expectedReviewId) throw new AppError(409, 'La revisión cambió. Recarga antes de registrar otra.', 'VERSION_CONFLICT');

@@ -14,7 +14,7 @@ export function sampleVariables(state, sample) {
     return v;
   });
 }
-const isFlag = v => v.type === 'Flag' && v.method !== 'Código';
+const isFlag = v => v.type === 'Flag' && ['IA', 'IA + código'].includes(v.method);
 export function sampleSummary(state, sample, userId) {
   const job = state.jobs.find(j => j.id === sample.jobId);
   return { id: sample.id, name: sample.name, createdAt: sample.createdAt, demo: sample.demo,
@@ -26,15 +26,15 @@ export function comparisonRows(state, sample) {
   return sample.cases.flatMap(c => variables.map(variable => {
     const cells = sample.modelProfiles.map(profile => {
       const task = state.tasks.find(t => t.jobId === sample.jobId && t.conversationId === c.conversationId && t.profile.id === profile.id);
-      const evaluation = state.evaluations.find(e => e.id === task?.evaluationId);
+      const evaluation = state.evaluations.find(e => e.id === task?.evaluationId && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => e[key] && e[key] === c[key]));
       const result = evaluation?.results.find(r => r.variableId === variable.id);
       // A duplicate effective model never becomes an independent vote.
-      return { profileId: profile.id, status: task?.status || 'pending', error: task?.error || null, model: evaluation?.model,
+      return { profileId: profile.id, status: result?.error ? 'failed' : result ? 'completed' : task?.status || 'pending', taskStatus: task?.status, error: result?.error || (!result ? task?.error || null : null), model: evaluation?.model,
         provider: evaluation?.provider, result: result || null, evaluationId: evaluation?.id || null, durationMs: evaluation?.durationMs, usage: evaluation?.usage };
     });
     const seen = new Set();
     const votes = cells.filter(cell => {
-      if (!cell.result || cell.result.codeRule || cell.result.method === 'Código' || cell.result.status !== 'evaluado') return false;
+      if (!cell.result || cell.result.error || cell.result.codeRule || ['Código', 'Cálculo'].includes(cell.result.method) || cell.result.status !== 'evaluado' || ![0, 1].includes(cell.result.value)) return false;
       const key = `${cell.provider}:${cell.model}`;
       if (seen.has(key)) return false;
       seen.add(key); return true;
@@ -55,7 +55,7 @@ export function comparisonRows(state, sample) {
 export function qualityMetrics(rows, profiles) {
   // Comparable cohort: same cases, decisive blind reference, all models decisive.
   const reference = rows.filter(row => !row.sourceChanged && row.verdict?.mode === 'blind' && ['present', 'absent'].includes(row.verdict.outcome));
-  const cohort = reference.filter(row => row.cells.every(c => c.status === 'completed' && c.result?.status === 'evaluado'));
+  const cohort = reference.filter(row => row.votes === profiles.length && row.cells.every(c => c.status === 'completed' && !c.result?.error && c.result?.status === 'evaluado'));
   return profiles.map(profile => {
     let tp = 0, fp = 0, fn = 0, tn = 0;
     for (const row of cohort) {
@@ -65,8 +65,8 @@ export function qualityMetrics(rows, profiles) {
     const cells = rows.map(row => row.cells.find(c => c.profileId === profile.id));
     return { profileId: profile.id, tp, fp, fn, tn, n: cohort.length, referenceCount: reference.length,
       precision: tp + fp ? tp / (tp + fp) : null, recall: tp + fn ? tp / (tp + fn) : null,
-      answered: cells.filter(c => c.result?.status === 'evaluado').length, abstained: cells.filter(c => c.result?.status === 'no_evaluado').length,
-      missing: cells.filter(c => !c.result).length, total: cells.length };
+      answered: cells.filter(c => c.result?.status === 'evaluado' && !c.result.error).length, abstained: cells.filter(c => c.result?.status === 'no_evaluado' && !c.result.error).length,
+      missing: cells.filter(c => !c.result || c.result.error).length, total: cells.length };
   });
 }
 export function validationView(state, sample, conversationId, user) {

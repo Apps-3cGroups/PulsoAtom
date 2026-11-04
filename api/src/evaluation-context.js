@@ -1,14 +1,20 @@
 import { operationalEvaluation } from './operational-evaluation.js';
 import { createHash } from 'node:crypto';
-import { systemInstructions, PROMPT_VERSION, RULES_VERSION } from './evaluator.js';
+import { evaluationInstructions, PROMPT_VERSION, RULES_VERSION } from './evaluator.js';
 
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const sourceFingerprint = c => digest({ id: c.id, country: c.country ?? null, completed: c.completed ?? true,
-  messages: c.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text, timestamp: m.timestamp ?? null })) });
-export const catalogReferences = catalog => catalog.map(v => ({ id: v.id, version: v.version, active: v.active }));
+  messages: c.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text, timestamp: m.timestamp ?? null,
+    ...(c.messageAgentIdsAvailable ? { agentId: m.agentId ?? null } : {}) })),
+  // Optional inputs enter the fingerprint only when used by the evaluator. The
+  // shape for existing Atom conversations remains byte-for-byte compatible.
+  ...(c.messageAgentIdsAvailable ? { messageAgentIdsAvailable: true } : {}),
+  ...(c.buttonEventsAvailable ? { buttonEventsAvailable: true, offeredButtons: c.offeredButtons ?? null, selectedButtonIds: c.selectedButtonIds ?? null } : {}),
+});
+export const catalogReferences = catalog => catalog.filter(v => !v.retired).map(v => ({ id: v.id, version: v.version, active: v.active }));
 export function evaluationContext(conversation, catalog) {
   return { sourceHash: sourceFingerprint(conversation), catalogHash: digest(catalogReferences(catalog)),
-    promptVersion: PROMPT_VERSION, promptHash: digest(systemInstructions), rulesVersion: RULES_VERSION };
+    promptVersion: PROMPT_VERSION, promptHash: digest(evaluationInstructions), rulesVersion: RULES_VERSION };
 }
 export const historicalProfileId = evaluation => (evaluation.profileId && evaluation.modelConfiguration?.configurationHash ? `${evaluation.profileId}@${evaluation.modelConfiguration.configurationHash}` : evaluation.profileId) || `legacy:${evaluation.model || (evaluation.demo ? 'demo' : 'unknown')}`;
 export function ensureEvaluationState(state) {

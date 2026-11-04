@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createState } from '../src/data/seed.js';
+import { createState as freshState } from '../src/data/seed.js';
+import { readFileSync } from 'node:fs';
 import { ModelRegistry } from '../src/model-registry.js';
 import { startEvaluationBatch, runEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { ensureEvaluationState, exposeEvaluation, historicalProfileId } from '../src/evaluation-context.js';
@@ -10,6 +11,14 @@ import { GeminiEvaluator } from '../src/gemini-evaluator.js';
 import { AppError } from '../src/errors.js';
 
 const user = { id: 'validator', name: 'Supervisora' };
+const legacyCatalog = JSON.parse(readFileSync(new URL('../src/data/catalog-legacy.json', import.meta.url)));
+function createState(demo = false) {
+  if (demo) return freshState(true);
+  const state = freshState(false);
+  state.catalog = structuredClone(legacyCatalog);
+  state.catalogVersions = state.catalog.map(v => ({ id: `${v.id}:${v.version}`, itemId: v.id, version: v.version, snapshot: structuredClone(v) }));
+  return state;
+}
 function fixture() {
   const state = createState(false);
   const c = { id: 'c1', country: 'HN', countryName: 'Honduras', date: '2026-10-20', completed: true,
@@ -198,7 +207,7 @@ test('doble revisión: mismo contenido, una sola marca, evidencia separada y rev
   const fn = (c,v) => { inputs.push(JSON.stringify([c,v])); return answer(c,v,1); };
   await runEvaluationBatch(store, registry(fn, fn), { max: 1 });
   assert.equal(inputs[0], inputs[1]); assert.equal(state.evaluations.length,2);
-  const view = conversationView(state,c,undefined,true), v = view.variables.find(v => v.kind === 'p1');
+  const view = conversationView(state,c,undefined,true), v = view.variables.find(v => v.kind === 'critical');
   assert.equal(view.evaluation.dual,true); assert.equal(v.result.comparison.detections,2);
   assert.equal(v.result.comparison.agreement,'agree-positive'); assert.equal(v.result.comparison.commonEvidence,true);
   assert.equal(view.marks.filter(m => m.id === v.id).length,1);
@@ -211,7 +220,7 @@ test('doble revisión: mismo contenido, una sola marca, evidencia separada y rev
 test('detección exclusiva de Gemini se publica una vez como discrepancia, incluso con GPT en cero', async () => {
   const { state,store,c }=fixture();dual(state);
   await runEvaluationBatch(store,registry((c,v)=>answer(c,v,0),(c,v)=>answer(c,v,1)),{max:1});
-  const view=conversationView(state,c,undefined,true), flag=view.variables.find(v=>v.kind==='p1');
+  const view=conversationView(state,c,undefined,true), flag=view.variables.find(v=>v.kind==='critical');
   assert.equal(flag.result.value,1);assert.equal(flag.result.comparison.agreement,'disagree');
   assert.equal(flag.result.comparison.cells[0].result.value,0);assert.equal(flag.result.comparison.cells[1].result.value,1);
 });
@@ -219,7 +228,7 @@ test('fallo de GPT usa Gemini una vez; reanudar completa el acuerdo sin repetir 
   const {state,store,c}=fixture();dual(state);let fail=true,geminiCalls=0,gptCalls=0;
   const models=registry((c,v)=>{gptCalls++;if(fail)throw new AppError(502,'No disponible','AI_TRANSIENT');return answer(c,v,1);},(c,v)=>{geminiCalls++;return answer(c,v,1);});
   const job=await runEvaluationBatch(store,models,{max:1});assert.equal(job.status,'partial');assert.equal(gptCalls,2);assert.equal(geminiCalls,1);
-  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.kind==='p1'),id=view.evaluation.id;
+  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.kind==='critical'),id=view.evaluation.id;
   assert.equal(flag.result.comparison.agreement,'incomplete');assert.equal(flag.result.comparison.cells[0].result,null);assert.match(flag.result.comparison.contingencyLabel,/respaldo/);assert.equal(state.evaluations[0].contingencyFor.id,'model-0');
   recordReview(state,c.id,{variableId:flag.id,evaluationId:id,expectedReviewId:null,action:'refutar',reason:'falso_positivo',comment:'Revisión antes del reintento'}, {id:'u',name:'Supervisor'});
   fail=false;await (await resumeEvaluationBatch(store,models,job.id)).completion;
@@ -232,7 +241,7 @@ test('cero más abstención no es un negativo completo y código no suma votos',
   const view=conversationView(state,c,undefined,true);
   const ai=view.variables.find(v=>v.result.comparison?.cells.length);
   assert.equal(ai.result.value,null);assert.equal(ai.result.status,'no_evaluado');assert.equal(ai.result.comparison.agreement,'incomplete');
-  const code=view.variables.find(v=>v.id==='num_mensajes_cliente');assert.equal(code.result.value,1);assert.equal(code.result.comparison.codeOnly,true);
+  const code=view.variables.find(v=>v.id==='num_mensajes_cliente');assert.equal(code.result.value,1);assert.equal(code.result.comparison,undefined);
 });
 test('fallos no técnicos no publican el secundario como un respaldo automático y no reaparecen al adjuntar Atom',async()=>{
   const {state,store,c}=fixture();dual(state);
@@ -245,7 +254,7 @@ test('fallos no técnicos no publican el secundario como un respaldo automático
 });
 test('refutaciones heredadas con huella siguen vigentes después de introducir los dictámenes comunes',async()=>{
   const {state,store,c}=fixture();await runEvaluationBatch(store,registry((c,v)=>answer(c,v,1),(c,v)=>answer(c,v,0)),{max:1});
-  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.kind==='p1');
+  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.kind==='critical');
   state.reviews.push({id:'legacy-review',conversationId:c.id,evaluationId:view.evaluation.id,variableId:flag.id,action:'refutar',authorName:'Persona',createdAt:'2026-11-03T00:00:00Z'});
   assert.equal(conversationView(state,c,undefined,true).variables.find(v=>v.id===flag.id).kind,'refuted');
 });

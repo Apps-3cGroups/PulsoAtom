@@ -1,0 +1,126 @@
+[
+  {
+    "topic": "Fase 1",
+    "text": "Autocontenida: se obtiene solo con el contenido de la conversación (texto de los mensajes y sus metadatos: quién envió cada mensaje, hora, tipo de mensaje). Es lo que se puede evaluar desde ya con el modelo local."
+  },
+  {
+    "topic": "Fase 2",
+    "text": "Requiere integración con algo independiente de la conversación: catálogo (incluida la lista de marcas propias), inventario, registros del sistema, lista de sustitutos declarados, promociones y descuentos vigentes, cuentas y canales oficiales, o una regla de negocio / proceso que todavía no está definido por escrito. La gran mayoría de las variables de fase 2 están ahí por esa razón, no porque sean menos importantes. Las cuatro de \"Multimedia\" (imagen, audio, llamada, URL) son la excepción: van en fase 2 por alcance, no por integración."
+  },
+  {
+    "topic": "Fase 3",
+    "text": "Escalamiento a humano (cliente_pidio_humano). No requiere integración, pero cobra sentido cuando la atención esté completamente automatizada, así que va después."
+  },
+  {
+    "topic": "Regla",
+    "text": "Lo que requiere integración o una regla por definir es fase 2; lo autocontenido es fase 1; lo de escalar a humano es fase 3 (excepto bot_ignoro_peticion_de_humano, que se evalúa desde fase 1). En la tabla, la columna Fase va sombreada en ámbar (2) y azul (3)."
+  },
+  {
+    "topic": "Cliente",
+    "text": "Quien escribe a la compañía para pedir algo."
+  },
+  {
+    "topic": "Asistente",
+    "text": "Quien atiende del lado de la compañía. Puede ser un humano (asistente de venta) o un bot. Cuando una variable dice \"asistente\", aplica a los dos; bot_… y humano_… aplican solo a uno."
+  },
+  {
+    "topic": "Código",
+    "text": "Determinístico, a partir de la estructura y los metadatos de la conversación: quién envió cada mensaje, timestamps, tipo de mensaje (texto, imagen, audio, llamada), enlaces, conteos de mensajes y de turnos, texto idéntico entre mensajes. No pasa por el modelo."
+  },
+  {
+    "topic": "IA",
+    "text": "Juicio del modelo sobre el texto de la conversación. Siempre con evidencia: el modelo cita los mensajes que sustentan el 1."
+  },
+  {
+    "topic": "IA + código",
+    "text": "El modelo extrae o interpreta algo (por ejemplo, el producto que pidió el cliente) y el código lo cruza con catálogo, inventario o sistema, o le aplica una regla."
+  },
+  {
+    "topic": "Cálculo",
+    "text": "Se deriva de otras variables ya obtenidas (por ejemplo, aplicable = 1 y ofrecido = 0, o una métrica contra su umbral). Nunca se le pide al modelo."
+  },
+  {
+    "topic": "Petición",
+    "text": "Cualquier cosa que el cliente quiere que hagamos o le respondamos: su motivo principal de contacto, una necesidad secundaria o una pregunta suelta. Un cliente puede traer varias en una conversación; el motivo principal normalmente es uno. Variables que usan el concepto: conversacion_no_resolvio_necesidad_cliente, cliente_tuvo_que_repetir."
+  },
+  {
+    "topic": "Resuelta",
+    "text": "El cliente obtuvo lo que quería. conversacion_no_resolvio_necesidad_cliente se enciende si alguna petición no fue resuelta; un \"no hay\" o \"no se puede\" responde, pero no resuelve."
+  },
+  {
+    "topic": "Cuando una variable dice \"pregunta\"",
+    "text": "Es porque se refiere literalmente a una pregunta (cliente_pregunta_irrelevante, cliente_pregunta_inapropiada); sigue siendo un tipo de petición."
+  },
+  {
+    "topic": "Eventos (flags)",
+    "text": "actor_verbo_objeto, en pasado y sin acentos: cliente_…, asistente_… (humano o bot), bot_…, humano_…. El 1 siempre significa \"el evento ocurrió\". Ejemplos: asistente_dio_consejo_medico, cliente_acepto_sustituto. Los eventos de la conversación en su conjunto van sin actor (conversacion_no_resolvio_necesidad_cliente, faltante_agotado). Los flags que salen de un umbral llevan el umbral en el nombre (primera_respuesta_humano_mayor_5_min)."
+  },
+  {
+    "topic": "Métricas",
+    "text": "num_… para conteos y promedios de mensajes, min_… para minutos, ratio_… para cocientes."
+  },
+  {
+    "topic": "Descriptores y calculadas",
+    "text": "Sin prefijo de actor; nombran la cosa (productos_solicitados, tipo_interaccion) o la condición (sustituto_aplicable_no_ofrecido, lealtad_aplicable_omitida)."
+  },
+  {
+    "topic": "Permitidos",
+    "text": "Solo cuatro: 🙂  😊  👍  ✅. Cualquier otro cuenta como fuera de guía."
+  },
+  {
+    "topic": "Cantidad",
+    "text": "Máximo 1 emoji por mensaje y máximo 2 por conversación, del lado del asistente."
+  },
+  {
+    "topic": "Cuándo",
+    "text": "Solo en saludo, despedida o confirmación de algo positivo (\"listo, tu pedido va en camino ✅\")."
+  },
+  {
+    "topic": "Nunca",
+    "text": "Si cliente_molesto = 1 o el cliente presentó una queja (cualquier cliente_queja_* = 1); ni como mensaje único (eso ya lo marca asistente_envio_mensaje_sin_valor)."
+  },
+  {
+    "topic": "Evaluación",
+    "text": "Romper cualquiera de las reglas anteriores cuenta como \"emojis excesivos\" dentro de asistente_comunicacion_poco_profesional."
+  },
+  {
+    "topic": "Crítico",
+    "text": "Flag crítico: alerta inmediata al supervisor; se dispara sola, incluso con la conversación en curso. Sustituye a P1; el nivel P2 desaparece."
+  },
+  {
+    "topic": "(sin marca)",
+    "text": "Flag normal: solo coaching o analítica, sin alerta."
+  },
+  {
+    "topic": "+",
+    "text": "Flag positivo (buena práctica o buen resultado). En Pulso se muestra con un signo + en verde."
+  },
+  {
+    "topic": "Regla",
+    "text": "Todo lo que en la columna Tipo es Métrica se muestra solo en la vista de cada conversación, en ninguna otra vista de Pulso. No son flags: no aparecen en la lista de flags ni disparan alertas."
+  },
+  {
+    "topic": "Variables",
+    "text": "min_primera_respuesta_humano, min_silencio_max_humano, min_duracion_conversacion, num_mensajes_asistente, num_mensajes_cliente, ratio_mensajes_asistente_entre_cliente, num_mensajes_por_turno_asistente."
+  },
+  {
+    "topic": "Flag",
+    "text": "Binario: 1 si el evento ocurrió, 0 si no. Siempre un evento observable, nunca una cualidad."
+  },
+  {
+    "topic": "Métrica",
+    "text": "Número (conteo, minutos, cociente, promedio). Los umbrales para convertirla en flag se definen por separado."
+  },
+  {
+    "topic": "Descriptor",
+    "text": "Categoría o lista (tema, producto, motivo). Para analítica, no para calificar."
+  },
+  {
+    "topic": "Calculado",
+    "text": "Se deriva de otras variables; el modelo no lo juzga."
+  },
+  {
+    "topic": "Nota",
+    "text": "Los conteos se calculan con fórmulas sobre la hoja \"Catálogo\". Lo que de verdad cuesta tokens es lo que pasa por IA en la fase vigente; lo demás es código o cálculo."
+  }
+]

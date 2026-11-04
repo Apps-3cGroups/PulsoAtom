@@ -1,11 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { initialCatalog } from '../src/data/seed.js';
+import { readFileSync } from 'node:fs';
 import { OpenAIEvaluator, evaluationSchema, validateEvaluation } from '../src/evaluator.js';
 import { eligibleConversations, runEvaluationBatch } from '../src/evaluation-service.js';
-import { createState } from '../src/data/seed.js';
+import { createState as freshState } from '../src/data/seed.js';
 import { evaluateCodeVariable } from '../src/code-evaluator.js';
 
+// Existing tests exercise backward compatibility; v5 has its own typed suite.
+const initialCatalog = JSON.parse(readFileSync(new URL('../src/data/catalog-legacy.json', import.meta.url)));
+function createState(demo = false) {
+  const state = freshState(demo);
+  state.catalog = structuredClone(initialCatalog);
+  state.catalogVersions = state.catalog.map(v => ({ id: `${v.id}:${v.version}`, itemId: v.id, version: v.version, snapshot: structuredClone(v) }));
+  return state;
+}
 const variables = initialCatalog.filter(v => v.active);
 const conversation = { id: 'atom-1', date: '2026-10-27', messages: [{ id: 'm1', actor: 'cliente', text: 'Voy a cancelar mi pedido.' }, { id: 'm2', actor: 'humano', text: 'Revisaré el estado.' }] };
 const answer = () => ({ results: Object.fromEntries(variables.map(v => [v.id, { status: 'evaluado', value: v.id === 'cliente_amenazo_cancelar' ? 1 : 0, reason: 'Según los mensajes.', evidence_message_ids: v.id === 'cliente_amenazo_cancelar' ? ['m1'] : [] }])) });

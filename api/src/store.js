@@ -4,6 +4,7 @@ import mysql from 'mysql2/promise';
 import { createState } from './data/seed.js';
 import { missingDatabase } from './errors.js';
 import { ensureEvaluationState } from './evaluation-context.js';
+import { migrateCatalogV5 } from './catalog-v5.js';
 
 export class DemoStore {
   constructor(filename) { this.filename = filename; this.queue = Promise.resolve(); }
@@ -16,6 +17,7 @@ export class DemoStore {
       this.state = createState(true); await this.persist(this.state);
     }
     ensureEvaluationState(this.state);
+    if (migrateCatalogV5(this.state)) await this.persist(this.state);
     return this;
   }
   async persist(state) {
@@ -57,6 +59,9 @@ const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
 function emptyState() {
   const state = createState(false);
   for (const key of Object.keys(tables)) state[key] = [];
+  // This is only a read scaffold. A fresh seed's marker must not claim that
+  // a persisted legacy database has already received the catalog migration.
+  delete state.metadata.catalogRevision;
   return state;
 }
 export class MysqlStore {
