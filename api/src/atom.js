@@ -1,6 +1,10 @@
 import mysql from 'mysql2/promise';
 
-const iso = value => value instanceof Date ? value.toISOString() : new Date(`${value}Z`).toISOString();
+const iso = value => {
+  if (value instanceof Date) return value.toISOString();
+  const text = String(value).trim();
+  return new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`).toISOString();
+};
 const localDate = (value, timezone) => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
   const part = type => parts.find(item => item.type === type).value;
@@ -12,6 +16,8 @@ const normalizeIdentity = value => String(value || '').trim().normalize('NFD').r
 
 export function mapAtomConversation(row, events, country, timezone) {
   const startedAt = iso(row.FechaInicioUtc || row.FechaUltimaActividadUtc);
+  // Activity belongs to the source chat, not to its ingestion/update time.
+  const lastActivityAt = row.FechaUltimaActividadUtc ? iso(row.FechaUltimaActividadUtc) : startedAt;
   const messages = [];
   const media = new Set();
   for (const event of events) {
@@ -30,9 +36,10 @@ export function mapAtomConversation(row, events, country, timezone) {
     agent: { id: row.IdAsesorActual == null ? 'sin-asesor' : String(row.IdAsesorActual), name: row.AsesorNombre || 'Sin asesor asignado' },
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
     date: localDate(startedAt, timezone), startedAt,
+    activityDate: localDate(lastActivityAt, timezone), lastActivityAt,
     sourceCreatedAt: row.FechaCreacionUtc ? iso(row.FechaCreacionUtc) : startedAt,
     sourceUpdatedAt: row.FechaActualizacionUtc ? iso(row.FechaActualizacionUtc) : startedAt,
-    endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : iso(row.FechaUltimaActividadUtc),
+    endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : lastActivityAt,
     completed: !!row.FechaFinUtc,
     channel: row.CanalNombre || 'Sin canal', topics: [], media: [...media], messages,
     sourceUrl: null, evaluationId: null,

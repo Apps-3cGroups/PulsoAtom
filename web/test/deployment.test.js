@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { loadConfigFromFile } from 'vite';
+import { createServer as createViteServer, loadConfigFromFile } from 'vite';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const webRoot = fileURLToPath(new URL('../', import.meta.url));
 
@@ -22,6 +25,54 @@ test('Vite alinea recursos, Router y API cuando se cambia la subruta', async () 
     assert.equal(config.server.proxy['/operacion/pulsoAtom/api'].target, 'http://127.0.0.1:4311');
   } finally {
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
+
+test('Vite recarga el resumen sin barra final conservando fechas y subrutas configurables', async () => {
+  for (const basePath of ['/pulsoAtom', '/operacion/pulsoAtom']) {
+    const overrides = { VITE_BASE_PATH: basePath, VITE_API_BASE_URL: `${basePath}/api` };
+    const previous = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
+    const cacheDir = await mkdtemp(join(tmpdir(), 'pulso-vite-routing-'));
+    Object.assign(process.env, overrides);
+    let server;
+    try {
+      const { config } = await loadConfigFromFile({ command: 'serve', mode: 'development' }, fileURLToPath(new URL('../vite.config.js', import.meta.url)), webRoot);
+      const seen = [];
+      const probe = {
+        name: 'request-path-probe',
+        configureServer(vite) {
+          vite.middlewares.use((req, res, next) => {
+            seen.push(req.url);
+            if (req.url.startsWith(`${basePath}/api/`)) {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ path: req.url }));
+              return;
+            }
+            next();
+          });
+        },
+      };
+      server = await createViteServer({ ...config, configFile: false, root: webRoot, cacheDir, logLevel: 'silent',
+        plugins: [...config.plugins, probe], optimizeDeps: { noDiscovery: true, include: [] },
+        server: { ...config.server, host: '127.0.0.1', port: 0, strictPort: false, proxy: {} },
+      });
+      await server.listen();
+      const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+      const query = '?from=2026-10-01&to=2026-11-03&variable=cliente%5Fmolesto';
+      for (const path of [basePath, `${basePath}${query}`, `${basePath}/${query}`, `${basePath}/conversacion/123${query}`]) {
+        const response = await fetch(`${origin}${path}`, { headers: { Accept: 'text/html' } });
+        assert.equal(response.status, 200, path);
+        assert.match(await response.text(), /<div id="root"><\/div>/, path);
+      }
+      assert.ok(seen.includes(`${basePath}/${query}`), 'El middleware conserva íntegra la consulta de fechas');
+      const apiPath = `${basePath}/api/summary${query}`;
+      assert.deepEqual(await (await fetch(`${origin}${apiPath}`)).json(), { path: apiPath });
+      assert.equal((await fetch(`${origin}${basePath}-otro${query}`)).status, 404);
+    } finally {
+      await server?.close();
+      await rm(cacheDir, { recursive: true, force: true });
+      for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
 });
 

@@ -76,6 +76,7 @@ export function conversationView(state, conversation, context = viewContext(stat
   const pendingFlags = evaluation ? variables.filter(v => v.enabledInEvaluation && v.classification && v.result.status !== 'evaluado' && !v.review).length : 0;
   const evaluationErrors = variables.filter(v => v.enabledInEvaluation && (v.result.error || v.result.comparison?.cells?.some(cell => cell.error))).length;
   const base = { provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
+    activityDate: conversation.activityDate || conversation.date, lastActivityAt: conversation.lastActivityAt || conversation.startedAt,
     p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, evaluationErrors, evaluationIncomplete: !!evaluation && (pendingFlags > 0 || evaluationErrors > 0), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
   return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: !!evaluation.modelReviewPending, provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
     metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : base;
@@ -84,6 +85,7 @@ const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isN
 export const listQuerySchema = z.object({
   modelProfileId: z.string().max(160).optional(),
   from: dateOnly.optional(), to: dateOnly.optional(), country: z.string().max(10).optional(),
+  dateBasis: z.enum(['started', 'activity']).default('started'),
   agent: z.string().max(120).optional(), q: z.string().max(300).optional(), variable: z.string().max(160).optional(),
   priority: z.enum(['P1', 'P2', 'Crítico', 'Normal', 'all']).optional(),
   classification: z.enum(['critical', 'normal', 'positive', 'all']).optional(), agreement: z.enum(['both', 'all']).optional(),
@@ -91,10 +93,15 @@ export const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(15),
 }).refine(q => !q.from || !q.to || q.from <= q.to, 'La fecha inicial no puede ser posterior a la final.');
 const normalize = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const displayDateOf = (conversation, basis) => basis === 'activity' ? conversation.activityDate || conversation.date : conversation.date;
+const displayTimeOf = (conversation, basis) => basis === 'activity' ? conversation.lastActivityAt || conversation.startedAt : conversation.startedAt;
 export function filteredConversations(state, query, textSearch = false) {
   const context = viewContext(state, query.modelProfileId);
-  return state.conversations.filter(c => (!query.from || c.date >= query.from) && (!query.to || c.date <= query.to) && (!query.country || c.country === query.country) && (!query.agent || c.agent.id === query.agent)).map(c => {
+  return state.conversations.filter(c => (!query.from || displayDateOf(c, query.dateBasis) >= query.from) && (!query.to || displayDateOf(c, query.dateBasis) <= query.to) && (!query.country || c.country === query.country) && (!query.agent || c.agent.id === query.agent)).map(c => {
     const view = conversationView(state, c, context);
+    view.displayDate = displayDateOf(c, query.dateBasis);
+    view.displayAt = displayTimeOf(c, query.dateBasis);
+    view.dateBasis = query.dateBasis || 'started';
     if (query.q) {
       const needle = normalize(query.q);
       const haystack = normalize([view.id, view.client.name, view.client.code, view.client.phoneLast4, view.agent.name, ...view.topics, ...view.marks.map(m => m.name)].join(' '));
@@ -111,7 +118,7 @@ export function filteredConversations(state, query, textSearch = false) {
     const matches = !hasMarkFilter || c.marks.some(m => (!classification || (m.effective && m.classification === classification))
       && (!query.variable || m.id === query.variable) && (query.agreement !== 'both' || m.dualDetected));
     return matches && (!query.status || query.status === 'all' || (query.status === 'evaluated' ? c.evaluated : !c.evaluated));
-  }).sort((a, b) => b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id));
+  }).sort((a, b) => (b.displayAt || b.displayDate).localeCompare(a.displayAt || a.displayDate) || a.id.localeCompare(b.id));
 }
 export function summarize(conversations) {
   const evaluated = conversations.filter(c => c.evaluated).length;
@@ -123,7 +130,7 @@ export function summarize(conversations) {
     human: conversations.reduce((n, c) => n + c.human, 0), multimedia: conversations.filter(c => c.media.length).length };
 }
 export function priorityOrder(a, b) {
-  return Number(b.p1 > 0) - Number(a.p1 > 0) || b.p1 - a.p1 || b.p2 - a.p2 || b.startedAt.localeCompare(a.startedAt) || a.id.localeCompare(b.id);
+  return Number(b.p1 > 0) - Number(a.p1 > 0) || b.p1 - a.p1 || b.p2 - a.p2 || (b.displayAt || b.startedAt).localeCompare(a.displayAt || a.startedAt) || a.id.localeCompare(b.id);
 }
 export const reviewSchema = z.object({
   variableId: z.string().max(160), evaluationId: z.string().max(180),

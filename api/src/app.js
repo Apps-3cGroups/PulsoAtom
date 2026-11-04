@@ -186,12 +186,14 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   app.get(`${prefix}/bootstrap`, async (_req, res) => {
     const state = await readHistory();
     const dates = state.conversations.map(c => c.date).sort();
+    const activityDates = state.conversations.map(c => c.activityDate || c.date).sort();
     res.json({
       mode: config.demo ? 'demo' : 'real', metadata: state.metadata, timezone: config.timezone,
       countries: (state.countries || countries).map(({ code, name }) => ({ code, name })),
       agents: [...new Map(state.conversations.map(c => [c.agent.id, { ...c.agent, country: c.country }])).values()],
       catalog: currentCatalog(state).map(v => ({ id: v.id, name: v.name, family: v.family, phase: v.phase, mark: v.mark, type: v.type, active: v.active, version: v.version, availability: catalogAvailability(v) })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
+      activityDateRange: { min: activityDates.at(0) || null, max: activityDates.at(-1) || null },
       integrations: integrationStatus(),
     });
   });
