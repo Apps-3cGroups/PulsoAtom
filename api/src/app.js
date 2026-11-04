@@ -15,6 +15,7 @@ import { mountModelRoutes } from './model-routes.js';
 import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
+import { conversationDailyMetrics } from './daily-metrics.js';
 
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
@@ -285,7 +286,10 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     await expose(state, req.user.id, [conversation], query.modelProfileId);
-    res.json({ conversation: conversationView(state, conversation, viewContext(state, query.modelProfileId), true) });
+    const detail = conversationView(state, conversation, viewContext(state, query.modelProfileId), true);
+    // Read-only daily figures are separate from the original saved evaluation.
+    detail.dailyMetrics = conversationDailyMetrics(conversation, { timezone: config.timezone });
+    res.json({ conversation: detail });
   });
   app.post(`${prefix}/conversations/:id/reviews`, async (req, res) => {
     const input = reviewSchema.parse(req.body);
