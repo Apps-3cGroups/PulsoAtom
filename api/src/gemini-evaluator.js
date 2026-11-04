@@ -1,32 +1,37 @@
 import { AppError } from './errors.js';
-import { evaluationInput, evaluationInstructions, supportsAiVariable, validateEvaluation } from './evaluator.js';
+import { evaluationInput, evaluationInstructions, interactionTypes, supportsAiVariable, validateEvaluation } from './evaluator.js';
 
 // Keep Gemini's response grammar constant-size. Repeating one schema branch per
 // checklist item can exceed the provider's structured-output complexity limit.
 // The common validator still enforces each variable's actual type and evidence.
 export function geminiEvaluationSchema() {
+  const item = (status, value, minEvidence, maxEvidence) => ({
+    type: 'object', additionalProperties: false,
+    properties: {
+      variableId: { type: 'string' },
+      status: { type: 'string', enum: [status] },
+      value,
+      reason: { type: 'string' },
+      evidence_message_ids: { type: 'array', items: { type: 'string' }, minItems: minEvidence, maxItems: maxEvidence },
+    },
+    required: ['variableId', 'status', 'value', 'reason', 'evidence_message_ids'],
+  });
   return {
     type: 'object', additionalProperties: false,
     properties: {
       results: {
         type: 'array',
         description: 'Un resultado por cada variable solicitada, identificado por su variableId exacto y sin duplicados.',
-        items: {
-          type: 'object', additionalProperties: false,
-          properties: {
-            variableId: { type: 'string' },
-            status: { type: 'string', enum: ['evaluado', 'no_evaluado'] },
-            value: { anyOf: [
-              { type: 'integer', enum: [0, 1] },
-              { type: 'string' },
-              { type: 'array', items: { type: 'string' } },
-              { type: 'null' },
-            ] },
-            reason: { type: 'string' },
-            evidence_message_ids: { type: 'array', items: { type: 'string' }, maxItems: 3 },
-          },
-          required: ['variableId', 'status', 'value', 'reason', 'evidence_message_ids'],
-        },
+        // Six constant variants encode the existing status/value/evidence
+        // contract without expanding the grammar for each requested variable.
+        items: { anyOf: [
+          item('evaluado', { type: 'integer', enum: [1] }, 1, 3),
+          item('evaluado', { type: 'integer', enum: [0] }, 0, 0),
+          item('no_evaluado', { type: 'null' }, 0, 0),
+          item('evaluado', { type: 'string', enum: interactionTypes }, 1, 3),
+          item('evaluado', { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 }, 1, 3),
+          item('evaluado', { type: 'array', items: { type: 'string' }, maxItems: 0 }, 0, 0),
+        ] },
       },
     },
     required: ['results'],
