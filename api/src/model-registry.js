@@ -38,9 +38,11 @@ export function registryFromEnv({ demo = false, env = process.env, fetchImpl = f
         results: variables.map(variable => {
           const number = parseInt(digest([conversation.id, variable.id]).slice(0, 5), 16);
           const abstain = (number + index) % 41 === 0;
-          const value = abstain ? null : Number(number % 7 === 0 || (index === 1 && number % 11 === 0));
+          const value = abstain ? null : variable.type === 'Descriptor'
+            ? variable.id === 'tipo_interaccion' ? 'pedido' : ['Producto sintético de demostración']
+            : Number(number % 7 === 0 || (index === 1 && number % 11 === 0));
           const message = conversation.messages[Math.min(3, conversation.messages.length - 1)];
-          return { variableId: variable.id, method: variable.method, status: abstain ? 'no_evaluado' : 'evaluado', value,
+          return { variableId: variable.id, type: variable.type, method: variable.method, status: abstain ? 'no_evaluado' : 'evaluado', value,
             reason: 'Resultado sintético para probar la comparación. No es una evaluación real de IA.', evidence: value ? [{ messageId: message.id, quote: message.text }] : [] };
         }) };
     } },

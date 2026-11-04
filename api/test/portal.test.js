@@ -24,17 +24,17 @@ before(async () => {
 });
 after(async () => { await store.close(); await rm(directory, { recursive: true, force: true }); });
 
-test('Excel: 130 variables únicas, 17 familias y 12 P1/P2 de fase 1 activas', () => {
-  assert.equal(initialCatalog.length, 130);
-  assert.equal(new Set(initialCatalog.map(v => v.id)).size, 130);
-  assert.equal(new Set(initialCatalog.map(v => v.family)).size, 17);
-  assert.equal(initialCatalog.filter(v => v.active).length, 12);
-  assert.ok(initialCatalog.filter(v => v.active).every(v => v.phase === 1 && ['P1', 'P2'].includes(v.mark)));
-  assert.equal(initialCatalog.filter(v => v.template).length, 3);
-  assert.equal(initialCatalog.filter(v => v.phase === 1).length, 87);
-  assert.equal(initialCatalog.filter(v => v.phase === 2).length, 41);
-  assert.equal(initialCatalog.filter(v => v.phase === 3).length, 2);
-  assert.ok(initialCatalog.some(v => v.condition.includes('resultado_conversacion')));
+test('Excel v5: 93 variables únicas, 16 familias y 64 variables de fase 1 habilitadas', () => {
+  assert.equal(initialCatalog.length, 93);
+  assert.equal(new Set(initialCatalog.map(v => v.id)).size, 93);
+  assert.equal(new Set(initialCatalog.map(v => v.family)).size, 16);
+  assert.equal(initialCatalog.filter(v => v.active).length, 64);
+  assert.ok(initialCatalog.filter(v => v.active).every(v => v.phase === 1));
+  assert.equal(initialCatalog.filter(v => v.mark === 'Crítico').length, 30);
+  assert.equal(initialCatalog.filter(v => v.mark === '+').length, 6);
+  assert.equal(initialCatalog.filter(v => v.type === 'Métrica').length, 7);
+  assert.equal(initialCatalog.filter(v => v.phase === 2).length, 28);
+  assert.equal(initialCatalog.filter(v => v.phase === 3).length, 1);
 });
 test('la autenticación protege las rutas y el rol supervisor no puede escribir el catálogo', async () => {
   await request(app).get('/pulsoAtom/api/catalog').expect(401);
@@ -78,33 +78,38 @@ test('una edición crea versión, detecta conflicto y conserva evaluaciones ante
   const previous = conversationView(state, conversation, undefined, true).variables.find(v => v.id === item.id);
   const payload = { ...editable(item), name: 'Cliente manifestó molestia', expectedVersion: item.version };
   const saved = await write(admin, 'patch', `/catalog/${item.id}`, payload).expect(200);
-  assert.equal(saved.body.item.version, 2);
+  assert.equal(saved.body.item.version, item.version + 1);
   await write(admin, 'patch', `/catalog/${item.id}`, payload).expect(409);
   const updated = await store.read();
   const historical = conversationView(updated, conversation, undefined, true).variables.find(v => v.id === item.id);
   assert.equal(historical.version, 1);
   assert.equal(historical.name, previous.name);
   const history = await admin.get(`/pulsoAtom/api/catalog/${item.id}/history`).expect(200);
-  assert.deepEqual(history.body.items.map(v => v.version), [2, 1]);
+  assert.equal(history.body.items[0].version, item.version + 1);
+  assert.ok(history.body.items.some(v => v.version === previous.version));
 });
 test('la activación por lotes es atómica, no habilita plantillas y valida versiones', async () => {
   const state = await store.read();
-  const selected = state.catalog.filter(v => !v.active && !v.template).slice(0, 2);
-  const refs = selected.map(v => ({ id: v.id, version: v.version }));
+  const selected = state.catalog.filter(v => v.active && v.phase === 1 && !v.retired).slice(0, 2);
+  await write(admin, 'post', '/catalog/batch-status', { items: selected.map(v => ({ id: v.id, version: v.version })), active: false }).expect(200);
+  const refs = selected.map(v => ({ id: v.id, version: v.version + 1 }));
   await write(admin, 'post', '/catalog/batch-status', { items: [refs[0], { ...refs[1], version: 999 }], active: true }).expect(409);
   assert.equal((await store.read()).catalog.find(v => v.id === refs[0].id).active, false);
-  await write(admin, 'post', '/catalog/batch-status', { items: [{ id: state.catalog.find(v => v.template).id, version: 1 }], active: true }).expect(422);
+  const retired = state.catalog.find(v => v.retired);
+  await write(admin, 'post', '/catalog/batch-status', { items: [{ id: retired.id, version: retired.version }], active: true }).expect(422);
+  const external = state.catalog.find(v => !v.retired && v.phase === 2);
+  await write(admin, 'post', '/catalog/batch-status', { items: [{ id: external.id, version: external.version }], active: true }).expect(422);
   const result = await write(admin, 'post', '/catalog/batch-status', { items: refs, active: true }).expect(200);
   assert.equal(result.body.changed, 2);
   const changed = (await store.read()).catalog.filter(v => refs.some(r => r.id === v.id));
-  assert.ok(changed.every(v => v.active && v.version === 2));
+  assert.ok(changed.every(v => v.active && v.version === refs.find(r => r.id === v.id).version + 1));
   await write(admin, 'post', '/catalog/batch-status', { items: changed.map(v => ({ id: v.id, version: v.version })), active: false }).expect(200);
 });
 test('refutar y deshacer preservan la evidencia original y el historial', async () => {
   const state = await store.read();
-  const candidate = filteredConversations(state, {}).find(c => c.marks.some(m => ['p1', 'p2'].includes(m.kind)) && !state.reviews.some(r => r.conversationId === c.id));
+  const candidate = filteredConversations(state, {}).find(c => c.marks.some(m => ['critical', 'normal'].includes(m.kind)) && !state.reviews.some(r => r.conversationId === c.id));
   const detail = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
-  const variable = detail.variables.find(v => ['p1', 'p2'].includes(v.kind));
+  const variable = detail.variables.find(v => ['critical', 'normal'].includes(v.kind));
   const body = { variableId: variable.id, evaluationId: detail.evaluation.id, expectedReviewId: null, action: 'refutar', reason: 'falta_contexto', comment: 'El contexto permite descartar este evento.' };
   const review = await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, body).expect(201);
   let changed = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;

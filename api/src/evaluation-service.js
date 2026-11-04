@@ -1,11 +1,12 @@
 import { needsEvaluation, currentEvaluation } from './source-state.js';
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
-import { evaluateCodeVariable, supportsCodeVariable } from './code-evaluator.js';
+import { evaluateCodeVariables, supportsCodeVariable } from './code-evaluator.js';
+import { supportsAiVariable } from './evaluator.js';
+import { catalogAvailability } from './catalog-presentation.js';
 import { asRegistry } from './model-registry.js';
 import { catalogReferences, digest, ensureEvaluationState, evaluationContext, selectedEvaluation, sourceFingerprint } from './evaluation-context.js';
 
-const supportsAiVariable = v => v.type === 'Flag' && ['IA', 'IA + código'].includes(v.method);
 const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE'].includes(error.code);
 const running = new Map();
 const now = () => new Date().toISOString();
@@ -19,7 +20,7 @@ export function eligibleConversations(state, { from, to, country, pendingOnly = 
 
 function validateCatalog(catalog) {
   const active = catalog.filter(v => v.active);
-  if (!active.length || active.some(v => !supportsAiVariable(v) && !supportsCodeVariable(v))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
+  if (!active.length || active.some(v => !catalogAvailability(v).canActivate)) throw new AppError(422, 'El checklist activo incluye una fase, regla o integración que aún no está implementada. Revisa su disponibilidad en el catálogo.', 'UNSUPPORTED_VARIABLE');
 }
 function restoreCatalog(state, refs) {
   return refs.map(ref => {
@@ -89,7 +90,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   const pendingOnly = purpose === 'comparison' ? false : options.pendingOnly !== false;
   const candidates = pickCandidates(state, { ...options, pendingOnly });
   if (!candidates.length && purpose === 'comparison') throw new AppError(422, 'No hay conversaciones disponibles con estos filtros.', 'EMPTY_SAMPLE');
-  const catalog = state.catalog;
+  const catalog = state.catalog.filter(v => !v.retired);
   const catalogVersions = catalogReferences(catalog);
   const job = { id: randomUUID(), purpose, status: 'running', scope: options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
     sourceJobId: options.sourceJobId || null, scheduleDate: options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
@@ -97,7 +98,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
     idempotencyKey: options.idempotencyKey || null, requestHash, createdAt: now(), updatedAt: now(), finishedAt: null };
   const tasks = candidates.flatMap(c => {
-    const codeResults = catalog.filter(v => v.active && supportsCodeVariable(v)).map(v => ({ ...evaluateCodeVariable(c, v), method: 'Código' }));
+    const codeResults = evaluateCodeVariables(c, catalog.filter(v => v.active && supportsCodeVariable(v)));
     return profiles.map(profile => ({ id: randomUUID(), jobId: job.id, conversationId: c.id,
       profile, fallback, codeResults, context: evaluationContext(c, catalog), status: 'pending', round: 1, evaluationId: null, error: null }));
   });
@@ -115,7 +116,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     if (purpose === 'comparison') draft.comparisons.push({ id: job.id, name: options.name || `Muestra ${now().slice(0, 10)}`,
       jobId: job.id, modelProfiles: profiles, catalogVersions, createdAt: job.createdAt, demo: job.demo, authorName: options.author?.name || null,
       cases: candidates.map(c => ({ conversationId: c.id, country: c.country, date: c.date, ...evaluationContext(c, catalog),
-        codeResults: catalog.filter(v => v.active && supportsCodeVariable(v)).map(v => ({ ...evaluateCodeVariable(c, v), method: 'Código' })) })) });
+        codeResults: tasks.find(t => t.conversationId === c.id)?.codeResults || [] })) });
   });
   return { job, completion: launch(store, registry, job, catalog, options.onProgress) };
 }
@@ -160,10 +161,11 @@ async function processJob(store, registry, job, catalog, onProgress) {
 function updateJob(state, id, finished) {
   const job = state.jobs.find(j => j.id === id), tasks = state.tasks.filter(t => t.jobId === id);
   job.completed = tasks.filter(t => t.status === 'completed').length;
-  job.failed = tasks.filter(t => t.status === 'failed').length;
+  job.failed = tasks.filter(t => ['failed', 'partial'].includes(t.status)).length;
+  job.partial = tasks.filter(t => t.status === 'partial').length;
   job.errors = tasks.filter(t => t.error).map(t => ({ conversationId: t.conversationId, profileId: t.profile.id, ...t.error }));
   job.updatedAt = now();
-  if (finished && tasks.every(t => ['completed', 'failed'].includes(t.status))) { job.status = job.failed ? (job.completed ? 'partial' : 'failed') : 'completed'; job.finishedAt = now(); }
+  if (finished && tasks.every(t => ['completed', 'failed', 'partial'].includes(t.status))) { job.status = job.failed ? (job.completed || job.partial ? 'partial' : 'failed') : 'completed'; job.finishedAt = now(); }
 }
 async function processTask(store, registry, job, task, conversation, catalog) {
   if (!conversation || task.context.sourceHash !== sourceFingerprint(conversation)) throw new AppError(409, 'El contenido de Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
@@ -172,38 +174,74 @@ async function processTask(store, registry, job, task, conversation, catalog) {
   const claimed = await store.transaction(s => { const t = s.tasks.find(t => t.id === task.id); if (t.status === 'completed' || t.round !== task.round) return false; t.status = 'running'; t.error = null; return true; });
   if (!claimed) return;
   const aiVariables = catalog.filter(v => v.active && supportsAiVariable(v));
-  let answer, effective, lastError;
+  const codeResults = task.codeResults || evaluateCodeVariables(conversation, catalog.filter(v => v.active && supportsCodeVariable(v)));
+  // Each profile retains its own successful items. Never blend answers from two
+  // providers under one model identity, including during fallback or resumption.
+  let answer, effective, lastError, selectedState;
+  const profileStates = structuredClone(task.profileStates || {});
   for (const snapshot of [task.profile, task.fallback].filter(Boolean)) {
     // Never fall back after a non-technical refusal or a configuration/input error.
-    if (lastError && !retryable(lastError)) throw lastError;
+    if (lastError && !retryable(lastError)) break;
     const profile = registry.resolve(snapshot.id, snapshot);
+    const previous = profileStates[profile.id];
+    const retained = new Map((previous?.results || []).map(r => [r.variableId, r]));
+    let metadata = previous || { model: profile.model, responseId: null, usage: null };
+    let itemErrors = previous?.validationErrors || [];
     for (let index = 0; index < 2; index++) {
+      const pending = aiVariables.filter(v => !retained.has(v.id));
+      if (!pending.length) { lastError = null; break; }
       const attempt = { id: randomUUID(), jobId: job.id, taskId: task.id, round: task.round, profileId: profile.id,
-        provider: profile.provider, requestedModel: profile.model, status: 'running', startedAt: now() };
+        provider: profile.provider, requestedModel: profile.model, variableIds: pending.map(v => v.id), status: 'running', startedAt: now() };
       await store.transaction(s => s.attempts.push(attempt));
       const started = Date.now();
       try {
-        answer = aiVariables.length ? await profile.evaluator.evaluate(conversation, aiVariables) : { results: [], model: null, usage: null };
-        if (!Array.isArray(answer.results) || answer.results.length !== aiVariables.length) throw new AppError(502, 'Resultado estructurado incompleto.', 'INVALID_AI_RESULT');
-        effective = profile;
-        await store.transaction(s => Object.assign(s.attempts.find(a => a.id === attempt.id), { status: 'completed', finishedAt: now(), durationMs: Date.now() - started, actualModel: answer.model || profile.model, usage: answer.usage || null }));
-        lastError = null; break;
+        const response = await profile.evaluator.evaluate(conversation, pending);
+        if (!Array.isArray(response.results) || response.results.some(r => !pending.some(v => v.id === r.variableId)) || new Set(response.results.map(r => r.variableId)).size !== response.results.length) throw new AppError(502, 'Resultado estructurado incompleto o duplicado.', 'INVALID_AI_RESULT');
+        const actualModel = response.model || profile.model;
+        if (retained.size && metadata.model !== actualModel) throw new AppError(409, 'El proveedor cambió el modelo efectivo durante el reintento.', 'MODEL_CHANGED');
+        for (const result of response.results) retained.set(result.variableId, result);
+        metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null };
+        itemErrors = pending.filter(v => !retained.has(v.id)).map(v => {
+          const failure = response.validationErrors?.find(e => e.variableId === v.id);
+          return { variableId: v.id, code: 'INVALID_AI_RESULT', rules: failure?.rules || ['missing_item'], message: failure?.message || `Falta un resultado válido para ${v.id}.` };
+        });
+        lastError = itemErrors.length ? new AppError(502, `${itemErrors.length} variables requieren reintento por formato inválido.`, 'INVALID_AI_RESULT') : null;
+        profileStates[profile.id] = { ...metadata, results: [...retained.values()], validationErrors: itemErrors };
+        await store.transaction(s => {
+          Object.assign(s.attempts.find(a => a.id === attempt.id), { status: lastError ? 'partial' : 'completed', finishedAt: now(), durationMs: Date.now() - started,
+            actualModel, usage: response.usage || null, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
+          s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
+        });
+        if (!lastError) break;
       } catch (error) {
         lastError = error;
-        await store.transaction(s => Object.assign(s.attempts.find(a => a.id === attempt.id), { status: 'failed', finishedAt: now(), durationMs: Date.now() - started, error: safeError(error) }));
-        if (!retryable(error)) throw error;
-        if (index === 0 && profile.provider !== 'demo') await new Promise(resolve => setTimeout(resolve, 250));
+        itemErrors = pending.map(v => ({ variableId: v.id, ...safeError(error) }));
+        profileStates[profile.id] = { ...metadata, results: [...retained.values()], validationErrors: itemErrors };
+        await store.transaction(s => {
+          Object.assign(s.attempts.find(a => a.id === attempt.id), { status: 'failed', finishedAt: now(), durationMs: Date.now() - started, error: safeError(error), validationErrors: itemErrors });
+          s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
+        });
+        if (!retryable(error)) break;
       }
+      if (index === 0 && profile.provider !== 'demo') await new Promise(resolve => setTimeout(resolve, 250));
     }
-    if (answer && !lastError) break;
+    const candidate = { ...metadata, results: [...retained.values()], validationErrors: itemErrors, error: lastError };
+    if (!selectedState || candidate.results.length > selectedState.results.length || !lastError) { selectedState = candidate; effective = profile; }
+    if (!lastError) break;
   }
-  if (lastError) throw lastError;
+  answer = selectedState;
+  if (!answer || (!answer.results.length && !codeResults.length && lastError)) throw lastError;
+  const pending = aiVariables.filter(v => !answer.results.some(r => r.variableId === v.id));
+  const partial = pending.length > 0;
+  const failure = partial ? answer.error || lastError || new AppError(502, 'Hay variables pendientes de respuesta válida.', 'INVALID_AI_RESULT') : null;
+  const invalidResults = pending.map(v => ({ variableId: v.id, type: v.type, method: v.method, status: 'no_evaluado', value: null, evidence: [],
+    reason: 'No se obtuvo una respuesta válida del modelo. Revisión pendiente.', error: answer.validationErrors.find(e => e.variableId === v.id) || { variableId: v.id, ...safeError(failure) } }));
   const evaluation = { id: randomUUID(), conversationId: conversation.id, jobId: job.id, taskId: task.id, purpose: job.purpose,
     createdAt: now(), demo: job.demo, ...task.context, provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null, profileId: effective.id, provider: effective.provider,
     profileLabel: effective.label, requestedProfileId: task.profile.id, requestedProvider: task.profile.provider, requestedModel: task.profile.model,
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
     providerResponseId: answer.responseId || null, usage: answer.usage || null, catalogVersions: job.catalogVersions,
-    results: [...answer.results, ...(task.codeResults || catalog.filter(v => v.active && supportsCodeVariable(v)).map(v => ({ ...evaluateCodeVariable(conversation, v), method: 'Código' })))] };
+    partial, validationErrors: answer.validationErrors, results: [...answer.results, ...invalidResults, ...codeResults] };
   const fresh = await readHistory(store);
   const source = fresh.conversations.find(c => c.id === conversation.id);
   if (!source || sourceFingerprint(source) !== task.context.sourceHash) throw new AppError(409, 'Atom cambió durante la evaluación. Evalúa el contenido nuevo.', 'SOURCE_CHANGED');
@@ -218,15 +256,16 @@ async function processTask(store, registry, job, task, conversation, catalog) {
       const ref = state.operationalRefs.find(r => r.id === conversation.id);
       const anchor = state.evaluations.find(e => e.id === ref?.evaluationId);
       const primary = state.tasks.find(t => t.jobId === job.id && t.conversationId === conversation.id && t.profile.id === job.modelProfiles[0].id);
-      if (job.mode === 'dual' && task.profile.id !== primary?.profile.id && primary?.status === 'failed' && retryable(primary.error || {})) evaluation.contingencyFor = primary.profile;
-      const blockedPrimary = job.mode === 'dual' && primary?.status === 'failed' && !retryable(primary.error || {});
+      if (job.mode === 'dual' && task.profile.id !== primary?.profile.id && ['failed', 'partial'].includes(primary?.status) && retryable(primary.error || {})) evaluation.contingencyFor = primary.profile;
+      const blockedPrimary = job.mode === 'dual' && ['failed', 'partial'].includes(primary?.status) && !retryable(primary.error || {});
+      const blockedCurrent = partial && failure && !retryable(failure);
       const newer = state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.includes(conversation.id));
-      if (!blockedPrimary && !newer) {
+      if (!blockedPrimary && !blockedCurrent && !newer) {
         if (ref && (job.mode !== 'dual' || anchor?.jobId !== job.id)) ref.evaluationId = evaluation.id;
         else if (!ref) state.operationalRefs.push({ id: conversation.id, evaluationId: evaluation.id });
       }
     }
-    Object.assign(current, { status: 'completed', evaluationId: evaluation.id, error: null });
+    Object.assign(current, { status: partial ? 'partial' : 'completed', evaluationId: evaluation.id, error: failure ? safeError(failure) : null });
   });
 }
 export async function resumeEvaluationBatch(store, evaluator, jobId) {
@@ -244,6 +283,8 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
   for (const task of pending) {
     const c = candidates.find(c => c.id === task.conversationId);
     if (!c || sourceFingerprint(c) !== task.context.sourceHash) throw new AppError(409, 'Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
+    const context = evaluationContext(c, catalog);
+    if (context.promptHash !== task.context.promptHash || context.rulesVersion !== task.context.rulesVersion) throw new AppError(409, 'Las instrucciones o reglas cambiaron. Inicia una nueva ejecución para usar el checklist vigente.', 'PROMPT_CHANGED');
     registry.resolve(task.profile.id, task.profile);
   }
   await store.transaction(s => {

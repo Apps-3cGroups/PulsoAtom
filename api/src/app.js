@@ -14,6 +14,7 @@ import { registryFromEnv, asRegistry } from './model-registry.js';
 import { mountModelRoutes } from './model-routes.js';
 import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
+import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
 
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
@@ -189,7 +190,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       mode: config.demo ? 'demo' : 'real', metadata: state.metadata, timezone: config.timezone,
       countries: (state.countries || countries).map(({ code, name }) => ({ code, name })),
       agents: [...new Map(state.conversations.map(c => [c.agent.id, { ...c.agent, country: c.country }])).values()],
-      catalog: state.catalog.map(({ id, name, family, phase, mark, type, active, version }) => ({ id, name, family, phase, mark, type, active, version })),
+      catalog: currentCatalog(state).map(v => ({ id: v.id, name: v.name, family: v.family, phase: v.phase, mark: v.mark, type: v.type, active: v.active, version: v.version, availability: catalogAvailability(v) })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
       integrations: integrationStatus(),
     });
@@ -198,8 +199,9 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const q = z.object({ q: z.string().max(300).optional(), family: z.string().max(120).optional(), type: z.enum(['Flag', 'Métrica', 'Descriptor', 'Calculado']).optional(), phase: z.coerce.number().int().min(1).max(3).optional(), active: z.enum(['true', 'false']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(200).default(25) }).parse(req.query);
     const state = await store.read();
     const normalized = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    const filtered = state.catalog.filter(v => (!q.q || normalized(`${v.name} ${v.variable} ${v.definition}`).includes(normalized(q.q))) && (!q.family || v.family === q.family) && (!q.type || v.type === q.type) && (!q.phase || v.phase === q.phase) && (!q.active || v.active === (q.active === 'true'))).sort((a, b) => a.order - b.order);
-    res.json({ items: filtered.slice((q.page - 1) * q.pageSize, q.page * q.pageSize), total: filtered.length, totalCatalog: state.catalog.length, totalActive: state.catalog.filter(v => v.active).length, families: [...new Set(state.catalog.map(v => v.family))], page: q.page, pageSize: q.pageSize });
+    const catalog = currentCatalog(state);
+    const filtered = catalog.filter(v => (!q.q || normalized(`${v.name} ${v.variable} ${v.definition}`).includes(normalized(q.q))) && (!q.family || v.family === q.family) && (!q.type || v.type === q.type) && (!q.phase || v.phase === q.phase) && (!q.active || v.active === (q.active === 'true'))).sort((a, b) => a.order - b.order);
+    res.json({ items: filtered.slice((q.page - 1) * q.pageSize, q.page * q.pageSize).map(v => ({ ...v, availability: catalogAvailability(v) })), total: filtered.length, totalCatalog: catalog.length, totalActive: catalog.filter(v => v.active).length, families: [...new Set(catalog.map(v => v.family))], page: q.page, pageSize: q.pageSize });
   });
   app.post(`${prefix}/catalog`, requireAdmin, async (req, res) => {
     const input = createCatalogSchema.parse(req.body);

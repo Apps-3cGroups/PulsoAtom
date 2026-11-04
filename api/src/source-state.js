@@ -1,11 +1,7 @@
-import { selectedEvaluation } from './evaluation-context.js';
-import { createHash } from 'node:crypto';
+import { selectedEvaluation, sourceFingerprint } from './evaluation-context.js';
 
 // Hash the evaluable content, not ingestion timestamps. A repeated import is not a new review.
-export const sourceFingerprint = c => createHash('sha256').update(JSON.stringify({
-  id: c.id, country: c.country ?? null, completed: c.completed ?? true,
-  messages: c.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text, timestamp: m.timestamp ?? null })),
-})).digest('hex');
+export { sourceFingerprint };
 
 export function currentEvaluation(state, conversation) {
   return selectedEvaluation(state, conversation)

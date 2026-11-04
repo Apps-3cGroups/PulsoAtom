@@ -78,7 +78,8 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
     const rows = reveal ? comparisonRows(state, visibleSample) : [];
     res.json({ ...sampleSummary(state, sample, req.user.id), cases, revealed: reveal, rows,
       metrics: reveal ? qualityMetrics(rows, sample.modelProfiles) : [],
-      codeResults: reveal ? sample.cases.map(c => ({ conversationId: c.conversationId, results: c.codeResults })) : [] });
+      // Conversation metrics belong only to the conversation detail, not comparison.
+      codeResults: [] });
   });
   app.get(`${prefix}/comparisons/:id/validation/:conversationId`, async (req, res) => {
     const state = ensureEvaluationState(await readHistory(true));
@@ -96,6 +97,6 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
   });
   app.get(`${prefix}/evaluations/:id/attempts`, requireAdmin, async (req, res) => {
     const state = ensureEvaluationState(await store.read());
-    res.json({ tasks: state.tasks.filter(t => t.jobId === req.params.id), attempts: state.attempts.filter(a => a.jobId === req.params.id) });
+    res.json({ tasks: state.tasks.filter(t => t.jobId === req.params.id).map(({ codeResults, profileStates, ...task }) => task), attempts: state.attempts.filter(a => a.jobId === req.params.id) });
   });
 }

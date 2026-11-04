@@ -1,3 +1,4 @@
+import { classificationOf } from '../services/flags';
 import { Tag } from 'antd';
 import { CheckCircleOutlined, ExclamationCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { dateText, timeText } from './common';
@@ -11,15 +12,15 @@ export default function FlagModelComparison({ variable, demo }) {
     {demo && <Tag color="gold">Demostración · resultados sintéticos</Tag>}
     <div className={`flag-agreement ${agreed ? 'flag-agreement-positive' : ''}`}>
       {agreed ? <CheckCircleOutlined /> : comparison.agreement === 'disagree' ? <ExclamationCircleOutlined /> : <ClockCircleOutlined />}
-      <div><strong>{comparison.label}</strong><p>El acuerdo entre modelos no equivale a certeza. El dictamen humano se aplica al flag común.</p></div>
+      <div><strong>{agreed ? 'Detectado por 2 modelos' : comparison.label}</strong><p>El acuerdo entre modelos no equivale a certeza. El dictamen humano se aplica al flag común.</p></div>
     </div>
     {comparison.contingencyLabel && <p className="flag-contingency"><strong>{comparison.contingencyLabel}</strong></p>}
     <div className="flag-model-columns">{comparison.cells.map(cell => {
       const result = cell.result;
       const pending = ['pending', 'running'].includes(cell.status);
-      const status = !result ? pending ? 'Revisión pendiente' : 'Sin resultado' : result.status !== 'evaluado' ? 'Contexto insuficiente' : result.value === 1 ? 'Detecta el evento' : 'No detecta el evento';
+      const status = !result ? pending ? 'Revisión pendiente' : 'Sin resultado' : result.status !== 'evaluado' ? result.error ? 'Revisión pendiente' : 'Contexto insuficiente' : result.value === 1 ? 'Detecta el evento' : 'No detecta el evento';
       return <article className="flag-model-column" key={cell.profileId}>
-        <header><h3>{cell.label}</h3><Tag color={result?.value === 1 ? 'volcano' : result?.status === 'evaluado' ? 'default' : 'gold'}>{status}</Tag><small>{cell.model}</small></header>
+        <header><h3>{cell.label}</h3><Tag color={result?.value === 1 ? classificationOf(variable) === 'positive' ? 'green' : classificationOf(variable) === 'critical' ? 'red' : 'pink' : result?.status === 'evaluado' ? 'default' : 'gold'}>{status}</Tag><small>{cell.model}</small></header>
         <div className="flag-model-body"><h4>Justificación</h4><p>{result?.reason || cell.error?.message || 'La respuesta de este modelo todavía no está disponible.'}</p>
           {result?.codeRule && <div className="flag-rule-note"><b>IA + código</b><p>Una regla compartida ajustó el resultado. No cuenta como un voto independiente.</p>{result.aiResult && <p>Respuesta inicial de IA: {result.aiResult.status === 'evaluado' ? result.aiResult.value === 1 ? 'Evento detectado' : 'Evento no detectado' : 'Sin conclusión'}. {result.aiResult.reason}</p>}</div>}
           <h4>Evidencia citada</h4>{result?.evidence?.length ? result.evidence.map((e, i) => <blockquote key={`${e.messageId}-${i}`}><p>“{e.quote}”</p><small>Mensaje {e.messageId}</small></blockquote>) : <p className="muted">Sin cita registrada.</p>}

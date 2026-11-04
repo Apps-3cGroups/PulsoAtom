@@ -1,5 +1,5 @@
 import { AppError } from './errors.js';
-import { evaluationInput, evaluationSchema, systemInstructions, validateEvaluation } from './evaluator.js';
+import { evaluationInput, evaluationSchema, evaluationInstructions, supportsAiVariable, validateEvaluation } from './evaluator.js';
 
 export class GeminiEvaluator {
   constructor({ apiKey, baseUrl, model, timeoutMs = 120000, fetchImpl = fetch }) {
@@ -8,12 +8,14 @@ export class GeminiEvaluator {
   get configured() { return !!(this.apiKey && this.baseUrl && this.model); }
   async evaluate(conversation, variables) {
     if (!this.configured) throw new AppError(503, 'Falta configurar Gemini.', 'AI_CONFIGURATION');
+    if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
+    if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
     let response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}/models/${encodeURIComponent(this.model)}:generateContent`, {
         method: 'POST', signal: AbortSignal.timeout(this.timeoutMs),
         headers: { 'x-goog-api-key': this.apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: systemInstructions }] },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: evaluationInstructions }] },
           contents: [{ role: 'user', parts: [{ text: evaluationInput(conversation, variables) }] }],
           generationConfig: { responseMimeType: 'application/json', responseJsonSchema: evaluationSchema(variables) } }),
       });
@@ -27,7 +29,7 @@ export class GeminiEvaluator {
     let raw;
     try { raw = JSON.parse(candidate.content.parts.filter(p => !p.thought).map(p => p.text || '').join('')); }
     catch { throw new AppError(502, 'Gemini no devolvió el formato requerido.', 'INVALID_AI_RESULT'); }
-    return { results: validateEvaluation(raw, variables, conversation), model: payload.modelVersion || this.model,
+    return { ...validateEvaluation(raw, variables, conversation, { partial: true }), model: payload.modelVersion || this.model,
       responseId: payload.responseId || null, usage: payload.usageMetadata || null };
   }
 }
