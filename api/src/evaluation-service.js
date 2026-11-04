@@ -275,7 +275,9 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
   if (!job || !job.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
   if (state.settings.evaluationMaintenance) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const catalog = restoreCatalog(state, job.catalogVersions);
-  if (digest(catalogReferences(state.catalog)) !== digest(job.catalogVersions)) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
+  // MySQL JSON may reorder object keys; normalize both reference sets without
+  // changing the digest function or any historical context fingerprints.
+  if (digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
   if (state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.some(id => job.conversationIds.includes(id)))) throw new AppError(409, 'Existe una ejecución operativa posterior. Consulta el resultado vigente.', 'SUPERSEDED_JOB');
   const candidates = job.conversationIds.map(id => state.conversations.find(c => c.id === id)).filter(Boolean);
   const pending = state.tasks.filter(t => t.jobId === jobId && t.status !== 'completed');
