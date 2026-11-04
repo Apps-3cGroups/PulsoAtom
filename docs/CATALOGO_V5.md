@@ -56,6 +56,8 @@ El detalle `GET /pulsoAtom/api/conversations/:id` incorpora `dailyMetrics`, calc
 
 El día corresponde a la fecha del mensaje en `APP_TIMEZONE` (por defecto `America/Tegucigalpa`), no a la fecha de carga. Se selecciona inicialmente el último día con mensajes; `metricDate=YYYY-MM-DD` conserva la selección en la URL. Cambiarlo no consulta la IA ni vuelve a cargar la conversación. Solo cambia el minidashboard: la transcripción, el checklist, sus flags y las revisiones conservan su alcance original.
 
+La presentación prioriza cuatro bloques: tiempo transcurrido, primera respuesta humana, espera más larga con respuesta y distribución de mensajes entre cliente y equipo (personas + bot). Los tiempos se muestran en horas/minutos/segundos, con redondeo al segundo. La línea de actividad usa exclusivamente timestamps reales del día; los intervalos cliente → persona requieren evidencia de esa fecha. El anillo representa conteos, no calidad ni cumplimiento. Ratio y mensajes por turno aparecen en un segundo nivel. La ayuda consultable conserva cálculo, cobertura y alcance; la animación breve respeta `prefers-reduced-motion`.
+
 - Las siete métricas comparten el mismo día. Se excluyen eventos de sistema.
 - **Tiempo transcurrido del día:** primer → último mensaje de ese día, incluidas sus pausas. No significa tiempo de trabajo ni separa el chat en atenciones.
 - **Mayor silencio humano:** mayor espera completada cliente → humano dentro del día. El bot y los mensajes adicionales del cliente no reinician la espera. Un pendiente posterior no oculta los intervalos completados.
