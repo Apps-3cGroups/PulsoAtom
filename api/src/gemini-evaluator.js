@@ -23,7 +23,7 @@ export function geminiEvaluationSchema() {
               { type: 'null' },
             ] },
             reason: { type: 'string' },
-            evidence_message_ids: { type: 'array', items: { type: 'string' } },
+            evidence_message_ids: { type: 'array', items: { type: 'string' }, maxItems: 3 },
           },
           required: ['variableId', 'status', 'value', 'reason', 'evidence_message_ids'],
         },

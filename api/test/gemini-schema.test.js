@@ -31,6 +31,7 @@ test('Gemini usa una gramática constante para las 49 variables y conserva conte
   assert.equal(body.contents[0].parts[0].text, evaluationInput(conversation, variables));
   assert.equal(body.generationConfig.responseJsonSchema.properties.results.type, 'array');
   assert.deepEqual(body.generationConfig.responseJsonSchema, geminiEvaluationSchema());
+  assert.equal(body.generationConfig.responseJsonSchema.properties.results.items.properties.evidence_message_ids.maxItems, 3);
   assert.ok(JSON.stringify(body.generationConfig.responseJsonSchema).length < 1400);
   for (const variable of variables) assert.ok(!JSON.stringify(body.generationConfig.responseJsonSchema).includes(variable.id));
   assert.equal(result.results.find(r => r.variableId === 'tipo_interaccion').value, 'disponibilidad');
@@ -76,4 +77,24 @@ test('la normalización conserva la validación estricta de valores, abstencione
   assert.ok(answer.validationErrors.find(e => e.variableId === 'tipo_interaccion').rules.includes('invalid_value_type'));
   assert.ok(answer.validationErrors.find(e => e.variableId === 'productos_solicitados').rules.includes('invalid_value_type'));
   assert.ok(answer.validationErrors.find(e => e.variableId === 'cliente_abusivo').rules.includes('unknown_evidence_message'));
+});
+
+test('flags y descriptores aceptan tres evidencias y mantienen pendientes los ítems con cuatro', async () => {
+  const c = { ...conversation, messages: [...conversation.messages,
+    { id: 'm3', actor: 'humano', text: 'También está disponible Producto B.' },
+    { id: 'm4', actor: 'cliente', text: 'Sí, agregue Producto B, por favor.' },
+  ] };
+  const selected = variables.filter(v => ['productos_solicitados', 'cliente_acepto_cross_sell'].includes(v.id));
+  const raw = { results: response().results.filter(r => selected.some(v => v.id === r.variableId)).map(r => ({ ...r,
+    value: r.variableId === 'productos_solicitados' ? ['Producto A', 'Producto B'] : 1,
+    evidence_message_ids: ['m1', 'm3', 'm4'],
+  })) };
+  const accepted = await evaluator(raw).evaluate(c, selected);
+  assert.equal(accepted.results.length, 2);
+  assert.deepEqual(accepted.validationErrors, []);
+  for (const item of raw.results) item.evidence_message_ids = ['m1', 'm2', 'm3', 'm4'];
+  const rejected = await evaluator(raw).evaluate(c, selected);
+  assert.equal(rejected.results.length, 0);
+  assert.equal(rejected.validationErrors.length, 2);
+  assert.ok(rejected.validationErrors.every(error => error.rules.includes('invalid_evidence_count')));
 });
