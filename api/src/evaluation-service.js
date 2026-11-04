@@ -6,6 +6,7 @@ import { supportsAiVariable } from './evaluator.js';
 import { catalogAvailability } from './catalog-presentation.js';
 import { asRegistry } from './model-registry.js';
 import { catalogReferences, digest, ensureEvaluationState, evaluationContext, selectedEvaluation, sourceFingerprint } from './evaluation-context.js';
+import { startEvaluationHeartbeat } from './evaluation-heartbeat.js';
 
 const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE'].includes(error.code);
 const running = new Map();
@@ -127,11 +128,10 @@ function launch(store, registry, job, catalog, onProgress) {
   return completion;
 }
 async function processJob(store, registry, job, catalog, onProgress) {
-  const heartbeat = setInterval(() => store.transaction(s => {
+  const stopHeartbeat = startEvaluationHeartbeat(() => store.transaction(s => {
     const current = s.jobs.find(j => j.id === job.id);
     if (current?.status === 'running') current.updatedAt = now();
-  }).catch(() => {}), 30000);
-  heartbeat.unref();
+  }));
   try {
     const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && t.status !== 'completed');
     const cases = [...new Set(tasks.map(t => t.conversationId))];
@@ -156,7 +156,7 @@ async function processJob(store, registry, job, catalog, onProgress) {
     await Promise.all(Array.from({ length: job.concurrency || 1 }, worker));
     await store.transaction(draft => updateJob(draft, job.id, true));
     return (await store.read()).jobs.find(j => j.id === job.id);
-  } finally { clearInterval(heartbeat); }
+  } finally { await stopHeartbeat(); }
 }
 function updateJob(state, id, finished) {
   const job = state.jobs.find(j => j.id === id), tasks = state.tasks.filter(t => t.jobId === id);
