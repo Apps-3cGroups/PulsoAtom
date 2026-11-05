@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import { selectedEvaluation, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { classificationOf, catalogAvailability, currentCatalog } from './catalog-presentation.js';
+import { operationalConsensus } from './operational-evaluation.js';
 
 export const catalogFields = z.object({
   name: z.string().trim().min(3).max(160), family: z.string().trim().min(3).max(120),
@@ -51,32 +52,42 @@ export function conversationView(state, conversation, context = viewContext(stat
     const definition = context.versions.get(`${ref.id}:${ref.version}`);
     if (!definition) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
     const result = resultMap.get(ref.id) || { variableId: ref.id, status: 'no_evaluado', value: null, evidence: [] };
+    const classification = classificationOf(definition);
+    const consensus = operationalConsensus(evaluation, ref.id);
+    const detected = result.status === 'evaluado' && result.value === 1 && !result.error;
+    const automaticFlagVisible = !!classification && detected && (!!context.profileId || consensus?.detected === true);
+    const consensusSuppressed = !context.profileId && !!classification && detected && !automaticFlagVisible;
+    const sharedRule = ['Código', 'Cálculo'].includes(result.method || definition.method) || !!result.codeRule || !!result.comparison?.codeOnly || consensus?.agreement === 'rule';
+    const consensusPending = !context.profileId && !!evaluation && !!classification && !!ref.active && !sharedRule && (consensus?.pending ?? !consensus);
     const verdict = latestVerdict(state, conversation.id, evaluation?.sourceHash, ref.id, ref.version);
     let review = context.profileId ? null : latest.get(ref.id);
     if (evaluation?.sourceHash && !context.profileId && verdict && (!review || verdict.createdAt >= review.createdAt)) {
-      review = verdict && verdict.outcome !== 'reverted' && ((verdict.outcome === 'absent' && result.value === 1) || (verdict.outcome === 'present' && result.value !== 1))
+      review = verdict && verdict.outcome !== 'reverted' && ((verdict.outcome === 'absent' && result.value === 1) || (verdict.outcome === 'present' && (!automaticFlagVisible || review?.action === 'levantar')))
         ? { ...verdict, action: verdict.outcome === 'absent' ? 'refutar' : 'levantar' } : null;
     }
-    const classification = classificationOf(definition);
     let kind = null;
     if (classification && review?.action === 'refutar') kind = 'refuted';
     else if (classification && review?.action === 'levantar') kind = 'human';
-    else if (classification && result.status === 'evaluado' && result.value === 1) kind = classification;
+    else if (automaticFlagVisible) kind = classification;
     const priority = classification === 'critical' ? 'Crítico' : classification === 'normal' ? 'Normal' : null;
     const effective = !!kind && kind !== 'refuted';
-    const dualDetected = effective && result.comparison?.agreement === 'agree-positive' && result.comparison?.detections === 2 && result.comparison?.votes === 2 && !result.codeRule;
-    return { ...definition, availability: catalogAvailability(definition), enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected };
+    const dualDetected = effective && consensus?.detected === true;
+    return { ...definition, availability: catalogAvailability(definition), enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, consensusSuppressed, consensusPending };
   });
   const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, classification: v.classification, origin: v.origin, effective: v.effective, dualDetected: v.dualDetected,
     comparison: v.result.comparison ? Object.fromEntries(['agreement', 'detections', 'votes', 'expected', 'missing', 'label'].map(k => [k, v.result.comparison[k]])) : null }));
   const p1 = marks.filter(m => m.effective && m.classification === 'critical').length;
   const p2 = marks.filter(m => m.effective && m.classification === 'normal').length;
   const positive = marks.filter(m => m.effective && m.classification === 'positive').length;
-  const originalAlerts = variables.filter(v => v.result.status === 'evaluado' && v.result.value === 1 && ['critical', 'normal'].includes(v.classification)).length;
+  // Retained historical refutations have a matching denominator even when their
+  // original single-model alert is no longer published under the current policy.
+  const originalAlerts = variables.filter(v => (v.automaticFlagVisible || v.kind === 'refuted') && ['critical', 'normal'].includes(v.classification)).length;
+  const suppressedFlags = variables.filter(v => v.consensusSuppressed && !v.review).length;
+  const consensusPendingFlags = variables.filter(v => v.consensusPending && !v.review).length;
   const pendingFlags = evaluation ? variables.filter(v => v.enabledInEvaluation && v.classification && v.result.status !== 'evaluado' && !v.review).length : 0;
   const evaluationErrors = variables.filter(v => v.enabledInEvaluation && (v.result.error || v.result.comparison?.cells?.some(cell => cell.error))).length;
   const base = { provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
-    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, evaluationErrors, evaluationIncomplete: !!evaluation && (pendingFlags > 0 || evaluationErrors > 0), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
+    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationIncomplete: !!evaluation && (pendingFlags > 0 || evaluationErrors > 0), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
   return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: !!evaluation.modelReviewPending, provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
     metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : base;
 }
@@ -143,8 +154,8 @@ export function recordReview(state, conversationId, body, user) {
   const history = view.reviews.filter(r => r.variableId === body.variableId);
   const last = history.at(-1);
   if ((last?.id || null) !== body.expectedReviewId) throw new AppError(409, 'La revisión cambió. Recarga antes de registrar otra.', 'VERSION_CONFLICT');
-  if (body.action === 'refutar' && (variable.result.value !== 1 || variable.review)) throw new AppError(422, 'Solo puedes refutar un flag vigente del sistema.');
-  if (body.action === 'levantar' && (variable.result.value !== 0 || variable.review)) throw new AppError(422, 'Solo puedes levantar un evento que el sistema no marcó.');
+  if (body.action === 'refutar' && (!variable.automaticFlagVisible || variable.review)) throw new AppError(422, 'Solo puedes refutar un flag vigente del sistema.');
+  if (body.action === 'levantar' && (variable.automaticFlagVisible || variable.review || ![0, 1].includes(variable.result.value))) throw new AppError(422, 'Solo puedes levantar un evento que no tenga un flag automático vigente.');
   if (body.action === 'deshacer' && !variable.review) throw new AppError(422, 'No existe una revisión vigente para deshacer.');
   const message = conversation.messages.find(m => m.id === body.messageId);
   if (body.action === 'levantar' && !message) throw new AppError(422, 'Selecciona un mensaje de esta conversación como evidencia.');

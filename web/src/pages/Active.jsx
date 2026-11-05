@@ -5,7 +5,7 @@ import { ArrowRightOutlined, HistoryOutlined, ReloadOutlined, UserOutlined } fro
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
 import { defaultDateRange, previousDate } from '../services/dateRange';
-import { classificationOf, flagCount, dualMarks } from '../services/flags';
+import { classificationOf, flagCount, dualMarks, noVisibleFlagsLabel } from '../services/flags';
 import { buildActiveBoard, visibleBoardMarks } from '../services/activeBoard';
 import { PageHeading, LoadingState, EmptyState, ErrorState, Mark, PriorityTag, FlagSymbol, DualBadge, dateText, timeText } from '../components/common';
 
@@ -45,7 +45,7 @@ export default function Active() {
           </div>
         </section>)}
       </div>}
-      <footer className="active-footer"><span>Flags primero · Abre una conversación para revisar la evidencia.</span><Pagination current={currentPage} pageSize={6} total={groups.length} showSizeChanger={false} hideOnSinglePage onChange={setPage} size="small" showTotal={total => `${total} asistentes`} /></footer>
+      <footer className="active-footer"><span>Flags con coincidencia y revisión humana · Abre una conversación para ver la evidencia.</span><Pagination current={currentPage} pageSize={6} total={groups.length} showSizeChanger={false} hideOnSinglePage onChange={setPage} size="small" showTotal={total => `${total} asistentes`} /></footer>
     </>}
   </div>;
 }
@@ -60,7 +60,7 @@ function ConversationEntry({ conversation: c }) {
     {marks.length > 0 && <ul className="active-flags">{marks.map(m => <li key={m.id}><FlagSymbol mark={m} /><span>{m.name}{m.kind === 'refuted' && <small>Refutado</small>}</span><PriorityTag priority={classificationOf(m)} /></li>)}</ul>}
     {positives.length > 0 && <div className="active-positive-section"><b><Mark kind="positive" /> Resultados positivos</b><ul className="active-flags">{positives.map(m => <li key={m.id}><FlagSymbol mark={m} /><span>{m.name}{m.kind === 'refuted' && <small>Refutado</small>}</span></li>)}</ul></div>}
     {dualMarks(c).length > 0 && <DualBadge />}
-    {!c.evaluated ? <span className="active-pending">Pendiente de evaluación</span> : !c.evaluationIncomplete && !marks.some(m => m.effective) && <span className="active-no-flags">Sin flags vigentes en las variables mostradas</span>}
+    {!c.evaluated ? <span className="active-pending">Pendiente de evaluación</span> : !c.evaluationIncomplete && !marks.some(m => m.effective) && <span className="active-no-flags">{noVisibleFlagsLabel(c)}</span>}
     {c.evaluated && c.evaluationIncomplete && <span className="active-pending">Evaluación parcial · {c.pendingFlags} flags pendientes</span>}
     {c.sourceChanged && <span className="active-pending">Contenido nuevo pendiente de evaluar</span>}
   </Link>;

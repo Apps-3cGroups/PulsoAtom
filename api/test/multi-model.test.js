@@ -217,22 +217,24 @@ test('doble revisión: mismo contenido, una sola marca, evidencia separada y rev
   assert.equal(after.kind,'refuted'); assert.equal(after.result.comparison.detections,2);
   assert.equal(JSON.stringify(state.evaluations),originals);
 });
-test('detección exclusiva de Gemini se publica una vez como discrepancia, incluso con GPT en cero', async () => {
+test('detección exclusiva de Gemini conserva discrepancia sin publicar un flag automático', async () => {
   const { state,store,c }=fixture();dual(state);
   await runEvaluationBatch(store,registry((c,v)=>answer(c,v,0),(c,v)=>answer(c,v,1)),{max:1});
-  const view=conversationView(state,c,undefined,true), flag=view.variables.find(v=>v.kind==='critical');
+  const view=conversationView(state,c,undefined,true), flag=view.variables.find(v=>v.classification==='critical');
+  assert.equal(flag.kind,null);assert.equal(flag.consensusSuppressed,true);assert.equal(view.critical,0);
   assert.equal(flag.result.value,1);assert.equal(flag.result.comparison.agreement,'disagree');
   assert.equal(flag.result.comparison.cells[0].result.value,0);assert.equal(flag.result.comparison.cells[1].result.value,1);
 });
-test('fallo de GPT usa Gemini una vez; reanudar completa el acuerdo sin repetir Gemini ni perder la refutación',async()=>{
+test('fallo de GPT conserva resultado Gemini sin flag; reanudar completa el acuerdo sin repetir Gemini',async()=>{
   const {state,store,c}=fixture();dual(state);let fail=true,geminiCalls=0,gptCalls=0;
   const models=registry((c,v)=>{gptCalls++;if(fail)throw new AppError(502,'No disponible','AI_TRANSIENT');return answer(c,v,1);},(c,v)=>{geminiCalls++;return answer(c,v,1);});
   const job=await runEvaluationBatch(store,models,{max:1});assert.equal(job.status,'partial');assert.equal(gptCalls,2);assert.equal(geminiCalls,1);
-  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.kind==='critical'),id=view.evaluation.id;
+  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.classification==='critical'),id=view.evaluation.id;
+  assert.equal(flag.kind,null);assert.equal(flag.consensusPending,true);assert.ok(view.consensusPendingFlags>0);
   assert.equal(flag.result.comparison.agreement,'incomplete');assert.equal(flag.result.comparison.cells[0].result,null);assert.match(flag.result.comparison.contingencyLabel,/respaldo/);assert.equal(state.evaluations[0].contingencyFor.id,'model-0');
-  recordReview(state,c.id,{variableId:flag.id,evaluationId:id,expectedReviewId:null,action:'refutar',reason:'falso_positivo',comment:'Revisión antes del reintento'}, {id:'u',name:'Supervisor'});
+  assert.throws(()=>recordReview(state,c.id,{variableId:flag.id,evaluationId:id,expectedReviewId:null,action:'refutar',reason:'falso_positivo',comment:'Revisión antes del reintento'}, {id:'u',name:'Supervisor'}), /flag vigente/);
   fail=false;await (await resumeEvaluationBatch(store,models,job.id)).completion;
-  const after=conversationView(state,c,undefined,true);assert.equal(after.evaluation.id,id);assert.equal(after.variables.find(v=>v.id===flag.id).kind,'refuted');
+  const after=conversationView(state,c,undefined,true);assert.equal(after.evaluation.id,id);assert.equal(after.variables.find(v=>v.id===flag.id).kind,'critical');
   assert.equal(after.variables.find(v=>v.id===flag.id).result.comparison.agreement,'agree-positive');assert.equal(geminiCalls,1);assert.equal(state.evaluations.length,2);
 });
 test('cero más abstención no es un negativo completo y código no suma votos',async()=>{
@@ -254,7 +256,7 @@ test('fallos no técnicos no publican el secundario como un respaldo automático
 });
 test('refutaciones heredadas con huella siguen vigentes después de introducir los dictámenes comunes',async()=>{
   const {state,store,c}=fixture();await runEvaluationBatch(store,registry((c,v)=>answer(c,v,1),(c,v)=>answer(c,v,0)),{max:1});
-  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.kind==='critical');
+  const view=conversationView(state,c,undefined,true),flag=view.variables.find(v=>v.classification==='critical');
   state.reviews.push({id:'legacy-review',conversationId:c.id,evaluationId:view.evaluation.id,variableId:flag.id,action:'refutar',authorName:'Persona',createdAt:'2026-11-03T00:00:00Z'});
   assert.equal(conversationView(state,c,undefined,true).variables.find(v=>v.id===flag.id).kind,'refuted');
 });

@@ -737,3 +737,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .comparison-result.detected-positive { color: #167b54; }
 .comparison-result.detected-positive .result-figure { font-weight: 800; font-size: 20px; }
 .partial-indicator { font: 700 11px/12px 'Instrument Sans', sans-serif; min-width: 9px; color: #8b6638; }
+/* An individual answer stays available as evidence, without an operational flag. */
+.unpublished-result details { margin-top: 10px; color: var(--muted); font-size: 12px; }
+.unpublished-result summary { cursor: pointer; padding: 4px 0; }
+.unpublished-result details p { line-height: 1.6; }
