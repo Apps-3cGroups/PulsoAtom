@@ -5,6 +5,19 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Desplegar Pulso o ejecutar solo el diagnóstico sintético de Clef'
+        type: choice
+        options: [deploy, diagnose-clef]
+        default: deploy
+        required: true
+      probe:
+        description: 'Formato de la única petición sintética (solo diagnóstico)'
+        type: choice
+        options: [basic, schema, json]
+        default: basic
+        required: true
 
 permissions:
   contents: read
@@ -14,7 +27,92 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  diagnose-clef:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'diagnose-clef' }}
+    name: Diagnose Clef without deployment
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: One synthetic Gateway request from the Pulso backend
+        env:
+          TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
+          CLEF_PROBE: ${{ inputs.probe }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if ($env:CLEF_PROBE -cnotin @('basic', 'schema', 'json')) { throw 'Invalid diagnostic mode.' }
+          if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) { throw 'Missing TD_APPS_SSH_KEY.' }
+          foreach ($tool in @('ssh', 'scp', 'icacls')) {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing required command: $tool" }
+          }
+          function Invoke-Checked {
+            param([string]$FilePath, [string[]]$Arguments)
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "$FilePath failed with exit code $LASTEXITCODE" }
+          }
+          $workDir = Join-Path $env:RUNNER_TEMP "pulso-clef-diagnostic-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+          $keyPath = Join-Path $workDir 'td-apps.pem'
+          $knownHosts = Join-Path $workDir 'known_hosts'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'api/scripts/diagnose-clef.mjs'
+          $remoteScript = "/tmp/pulso-clef-diagnostic-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT).mjs"
+          $sshTarget = 'ubuntu@10.252.1.214'
+          $sshOptions = @()
+          $diagnosticExit = 2
+          try {
+            if (-not (Test-Path -LiteralPath $source)) { throw 'Diagnostic script is missing.' }
+            $key = $env:TD_APPS_SSH_KEY
+            if (($key -notmatch "`n") -and ($key -match '\\n')) { $key = $key -replace '\\n', "`n" }
+            $key = ($key -replace "`r`n", "`n").TrimEnd() + "`n"
+            if ($key -notmatch '-----BEGIN .+ PRIVATE KEY-----' -or $key -notmatch '-----END .+ PRIVATE KEY-----') { throw 'Invalid SSH key format.' }
+            [System.IO.File]::WriteAllText($keyPath, $key, [System.Text.Encoding]::ASCII)
+            $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            Invoke-Checked -FilePath 'icacls' -Arguments @($keyPath, '/inheritance:r')
+            Invoke-Checked -FilePath 'icacls' -Arguments @($keyPath, '/grant:r', "${identity}:R")
+            $sshOptions = @('-i', $keyPath, '-p', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
+            $scpOptions = @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
+            Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @($source, "${sshTarget}:$remoteScript"))
+            # No deployment, service restart, database access or export of .env.
+            # The Node script permits exactly one synthetic request per invocation.
+            $remoteCommand = @"
+          set -u
+          cleanup_probe() { sudo -n rm -f -- '$remoteScript' || true; }
+          trap cleanup_probe EXIT
+          sudo -n chown td:td '$remoteScript' || exit 2
+          sudo -n chmod 600 '$remoteScript' || exit 2
+          sudo -n -u td -H node --env-file=/var/www/nodeapps/PulsoAtom/api/.env '$remoteScript' '$($env:CLEF_PROBE)'
+          exit `$?
+          "@
+            $remoteCommand = $remoteCommand -replace "`r`n", "`n" -replace "`r", "`n"
+            & ssh @sshOptions $sshTarget $remoteCommand
+            $diagnosticExit = $LASTEXITCODE
+          }
+          finally {
+            try {
+              if ($sshOptions.Count -gt 0 -and (Test-Path -LiteralPath $keyPath)) {
+                & ssh @sshOptions $sshTarget "sudo -n rm -f -- '$remoteScript'"
+                if ($LASTEXITCODE -ne 0) { Write-Warning 'Temporary diagnostic script cleanup needs review.' }
+              }
+            }
+            catch { Write-Warning 'Remote diagnostic cleanup could not connect.' }
+            finally {
+              if (Test-Path -LiteralPath $workDir) {
+                $tempRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+                if (-not ([System.IO.Path]::GetFullPath($workDir)).StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing cleanup outside RUNNER_TEMP.' }
+                Remove-Item -LiteralPath $workDir -Recurse -Force
+              }
+            }
+          }
+          if ($diagnosticExit -ne 0) { throw "Diagnostic reported a failure (exit $diagnosticExit). Review only the sanitized JSON above." }
+
   deploy:
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}
     name: Deploy PulsoAtom to Server 214
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
