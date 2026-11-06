@@ -43,7 +43,7 @@ jobs:
           Set-StrictMode -Version Latest
           if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) { throw 'Missing TD_APPS_SSH_KEY.' }
           if ($env:GITHUB_RUN_ID -notmatch '^\d+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^\d+$') { throw 'Invalid workflow run identifier.' }
-          foreach ($tool in @('git', 'ssh', 'scp', 'icacls')) {
+          foreach ($tool in @('ssh', 'scp', 'icacls')) {
             if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Missing required command: $tool" }
           }
           function Invoke-Checked {
@@ -55,20 +55,22 @@ jobs:
           New-Item -ItemType Directory -Path $workDir -Force | Out-Null
           $keyPath = Join-Path $workDir 'td-apps.pem'
           $knownHosts = Join-Path $workDir 'known_hosts'
-          $archivePath = Join-Path $workDir 'source.tar.gz'
+          $sourceRoot = Join-Path $env:GITHUB_WORKSPACE 'api'
           $remoteRoot = "/tmp/pulso-gemma-preflight-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
-          $remoteArchive = "$remoteRoot/source.tar.gz"
           $sshTarget = 'ubuntu@10.252.1.214'
           $sshOptions = @()
           $remotePrepared = $false
           $preflightExit = 2
           try {
-            # Archive the dispatched commit only, never a working tree or .env.
-            Invoke-Checked -FilePath 'git' -Arguments @('-C', $env:GITHUB_WORKSPACE, 'cat-file', '-e', 'HEAD:api/scripts/check-gemma-contract.js')
-            $tracked = & git -C $env:GITHUB_WORKSPACE ls-tree -r --name-only HEAD -- api
-            if ($LASTEXITCODE -ne 0) { throw 'Could not inspect tracked API files.' }
-            if ($tracked | Where-Object { $_ -match '(^|/)(\.data|node_modules)(/|$)' -or ($_ -match '(^|/)\.env(\.[^/]*)?$' -and $_ -notmatch '(^|/)\.env\.example$') }) { throw 'Refusing to package runtime data or credentials.' }
-            Invoke-Checked -FilePath 'git' -Arguments @('-C', $env:GITHUB_WORKSPACE, 'archive', '--format=tar.gz', "--output=$archivePath", 'HEAD', 'api')
+            # checkout also supports REST extraction when Git is unavailable.
+            # Copy only this checkout's API after rejecting runtime files/links.
+            if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) { throw 'API checkout is missing.' }
+            $sourceItem = Get-Item -LiteralPath $sourceRoot -Force
+            if ($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Refusing an API checkout link.' }
+            $entries = @(Get-ChildItem -LiteralPath $sourceRoot -Force -Recurse)
+            if ($entries | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }) { throw 'Refusing links in the API checkout.' }
+            if ($entries | Where-Object { $_.Name -in @('.data', 'node_modules') -or ($_.Name -match '^\.env(\..*)?$' -and $_.Name -ne '.env.example') }) { throw 'Refusing to copy runtime data or credentials.' }
+            if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'scripts/check-gemma-contract.js') -PathType Leaf)) { throw 'Gemma contract script is missing.' }
 
             $key = $env:TD_APPS_SSH_KEY
             if (($key -notmatch "`n") -and ($key -match '\\n')) { $key = $key -replace '\\n', "`n" }
@@ -82,7 +84,7 @@ jobs:
             $scpOptions = @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
-            Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @($archivePath, "${sshTarget}:$remoteArchive"))
+            Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
             # Isolated source + existing dependencies/env. No pull, npm, PM2,
             # migrations, reset, real conversations or database writes.
             $remoteCommand = @"
@@ -94,8 +96,7 @@ jobs:
           sudo -n -u td -H test -d /var/www/nodeapps/PulsoAtom/api/node_modules
           sudo -n chown -R td:td -- '$remoteRoot'
           sudo -n chmod 700 -- '$remoteRoot'
-          sudo -n -u td -H tar --extract --gzip --file='$remoteArchive' --directory='$remoteRoot' --no-same-owner --no-same-permissions
-          sudo -n -u td -H rm -f -- '$remoteArchive'
+          sudo -n -u td -H test -f '$remoteRoot/api/scripts/check-gemma-contract.js'
           sudo -n -u td -H ln -s -- /var/www/nodeapps/PulsoAtom/api/node_modules '$remoteRoot/api/node_modules'
           sudo -n -u td -H bash -c 'cd "`$1" && exec node --env-file=/var/www/nodeapps/PulsoAtom/api/.env scripts/check-gemma-contract.js' _ '$remoteRoot/api'
           "@
