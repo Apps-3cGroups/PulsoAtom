@@ -8,6 +8,7 @@ const Active = lazy(() => import('./pages/Active'));
 const Summary = lazy(() => import('./pages/Summary'));
 const Conversations = lazy(() => import('./pages/Conversations'));
 const Conversation = lazy(() => import('./pages/Conversation'));
+const ConversationEntry = lazy(() => import('./pages/ConversationEntry'));
 const Catalog = lazy(() => import('./pages/Catalog'));
 const Evaluations = lazy(() => import('./pages/Evaluations'));
 const Comparison = lazy(() => import('./pages/Comparison'));
@@ -24,7 +25,7 @@ export default function PortalRoutes() {
       <Route path="/activas" element={<Active />} />
       <Route path="/historico" element={<Conversations />} />
       <Route path="/busqueda" element={<Conversations search />} />
-      <Route path="/conversacion" element={<Conversation />} />
+      <Route path="/conversacion" element={<ConversationEntry />} />
       <Route path="/conversacion/:id" element={<Conversation />} />
       <Route path="/comparacion" element={adminOnly(<Comparison />)} />
       <Route path="/comparacion/:sampleId/validar/:conversationId" element={<Validation />} />
