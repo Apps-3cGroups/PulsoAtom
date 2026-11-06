@@ -37,10 +37,12 @@ export function latestVerdict(state, conversationId, sourceHash, variableId, ver
   if (!sourceHash) return null;
   return (state.verdicts || []).filter(v => v.conversationId === conversationId && v.sourceHash === sourceHash && v.variableId === variableId && v.catalogVersion === version).at(-1) || null;
 }
+export const evaluationExposureId = (userId, evaluation) => evaluation?.sourceHash
+  ? digest([userId, evaluation.conversationId, evaluation.sourceHash, evaluation.catalogHash]) : null;
 export function exposeEvaluation(state, userId, evaluation) {
-  if (!evaluation?.sourceHash) return;
+  const id = evaluationExposureId(userId, evaluation);
+  if (!id) return;
   ensureEvaluationState(state);
-  const id = digest([userId, evaluation.conversationId, evaluation.sourceHash, evaluation.catalogHash]);
   if (!state.exposures.some(e => e.id === id)) state.exposures.push({ id, userId, conversationId: evaluation.conversationId,
     sourceHash: evaluation.sourceHash, catalogVersions: evaluation.catalogVersions, createdAt: new Date().toISOString() });
 }
