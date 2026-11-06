@@ -59,7 +59,7 @@ test('OpenAI y Gemini devuelven resultados válidos junto a los errores por vari
   const vars = createState(false).catalog.filter(v => v.active && supportsAiVariable(v));
   const data = raw(vars); data.results[flagId].evidence_message_ids = ['m1'];
   const openai = new OpenAIEvaluator({ apiKey: 'synthetic', baseUrl: 'https://example.test', model: 'synthetic', fetchImpl: async () => ({ ok: true, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify(data) }] }] }) }) });
-  const gemini = new GeminiEvaluator({ apiKey: 'synthetic', baseUrl: 'https://example.test', model: 'synthetic', fetchImpl: async () => ({ ok: true, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(data) }] } }] }) }) });
+  const gemini = new GeminiEvaluator({ apiKey: 'synthetic', baseUrl: 'https://example.test', model: 'synthetic', fetchImpl: async () => ({ ok: true, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ results: Object.entries(data.results).map(([variableId, result]) => ({ variableId, ...result })) }) }] } }] }) }) });
   for (const evaluator of [openai, gemini]) {
     const answer = await evaluator.evaluate(c, vars);
     assert.equal(answer.results.length, 48);

@@ -154,7 +154,7 @@ test('los resultados heredados conservan referencia operativa y no pasan a ser c
 
 test('Gemini utiliza el mismo contrato JSON, API key en header y valida evidencia', async () => {
   const { state, c } = fixture(); const vars = state.catalog.filter(v => v.active); let request;
-  const raw = { results: Object.fromEntries(vars.map(v => [v.id, { status: 'evaluado', value: 0, reason: 'No se observa el evento.', evidence_message_ids: [] }])) };
+  const raw = { results: vars.map(v => ({ variableId: v.id, status: 'evaluado', value: 0, reason: 'No se observa el evento.', evidence_message_ids: [] })) };
   const model = new GeminiEvaluator({ apiKey: 'test-key', baseUrl: 'https://gemini.example/v1beta', model: 'test-model', fetchImpl: async (url, options) => {
     request = { url, options }; return { ok: true, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(raw) }] } }], modelVersion: 'exact-test-model' }) };
   } });
