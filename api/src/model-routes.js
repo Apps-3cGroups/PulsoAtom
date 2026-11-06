@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { ensureEvaluationState, exposeEvaluation, historicalProfileId } from './evaluation-context.js';
+import { ensureEvaluationState, evaluationExposureId, exposeEvaluation, historicalProfileId } from './evaluation-context.js';
 import { comparisonRows, findComparison, qualityMetrics, sampleSummary, saveValidation, validationView } from './comparisons.js';
 import { startEvaluationBatch, resumeEvaluationBatch, recoverEvaluationJobs } from './evaluation-service.js';
 import { mountLocalModelConfigurationRoutes } from './local-model-configuration.js';
@@ -73,7 +73,13 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
     const selectedCase = typeof req.query.conversationId === 'string' ? req.query.conversationId : null;
     const visibleSample = selectedCase ? { ...sample, cases: sample.cases.filter(c => c.conversationId === selectedCase) } : sample;
     if (reveal) {
-      await store.transaction(draft => { for (const c of visibleSample.cases) exposeEvaluation(draft, req.user.id, { ...c, catalogVersions: sample.catalogVersions }); });
+      const exposures = visibleSample.cases.map(c => ({ ...c, catalogVersions: sample.catalogVersions }));
+      const existing = new Set(state.exposures.map(e => e.id));
+      // Polling an already revealed sample is read-only. The same identity is
+      // checked again by exposeEvaluation under the write lock for first-view races.
+      if (exposures.some(e => { const id = evaluationExposureId(req.user.id, e); return id && !existing.has(id); })) {
+        await store.transaction(draft => { for (const exposure of exposures) exposeEvaluation(draft, req.user.id, exposure); });
+      }
     }
     const cases = sample.cases.map(c => {
       const source = state.conversations.find(s => s.id === c.conversationId);

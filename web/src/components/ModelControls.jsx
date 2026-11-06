@@ -10,6 +10,8 @@ import LocalModelConfiguration from './LocalModelConfiguration';
 import { executableProfiles, policySelection } from '../services/localModels';
 
 export const jobStatus = status => ({ running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
+const keepReading = () => true;
+const executionReadError = error => error?.code === 'TIMEOUT' ? { message: 'La consulta tardó demasiado. Reintentar consulta el avance; no vuelve a ejecutar los modelos.' } : error;
 export function ModelControls({ onSaved, running }) {
   const request = useApi('/models');
   const { user, bootstrap } = usePortal();
@@ -78,12 +80,13 @@ function SampleCard({ profiles, isAdmin, running }) {
 export function JobActions({ job, onSaved }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(null);
   const { user } = usePortal();
-  const request = useApi(open ? `/evaluations/${job.id}/attempts` : null);
-  useEffect(() => { if (open && job.status === 'running') { const timer = setInterval(request.reload, 3000); return () => clearInterval(timer); } }, [open, job.status, request.reload]);
+  const request = useApi(open ? `/evaluations/${job.id}/attempts` : null,
+    { timeoutMs: 30000, pollIntervalMs: job.status === 'running' ? 3000 : 0, pollWhile: keepReading });
   const resume = async () => { setBusy(true); setError(null); try { await api(`/evaluations/${job.id}/resume`, { method: 'POST', body: {} }); onSaved(); } catch (e) { setError(e); } finally { setBusy(false); } };
   return <><Button type="text" icon={<HistoryOutlined />} onClick={() => setOpen(true)}>Detalle</Button><Drawer title="Ejecución y contingencia" open={open} onClose={() => setOpen(false)} width="min(660px, 100vw)">
     <p>{job.purpose === 'comparison' ? 'Comparación de modelos' : 'Evaluación operativa'} · {jobStatus(job.status)}</p>{job.fallback && <p>Respaldo configurado: {job.fallback.label} · {job.fallback.model}</p>}{error && <Alert type="error" message={error.message} />}
-    {request.error ? <ErrorState error={request.error} retry={request.reload} /> : <Table rowKey="id" size="small" loading={tableLoading(request.loading)} dataSource={request.data?.attempts || []} columns={[{ title: 'Modelo', render: (_, a) => <div>{a.requestedModel}{a.actualModel && a.actualModel !== a.requestedModel && <small> → {a.actualModel}</small>}</div> }, { title: 'Estado', render: (_, a) => <div>{jobStatus(a.status)}{a.error && <small className="attempt-error">{a.error.message}</small>}</div> }, { title: 'Tiempo', render: (_, a) => a.durationMs == null ? '—' : `${(a.durationMs / 1000).toFixed(1)} s` }]} pagination={{ pageSize: 8 }} />}
+    {request.error && request.data && <Alert type="warning" showIcon message="No se pudo actualizar el avance" description={`Se muestran los datos de la última consulta. ${executionReadError(request.error).message}`} action={<Button onClick={request.reload}>Reintentar</Button>} />}
+    {request.error && !request.data ? <ErrorState error={executionReadError(request.error)} retry={request.reload} /> : <Table rowKey="id" size="small" loading={tableLoading(request.loading)} dataSource={request.data?.attempts || []} columns={[{ title: 'Modelo', render: (_, a) => <div>{a.requestedModel}{a.actualModel && a.actualModel !== a.requestedModel && <small> → {a.actualModel}</small>}</div> }, { title: 'Estado', render: (_, a) => <div>{jobStatus(a.status)}{a.error && <small className="attempt-error">{a.error.message}</small>}</div> }, { title: 'Tiempo', render: (_, a) => a.durationMs == null ? '—' : `${(a.durationMs / 1000).toFixed(1)} s` }]} pagination={{ pageSize: 8 }} />}
     {user.role === 'admin' && job.modelProfiles && ['partial', 'failed', 'interrupted'].includes(job.status) && <Button icon={<ReloadOutlined />} loading={busy} onClick={resume}>Reanudar pendientes y fallidos</Button>}
     <p className="small muted">Los resultados completados se conservan. Cada reanudación registra nuevos intentos y verifica que el origen siga siendo el mismo.</p>
   </Drawer></>;
