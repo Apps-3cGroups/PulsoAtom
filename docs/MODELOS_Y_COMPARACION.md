@@ -29,8 +29,8 @@ GATEWAY_PORTAL_KEY=portal-pulso
 
 Reiniciar la API al cambiar estas variables. Después, entrar como administrador a **Evaluaciones → Herramientas internas → Modelos locales**:
 
-1. Pulsar **Consultar Gateway**. Solo consulta el catálogo; no envía conversaciones ni genera evaluaciones.
-2. Elegir la herramienta y el ID exacto del modelo para cada uno de los dos perfiles. Los modelos se consultan mediante `/v1/models` de la herramienta elegida; no se presuponen IDs ni se usan URLs proporcionadas por el catálogo.
+1. Al abrir la configuración, Pulso consulta automáticamente las herramientas y los modelos de las herramientas guardadas. **Consultar Gateway** actualiza ambas listas. Son consultas de catálogo: no envían conversaciones ni generan evaluaciones.
+2. Elegir la herramienta y el ID exacto del modelo para cada uno de los dos perfiles. Cambiar de herramienta carga sus modelos automáticamente. Si falta elegir herramienta, no hay modelos o falla la consulta, el formulario explica el estado y ofrece reintento cuando corresponde. No se presuponen IDs ni se usan URLs proporcionadas por el catálogo.
 3. Elegir el formato JSON soportado y habilitar ambos perfiles. Guardar vuelve a verificar las herramientas/modelos, persiste su versión y selecciona la política dual Clef/Gemma. **La programación diaria queda pausada** para revisar primero el piloto solicitado.
 4. Los cambios guardados se aplican a las próximas ejecuciones sin reiniciar. No se limpian ni evalúan conversaciones al guardar. Se puede desactivar un perfil ya configurado incluso si el Gateway está caído, siempre que solo cambie su habilitación de activa a inactiva.
 

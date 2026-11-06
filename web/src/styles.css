@@ -499,7 +499,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .local-profile-heading .ant-form-item { margin: 0; }
 .local-profile-fields { display: grid; grid-template-columns: minmax(160px, .8fr) minmax(220px, 1.2fr) minmax(210px, 1fr); gap: 16px; }
 .local-profile-fields .ant-form-item { margin-bottom: 4px; }
-.local-model-refresh { padding: 2px 0; height: auto; margin-top: 6px; font-size: 12px; }
 .local-config-save { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 18px; }
 .local-config-save > div:first-child { max-width: 660px; }
 .local-config-save p { font-size: 12px; margin: 5px 0 0; }

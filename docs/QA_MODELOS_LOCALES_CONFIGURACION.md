@@ -58,6 +58,17 @@ Validación del 6 de noviembre de 2026. Datos sintéticos, HTTP local y Gateway 
   Comportamiento esperado: que la configuración se encuentre antes de política/comparaciones y no muestre IDs públicos crudos como selección vigente.
   Recomendación: mantener las credenciales fuera del formulario. Paginación/búsqueda de registros no aplica a los dos perfiles fijos; los modelos sí se pueden buscar en el selector.
 
+### 7. Regresión: selectores de modelos bloqueados
+
+- Estado: cumple
+  Criticidad: crítica
+  Hallazgo: se reprodujo que Consultar Gateway cargaba herramientas, pero no modelos de herramientas ya guardadas. Se corrigió la carga automática al abrir, cambiar herramienta y actualizar el catálogo. Las respuestas antiguas se descartan y no se modifica el borrador por una consulta.
+  Evidencia: `web/test/gateway-discovery.test.js` (seis regresiones); prueba nativa de navegador con herramientas y modelos sintéticos. Se abrió y seleccionó cada modelo sin pulsar una consulta adicional, se actualizó conservando la selección y se probó una herramienta sin modelos seguida de Descartar cambios.
+  Comportamiento esperado: ambos selectores disponibles cuando existen modelos; explicación y reintento si faltan, sin ejecutar IA ni guardar automáticamente.
+  Recomendación: desplegar la corrección web. La versión anterior permite consultar modelos con los botones específicos debajo de cada selector como alternativa temporal.
+
+Validación de esta corrección: 62 pruebas web, compilación correcta y 32 pruebas de contrato/API relacionadas sin fallos. Gateway y datos sintéticos; no se modificó configuración real ni se ejecutaron evaluaciones. La prueba de navegador no guardó el borrador.
+
 ## Resumen ejecutivo
 
 198 pruebas de API y 56 de web correctas; compilación web correcta. Nueve verificaciones de navegador, cero llamadas a proveedores y cero escrituras en bases reales. `git diff --check` sin errores.
