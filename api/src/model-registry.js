@@ -67,7 +67,7 @@ export function registryFromEnv({ demo = false, env = process.env, fetchImpl = f
     const model = spec.model ?? env[`${prefix}_MODEL`] ?? '';
     if (spec.provider === 'gateway') {
       const evaluator = new GatewayEvaluator({ baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
-        portalKey: env.GATEWAY_PORTAL_KEY, toolKey: env[`${prefix}_TOOL_KEY`], model,
+        portalKey: env.GATEWAY_PORTAL_KEY ?? 'portal-pulso', toolKey: env[`${prefix}_TOOL_KEY`], model,
         timeoutMs: Number(env[`${prefix}_TIMEOUT_MS`] || 180000), maxTokens: Number(env[`${prefix}_MAX_TOKENS`] || 16000),
         temperature: Number(env[`${prefix}_TEMPERATURE`] || 0), responseFormat: env[`${prefix}_RESPONSE_FORMAT`] || 'json_schema', fetchImpl });
       return { ...spec, model, enabled: env[`${prefix}_EVALUATION_ENABLED`] === 'true', evaluator };

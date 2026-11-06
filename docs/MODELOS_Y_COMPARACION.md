@@ -44,6 +44,15 @@ Los adaptadores implementan `configured` y `evaluate(conversation, variables)`, 
 
 Todo el consumo sale del backend: `GET /v1/tools` descubre las herramientas y `POST /v1/tools/{toolKey}/invoke` invoca las rutas documentadas de modelos y Chat Completions. El token compartido solo se envía como `X-Gateway-Token`; no se expone a React, logs ni respuestas de Pulso. `portal_key` debe ser el identificador real asignado al portal. Pulso no sigue redirecciones ni utiliza la URL privada devuelta por el catálogo como destino de red.
 
+La identidad de este portal es `portal-pulso`, también usada por defecto cuando `GATEWAY_PORTAL_KEY` no existe. Para consultar el Gateway desde el servidor sin copiar sus credenciales ni ejecutar evaluaciones, situarse en `api/` y usar:
+
+```sh
+node scripts/discover-local-models.js
+node scripts/discover-local-models.js --tool CLAVE_EXACTA_DEL_CATALOGO
+```
+
+El primer comando imprime únicamente claves y estados de herramientas. El segundo consulta los IDs exactos de modelos de una herramienta activa y su `request_uuid`. Lee el `.env` del servidor, no imprime el token ni URLs internas y no accede a la base de datos. Usar los nombres descubiertos para completar los perfiles siguientes antes de preparar o aplicar el piloto.
+
 Configurar en `api/.env`:
 
 ```dotenv

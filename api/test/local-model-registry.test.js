@@ -44,6 +44,12 @@ test('gateway profile identity includes inference configuration but excludes cre
   }
 });
 
+test('local profiles default to the confirmed portal identity when no environment override exists', () => {
+  const models = registry({ GATEWAY_PORTAL_KEY: undefined });
+  assert.equal(models.resolve('clef-local').evaluator.portalKey, 'portal-pulso');
+  assert.equal(models.resolve('gemma-local').evaluator.portalKey, 'portal-pulso');
+});
+
 test('existing OpenAI/Gemini configuration hashes stay compatible', () => {
   const models = registryFromEnv({ env: { OPENAI_MODEL: 'legacy-exact', OPENAI_API_KEY: 'synthetic', OPENAI_EVALUATION_ENABLED: 'true' }, fetchImpl: offline });
   assert.equal(models.list()[0].configurationHash, digest(['openai', 'legacy-exact', 'https://api.openai.com/v1', 120000]));
