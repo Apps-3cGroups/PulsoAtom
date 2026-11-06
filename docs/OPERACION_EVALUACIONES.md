@@ -19,14 +19,14 @@ La renovación actual admite únicamente `gemma-local`, con política `single`, 
 1. Comprobar Gemma sin datos reales: `node scripts/check-gemma-contract.js`. Lee el checklist/configuración de Pulso y envía una conversación sintética; máximo dos solicitudes, sin guardar evaluaciones. Deben pasar el contrato y los tres casos conocidos. Esto no sustituye una revisión de calidad sobre casos reales.
 2. Configurar Gemma como único modelo y mantener pausado el diario. Consultar sin modificar: `npm run eval:all -- --plan` y `npm run eval:reset`.
 3. Revisar el universo, el total de evaluaciones y que no haya tareas en curso.
-4. Limpiar usando el total revisado: `npm run eval:reset -- --apply --expected-evaluations TOTAL`. Conservar el `maintenanceId` y la ruta del respaldo devueltos.
-5. Iniciar una ventana controlada: `npm run eval:all -- --execute --maintenance-id UUID --max-batches 1`.
+4. Iniciar usando `node scripts/start-gemma-renewal.js --start --from INICIO --to FIN --limit 20 --expected-evaluations TOTAL --expected-policy-version VERSION --expected-configuration-hash HASH_MODELO --expected-catalog-hash HASH_CATALOGO --expected-prompt-hash HASH_INSTRUCCIONES`, con los valores revisados. Este comando fija la selección, respalda y limpia los resultados anteriores, verifica la copia y lanza el trabajador. Conservar el `maintenanceId` y la ruta del respaldo devueltos.
+5. El primer lote queda limitado a la muestra explícita. El trabajador exige su manifiesto: si falta, se detiene; nunca crea un universo más amplio.
 6. Consultar avance sin modificar: `npm run eval:all -- --status --maintenance-id UUID`.
 7. Continuar las conversaciones pendientes: `npm run eval:all -- --execute --maintenance-id UUID --resume`. Se puede conservar `--max-batches N` para limitar cada ventana operativa.
 
 La limpieza toma el bloqueo de aplicación, crea un respaldo privado en `.data/backups/`, sincroniza sus archivos a disco, verifica SHA-256 y elimina solo entidades de evaluación y revisiones asociadas. Conserva Atom, usuarios, sesiones, catálogo y versiones. Pausa el horario y marca el mantenimiento para impedir lotes ordinarios mientras se renueva el histórico.
 
-El primer inicio fija conversaciones abiertas y cerradas, documentos de origen, huellas de contenido, checklist, instrucciones, reglas y perfil del modelo en `.data/backfills/UUID.json`. No copia transcripciones. Procesa lotes de 20, una conversación a la vez. Solo una tarea completa con resultado válido y equivalente cuenta como terminada; una respuesta parcial no lo hace. Las abstenciones legítimas se conservan sin transformarlas en ceros.
+El primer inicio fija conversaciones abiertas y cerradas, documentos de origen, huellas de contenido, checklist, instrucciones, reglas y perfil del modelo en `.data/backfills/UUID.json`. No copia transcripciones. Procesa primero las conversaciones de actividad más reciente y conserva todo el universo: usa actualización o inicio cuando falta una fecha de actividad válida, y desempata por ID descendente. Procesa lotes de 20, una conversación a la vez. Solo una tarea completa con resultado válido y equivalente cuenta como terminada; una respuesta parcial no lo hace. Las abstenciones legítimas se conservan sin transformarlas en ceros.
 
 La reanudación conserva las tareas e IDs de ejecución y permite hasta tres rondas por tarea, cada una con el reintento limitado del evaluador. Los fallos persistentes o contenidos modificados permanecen identificados como pendientes. Un cambio de modelo, política, checklist o instrucciones detiene el proceso. Conservar manifiesto y respaldo fuera del repositorio, con permisos privados.
 
@@ -39,6 +39,16 @@ Al terminar todos los IDs fijados, se retira el mantenimiento y **la programaci�
 Los resultados originales de Gemma y las métricas quedan consultables en el detalle. Los flags automáticos permanecen ocultos mientras falte la coincidencia de un segundo modelo independiente. Ni una abstención ni un resultado calculado por código aportan un voto de IA.
 
 La incorporación posterior de Clef requiere una ejecución explícita que vincule sus resultados con los de Gemma sobre el mismo contenido, versión de variable e instrucciones. El cambio de política por sí solo no completa las tareas de un lote individual anterior. Si Atom modifica el contenido, no se puede atribuir acuerdo con la evaluación antigua: hará falta evaluar el contenido nuevo.
+
+## Operación desde GitHub Actions
+
+El workflow existente tiene un selector explícito. `gemma-inspect` consulta conteos y política; `gemma-preflight` ejecuta únicamente la prueba sintética. Ninguna de esas opciones modifica evaluaciones. Sus archivos temporales y credenciales se eliminan al terminar.
+
+`gemma-prepare` guarda Gemma individual y mantiene el diario pausado, usando la versión de política revisada. `gemma-start` requiere el conteo de evaluaciones, la nueva versión de política y las huellas de configuración, catálogo e instrucciones obtenidas en la comprobación. Comprueba otra vez esos valores bajo bloqueo, fija el universo antes de limpiar, verifica el respaldo y lanza un trabajador independiente de la conexión SSH. El workflow no espera que terminen todas las conversaciones. `gemma-status` consulta el avance usando el UUID del mantenimiento, sin ejecutar IA.
+
+Las tres operaciones sobre producción exigen que el commit desplegado coincida con el seleccionado al ejecutar el workflow. La opción `deploy` conserva su función de despliegue y nunca inicia por sí sola una limpieza o renovación.
+
+Los archivos `UUID.operation.json` y `UUID.log` se guardan con permisos privados junto al manifiesto. Un proceso detenido se recupera de forma explícita con `eval:all --execute --resume`; nunca volviendo a seleccionar `gemma-start`. Consultar el checkpoint y las tareas actuales por separado: el checkpoint se actualiza al cerrar un lote y puede ir detrás de las conversaciones ya terminadas dentro de ese lote.
 
 ## Recuperación
 

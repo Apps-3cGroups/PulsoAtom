@@ -7,11 +7,48 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: 'Desplegar, comprobar Gemma o inspeccionar configuración y totales sin modificar la base'
+        description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación o estado'
         type: choice
-        options: [deploy, gemma-preflight, gemma-inspect]
+        options: [deploy, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-status]
         default: deploy
         required: true
+      expected_policy_version:
+        description: 'Versión esperada de política (obligatoria para gemma-prepare y gemma-start)'
+        type: string
+        required: false
+      expected_evaluations:
+        description: 'Evaluaciones existentes esperadas antes del respaldo y renovación (gemma-start)'
+        type: string
+        required: false
+      expected_configuration_hash:
+        description: 'Huella de configuración Gemma validada en preflight (gemma-start, 64 hex)'
+        type: string
+        required: false
+      expected_catalog_hash:
+        description: 'Huella de catálogo validada en preflight (gemma-start, 64 hex)'
+        type: string
+        required: false
+      expected_prompt_hash:
+        description: 'Huella de instrucciones validada en preflight (gemma-start, 64 hex)'
+        type: string
+        required: false
+      maintenance_id:
+        description: 'UUID del mantenimiento para consultar su avance (gemma-status)'
+        type: string
+        required: false
+      from_date:
+        description: 'Inicio inclusivo por última actividad en Tegucigalpa (gemma-start, YYYY-MM-DD)'
+        type: string
+        required: false
+      to_date:
+        description: 'Fin inclusivo por última actividad en Tegucigalpa (gemma-start, YYYY-MM-DD)'
+        type: string
+        required: false
+      conversation_limit:
+        description: 'Máximo de conversaciones más recientes del período (gemma-start, 1 a 100)'
+        type: string
+        default: '20'
+        required: false
 
 permissions:
   contents: read
@@ -22,8 +59,8 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect') }}
-    name: Isolated Gemma check without deployment
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-status') }}
+    name: Explicit Gemma operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
     defaults:
@@ -36,20 +73,22 @@ jobs:
           Set-StrictMode -Version Latest
           $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
           $tempRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
-          foreach ($directory in @('pulso-gemma-preflight-42301836044-1', 'pulso-clef-diagnostic-42299085889-1')) {
+          foreach ($directory in @('pulso-gemma-preflight-42301836044-1', 'pulso-clef-diagnostic-42299085889-1', 'pulso-atom-deploy-42295852056-1')) {
             $legacyDir = Join-Path $env:RUNNER_TEMP $directory
             if (-not ([System.IO.Path]::GetFullPath($legacyDir)).StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing cleanup outside RUNNER_TEMP.' }
             if (Test-Path -LiteralPath $legacyDir) {
               if ((Get-Item -LiteralPath $legacyDir -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Refusing cleanup through a directory link.' }
-              $legacyKey = Join-Path $legacyDir 'td-apps.pem'
               try {
-                if (Test-Path -LiteralPath $legacyKey) {
-                  if ((Get-Item -LiteralPath $legacyKey -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Refusing cleanup through a key link.' }
-                  & icacls $legacyKey '/inheritance:r'
-                  if ($LASTEXITCODE -ne 0) { throw 'Could not preserve the private key ACL.' }
-                  & icacls $legacyKey '/grant:r' "${identity}:F"
-                  if ($LASTEXITCODE -ne 0) { throw 'Could not authorize private key deletion for the runner identity.' }
-                  Remove-Item -LiteralPath $legacyKey -Force
+                foreach ($filename in @('td-apps.pem', 'github-token.txt')) {
+                  $legacyKey = Join-Path $legacyDir $filename
+                  if (Test-Path -LiteralPath $legacyKey) {
+                    if ((Get-Item -LiteralPath $legacyKey -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Refusing cleanup through a credential link.' }
+                    & icacls $legacyKey '/inheritance:r'
+                    if ($LASTEXITCODE -ne 0) { throw 'Could not preserve the private credential ACL.' }
+                    & icacls $legacyKey '/grant:r' "${identity}:F"
+                    if ($LASTEXITCODE -ne 0) { throw 'Could not authorize credential deletion for the runner identity.' }
+                    Remove-Item -LiteralPath $legacyKey -Force
+                  }
                 }
               }
               finally {
@@ -58,23 +97,53 @@ jobs:
             }
             if (Test-Path -LiteralPath $legacyDir) { throw 'Known temporary SSH directory remains; cleanup failed.' }
           }
-          Write-Output 'Verified removal of both known temporary SSH directories.'
+          Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
+        if: ${{ inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: Run the selected read-only Gemma operation
+      - name: Run the selected Gemma operation
         env:
           TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
           GEMMA_OPERATION: ${{ inputs.operation }}
+          EXPECTED_POLICY_VERSION: ${{ inputs.expected_policy_version }}
+          EXPECTED_EVALUATIONS: ${{ inputs.expected_evaluations }}
+          EXPECTED_CONFIGURATION_HASH: ${{ inputs.expected_configuration_hash }}
+          EXPECTED_CATALOG_HASH: ${{ inputs.expected_catalog_hash }}
+          EXPECTED_PROMPT_HASH: ${{ inputs.expected_prompt_hash }}
+          MAINTENANCE_ID: ${{ inputs.maintenance_id }}
+          FROM_DATE: ${{ inputs.from_date }}
+          TO_DATE: ${{ inputs.to_date }}
+          CONVERSATION_LIMIT: ${{ inputs.conversation_limit }}
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('gemma-preflight', 'gemma-inspect')) { throw 'Invalid Gemma operation.' }
+          if ($env:GEMMA_OPERATION -cnotin @('gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('gemma-preflight', 'gemma-inspect')
+          if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
+          if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
+            if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
+          }
+          if ($env:GEMMA_OPERATION -ceq 'gemma-start') {
+            if ($env:EXPECTED_EVALUATIONS -cnotmatch '^(0|[1-9][0-9]{0,15})$' -or [decimal]$env:EXPECTED_EVALUATIONS -gt 9007199254740991) { throw 'Expected evaluation count must be a nonnegative safe integer.' }
+            foreach ($hash in @($env:EXPECTED_CONFIGURATION_HASH, $env:EXPECTED_CATALOG_HASH, $env:EXPECTED_PROMPT_HASH)) {
+              if ($hash -cnotmatch '^[a-f0-9]{64}$') { throw 'Expected hashes must contain exactly 64 lowercase hexadecimal characters.' }
+            }
+            if ($env:FROM_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' -or $env:TO_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { throw 'Selection dates must use YYYY-MM-DD.' }
+            $fromDate = [datetime]::MinValue
+            $toDate = [datetime]::MinValue
+            if (-not [datetime]::TryParseExact($env:FROM_DATE, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$fromDate) -or -not [datetime]::TryParseExact($env:TO_DATE, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$toDate) -or $fromDate -gt $toDate) { throw 'Selection dates must be real dates in ascending order.' }
+            if ($env:CONVERSATION_LIMIT -cnotmatch '^([1-9]|[1-9][0-9]|100)$') { throw 'Conversation limit must be an integer between 1 and 100.' }
+          }
+          if ($env:GEMMA_OPERATION -ceq 'gemma-status' -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
             'gemma-preflight' { $entryScript = 'scripts/check-gemma-contract.js'; $scriptArguments = '' }
             'gemma-inspect' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = '--inspect' }
+            'gemma-prepare' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = "--prepare --expected-policy-version $($env:EXPECTED_POLICY_VERSION)" }
+            'gemma-start' { $entryScript = 'scripts/start-gemma-renewal.js'; $scriptArguments = "--start --expected-evaluations $($env:EXPECTED_EVALUATIONS) --expected-policy-version $($env:EXPECTED_POLICY_VERSION) --expected-configuration-hash $($env:EXPECTED_CONFIGURATION_HASH) --expected-catalog-hash $($env:EXPECTED_CATALOG_HASH) --expected-prompt-hash $($env:EXPECTED_PROMPT_HASH) --from $($env:FROM_DATE) --to $($env:TO_DATE) --limit $($env:CONVERSATION_LIMIT)" }
+            'gemma-status' { $entryScript = 'scripts/start-gemma-renewal.js'; $scriptArguments = "--status --maintenance-id $($env:MAINTENANCE_ID)" }
             default { throw 'Unsupported Gemma operation.' }
           }
           if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) { throw 'Missing TD_APPS_SSH_KEY.' }
@@ -100,6 +169,7 @@ jobs:
           try {
             # checkout also supports REST extraction when Git is unavailable.
             # Copy only this checkout's API after rejecting runtime files/links.
+            if ($useCheckoutSource) {
             if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) { throw 'API checkout is missing.' }
             $sourceItem = Get-Item -LiteralPath $sourceRoot -Force
             if ($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Refusing an API checkout link.' }
@@ -107,6 +177,7 @@ jobs:
             if ($entries | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }) { throw 'Refusing links in the API checkout.' }
             if ($entries | Where-Object { $_.Name -in @('.data', 'node_modules') -or ($_.Name -match '^\.env(\..*)?$' -and $_.Name -ne '.env.example') }) { throw 'Refusing to copy runtime data or credentials.' }
             if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $entryScript) -PathType Leaf)) { throw 'Selected Gemma script is missing.' }
+            }
 
             $key = $env:TD_APPS_SSH_KEY
             if (($key -notmatch "`n") -and ($key -match '\\n')) { $key = $key -replace '\\n', "`n" }
@@ -118,6 +189,7 @@ jobs:
             Invoke-Checked -FilePath 'icacls' -Arguments @($keyPath, '/grant:r', "${identity}:R")
             $sshOptions = @('-i', $keyPath, '-p', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
             $scpOptions = @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
+            if ($useCheckoutSource) {
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
@@ -137,6 +209,20 @@ jobs:
           sudo -n -u td -H ln -s -- /var/www/nodeapps/PulsoAtom/api/node_modules '$remoteRoot/api/node_modules'
           sudo -n -u td -H bash -c 'cd "`$1" && exec node --env-file=/var/www/nodeapps/PulsoAtom/api/.env $entryScript $scriptArguments' _ '$remoteRoot/api'
           "@
+            } else {
+              # State-changing commands run only the exact deployed revision.
+              # Arguments are restricted to numeric/hex/UUID/validated dates.
+              $remoteCommand = @'
+          set -Eeuo pipefail
+          actual_sha="$(sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom rev-parse HEAD)"
+          [ "$actual_sha" = "__EXPECTED_SHA__" ] || { echo 'Production revision does not match the dispatched commit; no operation started.' >&2; exit 2; }
+          sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom diff --quiet HEAD -- api
+          sudo -n -u td -H test -r /var/www/nodeapps/PulsoAtom/api/.env
+          sudo -n -u td -H test -f /var/www/nodeapps/PulsoAtom/api/__ENTRY_SCRIPT__
+          sudo -n -u td -H bash -c 'cd /var/www/nodeapps/PulsoAtom/api && exec node --env-file=/var/www/nodeapps/PulsoAtom/api/.env __ENTRY_SCRIPT__ __SCRIPT_ARGUMENTS__'
+          '@
+              $remoteCommand = $remoteCommand.Replace('__EXPECTED_SHA__', $env:GITHUB_SHA).Replace('__ENTRY_SCRIPT__', $entryScript).Replace('__SCRIPT_ARGUMENTS__', $scriptArguments)
+            }
             $remoteCommand = $remoteCommand -replace "`r`n", "`n" -replace "`r", "`n"
             & ssh @sshOptions $sshTarget $remoteCommand
             $checkExit = $LASTEXITCODE
@@ -169,7 +255,7 @@ jobs:
               Write-Output 'Verified removal of the current temporary SSH key and directory.'
             }
           }
-          if ($checkExit -ne 0) { throw "Gemma check failed (exit $checkExit). Review only the sanitized result above; no deployment or database changes were made." }
+          if ($checkExit -ne 0) { throw "Gemma operation failed (exit $checkExit). Review the sanitized result and maintenance status before retrying a state-changing operation." }
 
   deploy:
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}
@@ -434,24 +520,42 @@ jobs:
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, $remoteCommand))
           }
           finally {
-            if ($sshTarget -and $remoteToken -and $remoteScriptPath -and $sshOptions.Count -gt 0 -and (Test-Path -LiteralPath $keyPath)) {
+            try {
+              if ($sshTarget -and $remoteToken -and $remoteScriptPath -and $sshOptions.Count -gt 0 -and (Test-Path -LiteralPath $keyPath)) {
+                try {
+                  & ssh @sshOptions $sshTarget "sudo -n rm -f -- '$remoteToken' '$remoteScriptPath'"
+                  if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Remote temporary credential cleanup is pending on $sshTarget."
+                  }
+                }
+                catch {
+                  Write-Warning "Remote temporary credential cleanup could not connect to $sshTarget."
+                }
+                $global:LASTEXITCODE = 0
+              }
+            }
+            finally {
               try {
-                & ssh @sshOptions $sshTarget "sudo -n rm -f -- '$remoteToken' '$remoteScriptPath'"
-                if ($LASTEXITCODE -ne 0) {
-                  Write-Warning "Remote temporary credential cleanup is pending on $sshTarget."
+                $cleanupIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                foreach ($credentialPath in @($tokenPath, $keyPath)) {
+                  if (Test-Path -LiteralPath $credentialPath) {
+                    Invoke-Checked -FilePath 'icacls' -Arguments @($credentialPath, '/inheritance:r')
+                    Invoke-Checked -FilePath 'icacls' -Arguments @($credentialPath, '/grant:r', "${cleanupIdentity}:F")
+                    Remove-Item -LiteralPath $credentialPath -Force
+                  }
                 }
               }
-              catch {
-                Write-Warning "Remote temporary credential cleanup could not connect to $sshTarget."
+              finally {
+                if (Test-Path -LiteralPath $workDir) {
+                  $cleanupRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+                  $cleanupTarget = [System.IO.Path]::GetFullPath($workDir)
+                  if (-not $cleanupTarget.StartsWith($cleanupRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw 'Refusing to remove a directory outside RUNNER_TEMP.'
+                  }
+                  Remove-Item -LiteralPath $workDir -Recurse -Force
+                }
               }
-              $global:LASTEXITCODE = 0
-            }
-            if (Test-Path $workDir) {
-              $cleanupRoot = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
-              $cleanupTarget = [System.IO.Path]::GetFullPath($workDir)
-              if (-not $cleanupTarget.StartsWith($cleanupRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw 'Refusing to remove a directory outside RUNNER_TEMP.'
-              }
-              Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+              if ((Test-Path -LiteralPath $keyPath) -or (Test-Path -LiteralPath $tokenPath) -or (Test-Path -LiteralPath $workDir)) { throw 'Deployment credentials remain; cleanup failed.' }
+              Write-Output 'Verified removal of deployment credentials and temporary directory.'
             }
           }

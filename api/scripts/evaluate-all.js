@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { apiRoot, config, atomDatabaseConfig, databaseConfig } from '../src/config.js';
 import { MysqlStore, AtomHistoryStore } from '../src/store.js';
@@ -6,7 +6,7 @@ import { AtomReader } from '../src/atom.js';
 import { registryFromEnv } from '../src/model-registry.js';
 import { AppError } from '../src/errors.js';
 import { createGemmaBackfillPlan, gemmaBackfillProfile, inspectGemmaBackfill, executeGemmaBackfill,
-  persistBackfillManifest, acquireBackfillLock } from '../src/gemma-backfill.js';
+  persistBackfillManifest, acquireBackfillLock, readRequiredBackfillManifest } from '../src/gemma-backfill.js';
 
 // Default and --plan are read-only. Reset/backup is a separate explicit command.
 function argumentsFor(args) {
@@ -58,17 +58,7 @@ try {
       await mkdir(directory, { recursive: true, mode: 0o700 });
       release = await acquireBackfillLock(`${filename}.lock`, options.maintenanceId);
     }
-    try { manifest = JSON.parse(await readFile(filename, 'utf8')); }
-    catch (error) {
-      if (error.code !== 'ENOENT' || options.mode !== 'execute' || options.resume) throw error;
-      const state = await store.readWithConversations({ fresh: true });
-      if (state.settings.evaluationMaintenance !== options.maintenanceId || state.settings.dailyEnabled
-        || ['jobs', 'tasks', 'evaluations', 'operationalRefs'].some(key => state[key]?.length)) {
-        throw new AppError(409, 'El inicio requiere el mismo mantenimiento respaldado, diario pausado y tablas de evaluación vacías.', 'BACKFILL_RESET_REQUIRED');
-      }
-      manifest = createGemmaBackfillPlan(state, registry, { maintenanceId: options.maintenanceId });
-      await persistBackfillManifest(filename, manifest);
-    }
+    manifest = await readRequiredBackfillManifest(filename);
     if (options.mode === 'status') {
       const state = await store.readWithConversations({ fresh: true });
       console.log(JSON.stringify({ event: 'status', readOnly: true, manifest: filename,

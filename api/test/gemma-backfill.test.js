@@ -5,9 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
+import { digest } from '../src/evaluation-context.js';
 import { resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { createGemmaBackfillPlan, executeGemmaBackfill, inspectGemmaBackfill,
-  persistBackfillManifest, acquireBackfillLock } from '../src/gemma-backfill.js';
+  persistBackfillManifest, acquireBackfillLock, readRequiredBackfillManifest } from '../src/gemma-backfill.js';
 
 const maintenanceId = '19eea54a-282b-496c-b0c2-b3ed2c25e668';
 function fixture(count = 2) {
@@ -62,6 +63,73 @@ test('planning includes open and closed chats, stores reproducible hashes and no
     const altered = structuredClone(state); Object.assign(altered.settings.aiPolicy, override);
     assert.throws(() => createGemmaBackfillPlan(altered, registry), { code: 'GEMMA_SINGLE_REQUIRED' });
   }
+});
+
+test('newest real activity starts first; message timestamps replace absent activity instead of ingestion/start dates', () => {
+  const { state, plan } = fixture(7);
+  Object.assign(state.conversations[0], { lastActivityAt: '2026-10-01T00:00:00Z', sourceUpdatedAt: '2026-12-01T00:00:00Z' });
+  Object.assign(state.conversations[1], { lastActivityAt: 'invalid', sourceUpdatedAt: '2026-11-05T00:00:00Z' });
+  Object.assign(state.conversations[2], { lastActivityAt: '2026-11-06T00:00:00Z' });
+  Object.assign(state.conversations[3], { lastActivityAt: '', sourceUpdatedAt: 'invalid', startedAt: '2026-11-04T00:00:00Z' });
+  state.conversations[4].lastActivityAt = '2026-11-06T00:00:00Z';
+  Object.assign(state.conversations[5], { lastActivityAt: 'invalid', sourceUpdatedAt: null, startedAt: 'invalid' });
+  Object.assign(state.conversations[6], { lastActivityAt: null, sourceUpdatedAt: 'invalid', startedAt: '' });
+  const ids = plan().conversations.map(c => c.id);
+  assert.deepEqual(ids, ['7', '6', '4', '2', '5', '3', '1']);
+  state.conversations.reverse();
+  assert.deepEqual(plan().conversations.map(c => c.id), ids);
+  assert.equal(new Set(ids).size, 7);
+});
+
+const weeklySelection = { from: '2026-11-02', to: '2026-11-06', timezone: 'America/Tegucigalpa', basis: 'last_activity', limit: 20 };
+test('weekly selection uses Tegucigalpa inclusive dates, explicit offsets and maximum message activity, never ingestion dates', () => {
+  const { state, registry } = fixture(8);
+  state.conversations[0].lastActivityAt = '2026-11-02T05:59:59.999Z';
+  state.conversations[1].lastActivityAt = '2026-11-02T06:00:00.000Z';
+  state.conversations[2].lastActivityAt = '2026-11-07T05:59:59.999Z';
+  state.conversations[3].lastActivityAt = '2026-11-07T06:00:00.000Z';
+  state.conversations[4].messages[0].timestamp = '2026-10-31T12:00:00Z';
+  state.conversations[4].sourceUpdatedAt = '2026-11-06T12:00:00Z';
+  state.conversations[5].lastActivityAt = 'invalid';
+  state.conversations[5].messages = [{ id: 'newest', timestamp: '2026-11-05T22:00:00-06:00' }, { id: 'older', timestamp: '2026-11-04T12:00:00Z' }];
+  state.conversations[6].lastActivityAt = '2026-11-02T00:00:00-06:00';
+  state.conversations[7].messages[0].timestamp = 'invalid';
+  state.conversations[7].sourceUpdatedAt = '2026-11-06T12:00:00Z';
+  const manifest = createGemmaBackfillPlan(state, registry, { maintenanceId, selection: weeklySelection });
+  assert.deepEqual(manifest.conversations.map(c => c.id), ['3', '6', '7', '2']);
+  assert.deepEqual(manifest.conversations.map(c => c.activityDate), ['2026-11-06', '2026-11-05', '2026-11-02', '2026-11-02']);
+  assert.deepEqual(manifest.selection, weeklySelection);
+  assert.ok(manifest.conversations.every(c => c.activityAt?.endsWith('Z')));
+});
+
+test('last twenty weekly cases are deterministic under ties and do not expand when a newer case arrives', async () => {
+  const { state, store, registry, calls } = fixture(25);
+  const manifest = createGemmaBackfillPlan(state, registry, { maintenanceId, selection: weeklySelection });
+  const expectedIds = Array.from({ length: 20 }, (_, index) => String(25 - index));
+  assert.deepEqual(manifest.conversations.map(c => c.id), expectedIds);
+  state.conversations.push({ ...structuredClone(state.conversations[0]), id: '99999', lastActivityAt: '2026-11-06T23:00:00-06:00' });
+  state.conversations.reverse();
+  const result = await executeGemmaBackfill(store, registry, manifest);
+  assert.equal(result.completed, 20); assert.equal(calls.length, 20);
+  assert.deepEqual(calls.map(c => c.id), expectedIds);
+  assert.deepEqual(manifest.conversations.map(c => c.id), expectedIds);
+});
+
+test('scope is integrity protected, malformed dates fail closed, and old format-two manifests remain readable', () => {
+  const { state, registry } = fixture(1);
+  for (const override of [{ from: '2026-02-30' }, { to: '2026-11-01' }, { limit: 0 }, { limit: 101 },
+    { timezone: 'UTC' }, { basis: 'source_updated' }]) {
+    assert.throws(() => createGemmaBackfillPlan(state, registry, { selection: { ...weeklySelection, ...override } }), { code: 'INVALID_BACKFILL_SELECTION' });
+  }
+  const scoped = createGemmaBackfillPlan(state, registry, { maintenanceId, selection: weeklySelection });
+  scoped.selection.limit = 19;
+  assert.throws(() => inspectGemmaBackfill(state, scoped), { code: 'INVALID_BACKFILL_MANIFEST' });
+  const legacy = createGemmaBackfillPlan(state, registry, { maintenanceId });
+  legacy.selection = 'Legacy informational selection';
+  for (const c of legacy.conversations) { delete c.activityAt; delete c.activityDate; }
+  legacy.integrityHash = digest({ format: legacy.format, id: legacy.id, createdAt: legacy.createdAt, profile: legacy.profile,
+    policyVersion: legacy.policyVersion, catalogVersions: legacy.catalogVersions, conversations: legacy.conversations });
+  assert.equal(inspectGemmaBackfill(state, legacy).unstarted, 1);
 });
 
 test('partial responses are never completion; explicit resume reuses tasks and preserves valid results and daily pause', async () => {
@@ -216,5 +284,20 @@ test('one worker owns the filesystem lock; checkpoints are recoverable private f
     assert.equal((await stat(filename)).mode & 0o777, 0o600);
     await release();
     const releaseAgain = await acquireBackfillLock(lock, maintenanceId); await releaseAgain();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('missing or invalid selection manifest fails closed rather than rebuilding a larger universe', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'pulso-required-manifest-'));
+  try {
+    const filename = path.join(directory, 'manifest.json');
+    await assert.rejects(readRequiredBackfillManifest(filename), { code: 'BACKFILL_MANIFEST_REQUIRED' });
+    await assert.rejects(stat(filename), { code: 'ENOENT' });
+    const { plan } = fixture(1), manifest = plan();
+    await persistBackfillManifest(filename, manifest);
+    assert.deepEqual(await readRequiredBackfillManifest(filename), manifest);
+    manifest.conversations[0].sourceHash = 'modified';
+    await persistBackfillManifest(filename, manifest);
+    await assert.rejects(readRequiredBackfillManifest(filename), { code: 'INVALID_BACKFILL_MANIFEST' });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

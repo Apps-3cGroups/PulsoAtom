@@ -30,24 +30,62 @@ export function gemmaBackfillProfile(state, registry) {
 
 const immutable = manifest => ({ format: manifest.format, id: manifest.id, createdAt: manifest.createdAt,
   profile: manifest.profile, policyVersion: manifest.policyVersion, catalogVersions: manifest.catalogVersions,
+  ...(manifest.selection && typeof manifest.selection === 'object' ? { selection: manifest.selection } : {}),
   conversations: manifest.conversations });
 
+function activityTime(conversation) {
+  const validTime = value => typeof value === 'string' && value.trim() && Number.isFinite(Date.parse(value)) ? Date.parse(value) : -Infinity;
+  const recorded = validTime(conversation.lastActivityAt);
+  if (Number.isFinite(recorded)) return recorded;
+  return (conversation.messages || []).reduce((latest, message) => Math.max(latest, validTime(message.timestamp)), -Infinity);
+}
+const localActivityDate = value => {
+  if (!Number.isFinite(value)) return null;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Tegucigalpa', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+  const part = type => parts.find(value => value.type === type).value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+};
+export function normalizeGemmaSelection(selection) {
+  const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`)) && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
+  if (!selection || !validDate(selection.from) || !validDate(selection.to) || selection.from > selection.to
+    || !Number.isInteger(selection.limit) || selection.limit < 1 || selection.limit > 100
+    || selection.timezone !== 'America/Tegucigalpa' || selection.basis !== 'last_activity'
+    || Object.keys(selection).some(key => !['from', 'to', 'timezone', 'basis', 'limit'].includes(key))) {
+    fail('INVALID_BACKFILL_SELECTION', 'Indica un rango de fechas válido y un límite entre 1 y 100, por última actividad en Tegucigalpa.');
+  }
+  return { from: selection.from, to: selection.to, timezone: 'America/Tegucigalpa', basis: 'last_activity', limit: selection.limit };
+}
+
 // Pure planning: no files, settings, inference, or transactions are modified.
-export function createGemmaBackfillPlan(state, registry, { maintenanceId = null, createdAt = new Date().toISOString() } = {}) {
+export function createGemmaBackfillPlan(state, registry, { maintenanceId = null, createdAt = new Date().toISOString(), selection } = {}) {
   const { profile, policyVersion } = gemmaBackfillProfile(state, registry);
-  const conversations = state.conversations.filter(c => c.messages?.length)
-    .sort((a, b) => String(a.id).localeCompare(String(b.id), 'en', { numeric: true }));
+  const scope = selection === undefined ? null : normalizeGemmaSelection(selection);
+  let conversations = state.conversations.filter(c => c.messages?.length && (!scope || (() => {
+      const date = localActivityDate(activityTime(c)); return date && date >= scope.from && date <= scope.to;
+    })()))
+    .sort((a, b) => {
+      const left = activityTime(a), right = activityTime(b);
+      if (left !== right) return left < right ? 1 : -1;
+      const aId = String(a.id), bId = String(b.id);
+      return bId.localeCompare(aId, 'en', { numeric: true }) || (aId < bId ? 1 : aId > bId ? -1 : 0);
+    });
+  if (scope) conversations = conversations.slice(0, scope.limit);
   if (!conversations.length || new Set(conversations.map(c => c.id)).size !== conversations.length) fail('INVALID_UNIVERSE', 'El universo debe contener conversaciones distintas con mensajes.');
   const manifest = { format: 2, id: maintenanceId || randomUUID(), createdAt, updatedAt: createdAt,
-    status: 'planned', profile, policyVersion, catalogVersions: catalogReferences(state.catalog),
+    status: 'planned', selection: scope || 'Última actividad descendente; mensajes como respaldo; ID descendente en empate',
+    profile, policyVersion, catalogVersions: catalogReferences(state.catalog),
     conversations: conversations.map(c => ({ id: c.id, country: c.country ?? null, completedAtSource: c.completed !== false,
       sourceDocumentId: c.sourceDocumentId == null ? null : String(c.sourceDocumentId),
+      activityAt: Number.isFinite(activityTime(c)) ? new Date(activityTime(c)).toISOString() : null,
+      activityDate: localActivityDate(activityTime(c)),
       messageCount: c.messages.length, ...evaluationContext(c, state.catalog) })), batches: [] };
   manifest.integrityHash = digest(immutable(manifest));
   return manifest;
 }
 
 function validateManifest(manifest) {
+  if (manifest?.selection && typeof manifest.selection === 'object') normalizeGemmaSelection(manifest.selection);
   if (manifest?.format !== 2 || !/^[a-f0-9-]{36}$/.test(manifest.id || '') || !manifest.conversations?.length
     || new Set(manifest.conversations.map(c => c.id)).size !== manifest.conversations.length
     || !Array.isArray(manifest.batches) || digest(immutable(manifest)) !== manifest.integrityHash) {
@@ -278,6 +316,17 @@ export async function executeGemmaBackfill(store, registry, manifest, { resume =
     });
   }
   return { ...summary, status: manifest.status, dailyEnabled: false, maintenanceReleased: !summary.pending };
+}
+
+export async function readRequiredBackfillManifest(filename) {
+  try {
+    const manifest = JSON.parse(await readFile(filename, 'utf8'));
+    validateManifest(manifest);
+    return manifest;
+  } catch (error) {
+    if (error.code === 'ENOENT') fail('BACKFILL_MANIFEST_REQUIRED', 'Falta el manifiesto de la selección autorizada. Recupera el manifiesto preparado; no se generará otro universo.');
+    throw error;
+  }
 }
 
 export async function persistBackfillManifest(filename, manifest) {

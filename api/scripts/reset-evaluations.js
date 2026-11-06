@@ -3,23 +3,21 @@ import { mkdir, writeFile, readFile, open } from 'node:fs/promises';
 import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { apiRoot, databaseConfig } from '../src/config.js';
+import { registryFromEnv } from '../src/model-registry.js';
+import { AppError } from '../src/errors.js';
+import { parseEvaluationResetArguments, assertGemmaResetPreconditions } from '../src/evaluation-reset-safety.js';
 
 // Only evaluation-owned tables. Atom, catalog, users, and sessions are never deleted.
 const orderedTables = ['evaluation_evidence', 'evaluation_results', 'review_events', 'human_verdicts',
   'evaluation_exposures', 'validation_sessions', 'comparison_samples', 'evaluation_attempts',
   'evaluation_tasks', 'operational_refs', 'evaluation_jobs', 'evaluations'];
-const apply = process.argv.includes('--apply');
-const restoreIndex = process.argv.indexOf('--restore');
-const expectedIndex = process.argv.indexOf('--expected-evaluations');
-const expected = expectedIndex < 0 ? null : Number(process.argv[expectedIndex + 1]);
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
 const digest = text => createHash('sha256').update(text).digest('hex');
-const options = databaseConfig();
-if (!options) throw new Error('Falta configurar la base propia de Pulso.');
-if (expected !== null && (!Number.isSafeInteger(expected) || expected < 0)) throw new Error('--expected-evaluations debe ser un entero no negativo.');
-if (apply && restoreIndex < 0 && expected === null) throw new Error('Indica --expected-evaluations con el conteo auditado antes de limpiar.');
 let connection;
 try {
+  const { apply, restore, expectedEvaluations: expected, guards } = parseEvaluationResetArguments(process.argv.slice(2));
+  const options = databaseConfig();
+  if (!options) throw new Error('Falta configurar la base propia de Pulso.');
   connection = await mysql.createConnection({ ...options, connectTimeout: 15000 });
   await connection.beginTransaction();
   if (apply) await connection.query('SELECT id FROM app_lock WHERE id=1 FOR UPDATE');
@@ -31,9 +29,15 @@ try {
   const settings = decode(settingsRows[0].payload);
   const [jobs] = await connection.query('SELECT payload FROM evaluation_jobs');
   if (jobs.some(row => ['running', 'queued', 'pending'].includes(decode(row.payload).status))) throw new Error('Hay una evaluación en curso o en cola. No se modifica el histórico.');
+  if (guards) {
+    const [metadataRows] = await connection.query("SELECT payload FROM portal_settings WHERE id='metadata'");
+    const [catalogRows] = await connection.query('SELECT payload FROM catalog_items ORDER BY sequence_id');
+    assertGemmaResetPreconditions({ settings, metadata: metadataRows.length ? decode(metadataRows[0].payload) : null,
+      catalog: catalogRows.map(row => decode(row.payload)), jobs: jobs.map(row => decode(row.payload)) }, registryFromEnv(), guards);
+  }
   const data = {}, counts = {};
   for (const table of tables) {
-    if (apply && restoreIndex < 0) {
+    if (apply && !restore) {
       [data[table]] = await connection.query(`SELECT * FROM ${mysql.escapeId(table)}`);
       counts[table] = data[table].length;
     } else {
@@ -41,8 +45,8 @@ try {
       counts[table] = rows[0].total;
     }
   }
-  if (restoreIndex >= 0) {
-    const filename = path.resolve(process.argv[restoreIndex + 1]);
+  if (restore) {
+    const filename = path.resolve(restore);
     const text = await readFile(filename, 'utf8');
     if (digest(text) !== (await readFile(`${filename}.sha256`, 'utf8')).trim()) throw new Error('La copia no coincide con su checksum.');
     const backup = JSON.parse(text);
@@ -89,7 +93,7 @@ try {
   }
 } catch (error) {
   await connection?.rollback().catch(() => {});
-  console.error(error.code || error.name, error.code || error instanceof SyntaxError
+  console.error(error.code || error.name, error instanceof AppError ? error.message : error.code || error instanceof SyntaxError
     ? 'No se pudo completar la operación. Revisa conexión y almacenamiento; no se muestran datos privados.'
     : error.message); process.exitCode = 1;
 } finally { await connection?.end(); }
