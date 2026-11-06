@@ -12,7 +12,8 @@ const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT
 const running = new Map();
 const now = () => new Date().toISOString();
 const safeError = error => ({ code: error instanceof AppError ? error.code : 'EVALUATION_FAILED', message: error instanceof AppError ? error.message : 'No se pudo completar esta evaluación.' });
-const readHistory = store => store.readWithConversations ? store.readWithConversations({ fresh: true }) : store.read();
+const readHistory = (store, conversationIds) => store.readWithConversations
+  ? store.readWithConversations({ fresh: true, ...(conversationIds !== undefined ? { conversationIds } : {}) }) : store.read();
 
 export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter, includeOpen = state.settings?.includeOpenConversations === true, refreshChanged = state.settings?.refreshChangedConversations === true } = {}) {
   return state.conversations.filter(c => c.messages.length && (includeOpen || c.completed !== false) && (!from || c.date >= from) && (!to || c.date <= to)
@@ -64,7 +65,7 @@ function pickCandidates(state, options) {
   return candidates.slice(0, options.max ?? 20);
 }
 export async function startEvaluationBatch(store, evaluator, options = {}) {
-  const state = ensureEvaluationState(await readHistory(store));
+  const state = ensureEvaluationState(await readHistory(store, options.conversationIds));
   const registry = asRegistry(evaluator).forState(state);
   if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
@@ -123,26 +124,26 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   });
   return { job, completion: launch(store, registry, job, catalog, options.onProgress) };
 }
-function launch(store, registry, job, catalog, onProgress) {
-  const completion = processJob(store, registry, job, catalog, onProgress);
+function launch(store, registry, job, catalog, onProgress, selectedTaskIds) {
+  const completion = processJob(store, registry, job, catalog, onProgress, selectedTaskIds);
   running.set(job.id, completion);
   completion.finally(() => running.delete(job.id)).catch(() => {});
   return completion;
 }
-async function processJob(store, registry, job, catalog, onProgress) {
+async function processJob(store, registry, job, catalog, onProgress, selectedTaskIds) {
   const stopHeartbeat = startEvaluationHeartbeat(() => store.transaction(s => {
     const current = s.jobs.find(j => j.id === job.id);
     if (current?.status === 'running') current.updatedAt = now();
   }));
   try {
-    const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && t.status !== 'completed');
+    const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && t.status !== 'completed' && (!selectedTaskIds || selectedTaskIds.includes(t.id)));
     const cases = [...new Set(tasks.map(t => t.conversationId))];
     const worker = async () => { while (cases.length) { const conversationId = cases.shift();
     for (const task of tasks.filter(t => t.conversationId === conversationId)) {
       let error = null;
       try {
         // Atom may change while a long batch is running. Re-read before each task.
-        const fresh = await readHistory(store);
+        const fresh = await readHistory(store, [task.conversationId]);
         const conversation = fresh.conversations.find(c => c.id === task.conversationId);
         await processTask(store, registry, job, task, conversation, catalog);
       }
@@ -156,11 +157,11 @@ async function processJob(store, registry, job, catalog, onProgress) {
     }
     } };
     await Promise.all(Array.from({ length: job.concurrency || 1 }, worker));
-    await store.transaction(draft => updateJob(draft, job.id, true));
+    await store.transaction(draft => updateJob(draft, job.id, true, selectedTaskIds));
     return (await store.read()).jobs.find(j => j.id === job.id);
   } finally { await stopHeartbeat(); }
 }
-function updateJob(state, id, finished) {
+function updateJob(state, id, finished, selectedTaskIds) {
   const job = state.jobs.find(j => j.id === id), tasks = state.tasks.filter(t => t.jobId === id);
   job.completed = tasks.filter(t => t.status === 'completed').length;
   job.failed = tasks.filter(t => ['failed', 'partial'].includes(t.status)).length;
@@ -168,6 +169,11 @@ function updateJob(state, id, finished) {
   job.errors = tasks.filter(t => t.error).map(t => ({ conversationId: t.conversationId, profileId: t.profile.id, ...t.error }));
   job.updatedAt = now();
   if (finished && tasks.every(t => ['completed', 'failed', 'partial'].includes(t.status))) { job.status = job.failed ? (job.completed || job.partial ? 'partial' : 'failed') : 'completed'; job.finishedAt = now(); }
+  else if (finished && selectedTaskIds && tasks.filter(t => selectedTaskIds.includes(t.id)).every(t => ['completed', 'failed', 'partial'].includes(t.status))) {
+    // A scoped maintenance retry can leave changed/missing cases untouched.
+    // They remain pending; the worker has stopped and must not look live forever.
+    job.status = 'interrupted'; job.finishedAt = now();
+  }
 }
 async function processTask(store, registry, job, task, conversation, catalog) {
   if (!conversation || task.context.sourceHash !== sourceFingerprint(conversation)) throw new AppError(409, 'El contenido de Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
@@ -197,7 +203,9 @@ async function processTask(store, registry, job, task, conversation, catalog) {
       await store.transaction(s => s.attempts.push(attempt));
       const started = Date.now();
       try {
-        const response = await profile.evaluator.evaluate(conversation, pending);
+        const response = await profile.evaluator.evaluate(conversation, pending, {
+          validationErrors: itemErrors.map(({ variableId, rules }) => ({ variableId, rules })),
+        });
         if (!Array.isArray(response.results) || response.results.some(r => !pending.some(v => v.id === r.variableId)) || new Set(response.results.map(r => r.variableId)).size !== response.results.length) throw new AppError(502, 'Resultado estructurado incompleto o duplicado.', 'INVALID_AI_RESULT');
         const actualModel = response.model || profile.model;
         if (retained.size && metadata.model !== actualModel) throw new AppError(409, 'El proveedor cambió el modelo efectivo durante el reintento.', 'MODEL_CHANGED');
@@ -244,7 +252,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
     providerResponseId: answer.responseId || null, usage: answer.usage || null, catalogVersions: job.catalogVersions,
     partial, validationErrors: answer.validationErrors, results: [...answer.results, ...invalidResults, ...codeResults] };
-  const fresh = await readHistory(store);
+  const fresh = await readHistory(store, [conversation.id]);
   const source = fresh.conversations.find(c => c.id === conversation.id);
   if (!source || sourceFingerprint(source) !== task.context.sourceHash) throw new AppError(409, 'Atom cambió durante la evaluación. Evalúa el contenido nuevo.', 'SOURCE_CHANGED');
   await store.transaction(state => {
@@ -270,8 +278,15 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     Object.assign(current, { status: partial ? 'partial' : 'completed', evaluationId: evaluation.id, error: failure ? safeError(failure) : null });
   });
 }
-export async function resumeEvaluationBatch(store, evaluator, jobId) {
-  const state = ensureEvaluationState(await readHistory(store));
+export async function resumeEvaluationBatch(store, evaluator, jobId, { conversationIds } = {}) {
+  const storedState = await store.read();
+  const storedJob = storedState.jobs?.find(j => j.id === jobId);
+  if (!storedJob?.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
+  const scoped = conversationIds !== undefined;
+  if (scoped && (!Array.isArray(conversationIds) || !conversationIds.length || new Set(conversationIds).size !== conversationIds.length
+    || conversationIds.some(id => !storedJob.conversationIds.includes(id)))) throw new AppError(422, 'La selección no pertenece a esta ejecución.', 'INVALID_RECHECK');
+  if (scoped && (!storedJob.maintenanceId || storedState.settings.evaluationMaintenance !== storedJob.maintenanceId)) throw new AppError(409, 'La reanudación parcial requiere el mismo mantenimiento activo.', 'EVALUATION_MAINTENANCE');
+  const state = ensureEvaluationState(await readHistory(store, scoped ? conversationIds : storedJob.conversationIds));
   const registry = asRegistry(evaluator).forState(state);
   const job = state.jobs.find(j => j.id === jobId);
   if (!job || !job.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
@@ -282,7 +297,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
   if (digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
   if (state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.some(id => job.conversationIds.includes(id)))) throw new AppError(409, 'Existe una ejecución operativa posterior. Consulta el resultado vigente.', 'SUPERSEDED_JOB');
   const candidates = job.conversationIds.map(id => state.conversations.find(c => c.id === id)).filter(Boolean);
-  const pending = state.tasks.filter(t => t.jobId === jobId && t.status !== 'completed');
+  const pending = state.tasks.filter(t => t.jobId === jobId && t.status !== 'completed' && (!scoped || conversationIds.includes(t.conversationId)));
   if (!pending.length) throw new AppError(409, 'La ejecución ya está completa.', 'ALREADY_COMPLETED');
   for (const task of pending) {
     const c = candidates.find(c => c.id === task.conversationId);
@@ -294,6 +309,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
   await store.transaction(s => {
     recoverInterrupted(s);
     if (s.settings.evaluationMaintenance && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
+    if (scoped && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'El mantenimiento de la reanudación parcial cambió.', 'EVALUATION_MAINTENANCE');
     if (s.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
     const currentRegistry = registry.forState(s);
     for (const task of pending) {
@@ -301,10 +317,11 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
       if (task.fallback) currentRegistry.resolve(task.fallback.id, task.fallback);
     }
     const j = s.jobs.find(j => j.id === jobId); Object.assign(j, { status: 'running', updatedAt: now(), finishedAt: null });
-    for (const t of s.tasks.filter(t => t.jobId === jobId && t.status !== 'completed')) { t.status = 'pending'; t.round++; t.error = null; }
+    const selectedIds = new Set(pending.map(t => t.id));
+    for (const t of s.tasks.filter(t => selectedIds.has(t.id) && t.status !== 'completed')) { t.status = 'pending'; t.round++; t.error = null; }
   });
   const resumedJob = (await store.read()).jobs.find(j => j.id === jobId);
-  return { job: resumedJob, completion: launch(store, registry, resumedJob, catalog) };
+  return { job: resumedJob, completion: launch(store, registry, resumedJob, catalog, undefined, scoped ? pending.map(t => t.id) : undefined) };
 }
 export async function runEvaluationBatch(store, evaluator, options) { return (await startEvaluationBatch(store, evaluator, options)).completion; }
 export async function evaluateConversation(store, evaluator, conversation, catalog, { replace = false } = {}) {

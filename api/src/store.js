@@ -155,8 +155,8 @@ export class MysqlStore {
 export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
-  async readWithConversations({ fresh = false } = {}) {
-    const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh })]);
+  async readWithConversations({ fresh = false, conversationIds } = {}) {
+    const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh, ...(conversationIds !== undefined ? { conversationIds } : {}) })]);
     return this.attach(state, source);
   }
   attach(state, source) {
