@@ -30,6 +30,7 @@ export function mapAtomConversation(row, events, country, timezone) {
     agent: { id: row.IdAsesorActual == null ? 'sin-asesor' : String(row.IdAsesorActual), name: row.AsesorNombre || 'Sin asesor asignado' },
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
     date: localDate(startedAt, timezone), startedAt,
+    lastActivityAt: row.FechaUltimaActividadUtc ? iso(row.FechaUltimaActividadUtc) : null,
     sourceCreatedAt: row.FechaCreacionUtc ? iso(row.FechaCreacionUtc) : startedAt,
     sourceUpdatedAt: row.FechaActualizacionUtc ? iso(row.FechaActualizacionUtc) : startedAt,
     endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : iso(row.FechaUltimaActividadUtc),

@@ -23,12 +23,12 @@ const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(25
 const grantSchema = z.object({ externalId: z.number().int().positive(), role: z.enum(['admin', 'supervisor']) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
 const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(20).default(20), idempotencyKey: z.string().uuid().optional() }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
-export const integrationStatus = () => ({
-  ready: process.env.OPENAI_EVALUATION_ENABLED === 'true' && !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.ATOM_DB_HOST && process.env.APP_DB_HOST),
-  atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_CONVERSATIONS_TABLE && process.env.ATOM_MESSAGES_TABLE && process.env.ATOM_COUNTRIES_TABLE),
-  aiConfigured: !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL),
-  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), ...(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? [] : ['Configurar OpenAI para la evaluación.']), ...(process.env.OPENAI_EVALUATION_ENABLED === 'true' ? [] : ['La transferencia de conversaciones a OpenAI está deshabilitada.'])],
-});
+export const integrationStatus = (registry = registryFromEnv(), env = process.env) => {
+  const atomConfigured = !!(env.ATOM_DB_HOST && env.ATOM_DB_NAME && env.ATOM_CONVERSATIONS_TABLE && env.ATOM_MESSAGES_TABLE && env.ATOM_COUNTRIES_TABLE);
+  const aiConfigured = registry.configured;
+  return { ready: aiConfigured && atomConfigured && !!env.APP_DB_HOST, atomConfigured, aiConfigured,
+    blockers: [...(atomConfigured ? [] : ['Configurar la lectura histórica de Atom.']), ...(aiConfigured ? [] : ['Configurar y habilitar los modelos de evaluación.'])] };
+};
 
 export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}) {
   const registry = asRegistry(evaluator);
@@ -42,7 +42,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       catch { modelsReady = false; }
     }
     if (!modelsReady) blockers.push('Configura y habilita los modelos de la política seleccionada.');
-    return { ...integrationStatus(), aiConfigured: modelsReady, ready: !config.demo && !!store.readWithConversations && modelsReady, blockers };
+    return { ...integrationStatus(registry), aiConfigured: modelsReady, ready: !config.demo && !!store.readWithConversations && modelsReady, blockers };
   };
   const basePath = normalizeBasePath(config.basePath);
   const prefix = `${basePath}/api`;
@@ -193,7 +193,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       agents: [...new Map(state.conversations.map(c => [c.agent.id, { ...c.agent, country: c.country }])).values()],
       catalog: currentCatalog(state).map(v => ({ id: v.id, name: v.name, family: v.family, phase: v.phase, mark: v.mark, type: v.type, active: v.active, version: v.version, availability: catalogAvailability(v) })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
-      integrations: integrationStatus(),
+      integrations: status(state),
     });
   });
   app.get(`${prefix}/catalog`, async (req, res) => {
@@ -306,7 +306,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !status().ready)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y un modelo habilitado en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !status().ready)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y un modelo habilitado en modo real.', 'INTEGRATION_PENDING', status().blockers);
     const settings = await store.transaction(state => {
       if (state.settings.evaluationMaintenance) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
       if (input.dailyEnabled && !status(state).ready) throw new AppError(409, 'Completa la configuración de los modelos seleccionados.', 'AI_CONFIGURATION');

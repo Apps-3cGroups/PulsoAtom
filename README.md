@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI evalúa las variables activas del checklist; cada instalación debe habilitar explícitamente la transferencia mediante su configuración.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. Los modelos configurados evalúan las variables activas del checklist. Admite OpenAI, Gemini y modelos locales mediante GatewayAgents; cada instalación habilita explícitamente los perfiles que puede utilizar.
 
 ## Abrir y ejecutar
 
@@ -125,7 +125,7 @@ La lectura histórica de Atom ya está conectada: el servidor consulta las conve
 
 La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). En esta instalación local ya se autorizó y habilitó para futuros lotes, y el portal está configurado en modo real. Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda de hasta 20 conversaciones. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md).
 
-La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y OpenAI. Los pendientes que superen el límite quedan para días posteriores.
+La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y los modelos de la política vigente. Los pendientes que superen el límite quedan para días posteriores.
 
 Con `includeOpenConversations` y `refreshChangedConversations` habilitados en la configuración persistida, se incluyen conversaciones abiertas y cerradas. Las abiertas muestran «Evaluación provisional». Se compara la huella del texto, roles, IDs, fechas de mensajes, país y estado de cierre: una importación idéntica no repite la IA, mientras un mensaje nuevo o el cierre requieren actualizar el resultado. El horario conserva su fecha de inicio para seleccionar registros nuevos; las conversaciones ya evaluadas cuyo contenido cambió también se actualizan aunque Atom no cambie su fecha de actualización.
 
@@ -178,8 +178,8 @@ python3 api/scripts/import-catalog.py \
 ```
 
 
-### Doble revisión GPT / Gemini
+### Doble revisión de modelos
 
 La rama de doble revisión añade dos respuestas independientes por conversación y un único flag operativo. Desde el flag se consultan razones y citas lado a lado; la revisión humana conserva los originales. Administración configura doble revisión o principal con respaldo en **Evaluaciones → Herramientas internas**.
 
-Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. La configuración de Gemini y el piloto real permanecen pendientes; no se habilita ni se reevalúa el histórico al instalar. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
+Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. Instalar una versión no habilita proveedores ni reevalúa el histórico. Para sustituir GPT/Gemini por Clef/Gemma, configurar exclusivamente los dos perfiles `gateway` descritos en `api/.env.example`, verificar su conexión y preparar el piloto limitado a las cinco conversaciones más recientes. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
