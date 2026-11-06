@@ -50,7 +50,7 @@ Configurar en `api/.env`:
 AI_MODEL_PROFILES=[{"id":"clef-local","label":"Clef","provider":"gateway","envPrefix":"CLEF"},{"id":"gemma-local","label":"Gemma","provider":"gateway","envPrefix":"GEMMA"}]
 GATEWAY_BASE_URL=
 AGENT_SHARED_TOKEN=
-GATEWAY_PORTAL_KEY=
+GATEWAY_PORTAL_KEY=portal-pulso
 CLEF_TOOL_KEY=
 CLEF_MODEL=
 CLEF_EVALUATION_ENABLED=true
@@ -61,7 +61,7 @@ OPENAI_EVALUATION_ENABLED=false
 GEMINI_EVALUATION_ENABLED=false
 ```
 
-Confirmar los IDs exactos con DevOps y `/v1/models` del Gateway. La guía recibida documenta Gemma; no se presupone la herramienta ni el modelo Clef. Los demás ajustes están en `api/.env.example`: timeout máximo de 180 segundos por intento, temperatura, límite de salida y formato `json_schema` o `json_object`. El formato se elige explícitamente según lo que soporte el servicio, sin degradarlo automáticamente. La respuesta debe informar el mismo modelo solicitado. Una identidad distinta, una negativa de seguridad o un error de configuración no se convierten en un resultado válido.
+Confirmar los IDs exactos con DevOps y `/v1/models` del Gateway. Ambos modelos usan el mismo Gateway y la identidad de auditoría `portal-pulso`. La guía recibida documenta Gemma; no se presupone la herramienta ni el modelo Clef. Los demás ajustes están en `api/.env.example`: timeout máximo de 180 segundos por intento, temperatura, límite de salida y formato `json_schema` o `json_object`. El formato se elige explícitamente según lo que soporte el servicio, sin degradarlo automáticamente. La respuesta debe informar el mismo modelo solicitado. Una identidad distinta, una negativa de seguridad o un error de configuración no se convierten en un resultado válido.
 
 Estos perfiles reemplazan el registro de proveedores públicos; incluso si quedan claves antiguas en el entorno, las tareas del piloto solo pueden seleccionar los dos perfiles locales. La configuración guardada en MySQL se cambia a doble revisión al aplicar el piloto. El resultado conserva el `request_uuid` del Gateway como ID de respuesta para auditoría y el uso numérico disponible. La coincidencia requiere dos modelos efectivos distintos y resultados equivalentes; fallos, abstenciones y código no aportan votos adicionales.
 
