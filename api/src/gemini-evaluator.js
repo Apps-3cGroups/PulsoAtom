@@ -11,7 +11,7 @@ export function geminiEvaluationSchema() {
       variableId: { type: 'string' },
       status: { type: 'string', enum: [status] },
       value,
-      reason: { type: 'string' },
+      reason: { type: 'string', minLength: 1, maxLength: 1000 },
       evidence_message_ids: { type: 'array', items: { type: 'string' }, minItems: minEvidence, maxItems: maxEvidence },
     },
     required: ['variableId', 'status', 'value', 'reason', 'evidence_message_ids'],
@@ -59,7 +59,7 @@ export class GeminiEvaluator {
     Object.assign(this, { apiKey, baseUrl: baseUrl?.replace(/\/$/, ''), model, timeoutMs, fetchImpl });
   }
   get configured() { return !!(this.apiKey && this.baseUrl && this.model); }
-  async evaluate(conversation, variables) {
+  async evaluate(conversation, variables, options) {
     if (!this.configured) throw new AppError(503, 'Falta configurar Gemini.', 'AI_CONFIGURATION');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
@@ -69,7 +69,7 @@ export class GeminiEvaluator {
         method: 'POST', signal: AbortSignal.timeout(this.timeoutMs),
         headers: { 'x-goog-api-key': this.apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({ systemInstruction: { parts: [{ text: evaluationInstructions }] },
-          contents: [{ role: 'user', parts: [{ text: evaluationInput(conversation, variables) }] }],
+          contents: [{ role: 'user', parts: [{ text: evaluationInput(conversation, variables, options) }] }],
           generationConfig: { responseMimeType: 'application/json', responseJsonSchema: geminiEvaluationSchema() } }),
       });
     } catch { throw new AppError(502, 'No se pudo contactar Gemini dentro del tiempo permitido.', 'AI_UNAVAILABLE'); }

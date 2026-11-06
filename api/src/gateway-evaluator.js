@@ -30,7 +30,7 @@ export class GatewayEvaluator {
     // Backend preflight only: do not return the catalog's provider URLs to the UI.
     return { catalog, models: models.response, requestId: models.requestId };
   }
-  async evaluate(conversation, variables) {
+  async evaluate(conversation, variables, options) {
     if (!this.configured) throw new AppError(503, 'Falta configurar el modelo local y su herramienta en el Gateway.', 'AI_CONFIGURATION');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
@@ -39,7 +39,7 @@ export class GatewayEvaluator {
     if (this.responseFormat === 'json_object') {
       messages.push({ role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
     }
-    messages.push({ role: 'user', content: evaluationInput(conversation, variables) });
+    messages.push({ role: 'user', content: evaluationInput(conversation, variables, options) });
     const envelope = await this.#client.invoke({ toolKey: this.toolKey, method: 'POST', path: '/v1/chat/completions',
       body: { model: this.model, messages, temperature: this.temperature, max_tokens: this.maxTokens, stream: false,
         response_format: this.responseFormat === 'json_schema'

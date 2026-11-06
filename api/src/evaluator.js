@@ -6,13 +6,34 @@ export const systemInstructions = `Eres auditor de calidad de conversaciones com
 // Catalog v5 notes are part of the versioned evaluator contract, not instructions
 // accepted from a customer message.
 export const catalogInstructions = `Catálogo v5: «asistente» incluye bot y humano; las variables bot_ y humano_ se restringen a su actor. Un flag describe un evento, no necesariamente un error del asesor: faltantes corresponden a inventario/surtido y los eventos del cliente son contexto. Una respuesta «no hay» puede responder una petición sin resolverla. Para asistente_comunicacion_poco_profesional, guía de emojis v0: solo 🙂 😊 👍 ✅; máximo uno por mensaje y dos por conversación del asistente; solo saludo, despedida o confirmación positiva. No usar emojis si el cliente está molesto o presenta una queja. Un emoji como único mensaje también puede ser mensaje sin valor. Usa estas condiciones solo al evaluar las variables correspondientes. Los descriptores son categorías o listas, nunca flags ni calificaciones. Para tipo_interaccion usa exactamente cotización, pedido, disponibilidad, seguimiento de entrega, queja, devolución u otro. Para productos_solicitados devuelve los nombres tal como aparecen, sin inventar ni normalizar contra un catálogo externo. Para flags con valor 0 o no_evaluado, evidence_message_ids debe ser []. Para flags con valor 1 y descriptores con contenido, cita entre uno y tres mensajes existentes. Si falta contexto, status=no_evaluado, value=null y evidence_message_ids=[].`;
-export const evaluationInstructions = `${systemInstructions}\n\n${catalogInstructions}\n\n${CATALOG_RULES_INSTRUCTIONS}`;
-export const PROMPT_VERSION = 'pulso-audit-v5';
+export const responseContractInstructions = `Contrato de respuesta obligatorio para cada variable:
+- reason es texto en español, no vacío ni solo espacios, de 1 a 1000 caracteres. Usa una o dos frases que expliquen el resultado; también es obligatorio al no detectar o abstenerse.
+- Flag presente: status="evaluado", value=1 y evidence_message_ids con 1 a 3 IDs existentes que demuestran el evento.
+- Flag ausente: status="evaluado", value=0 y evidence_message_ids=[]. No cites evidencia de ausencia.
+- Contexto insuficiente: status="no_evaluado", value=null y evidence_message_ids=[]. No combines no_evaluado con un valor concreto ni evaluado con null.
+- Descriptor tipo_interaccion: si puedes clasificarlo, status="evaluado", value es una categoría textual exacta de la taxonomía y evidence_message_ids contiene 1 a 3 IDs. Por ejemplo una consulta explícita de existencia puede dar value="disponibilidad"; no es un flag binario. Si falta contexto, utiliza la abstención anterior.
+- Descriptor productos_solicitados: status="evaluado", value es la lista de nombres visibles y cita 1 a 3 IDs si la lista tiene contenido; para una lista vacía, evidence_message_ids=[]. No inventes productos. La abstención usa null, nunca una lista con status=no_evaluado.
+No rellenes todo con 0 ni con no_evaluado por defecto: decide cada variable con su definición y el contenido visible. Antes de responder verifica los tipos, la relación status/value, la razón y la cantidad de evidencia. Responde únicamente el JSON solicitado, sin Markdown.
+Si el input incluye correccionesFormato, contiene solo variableId y reglas que fallaron en un intento anterior. Vuelve a evaluar únicamente las variables solicitadas y corrige esas reglas sin inventar hechos, evidencia ni una detección para satisfacer el formato.`;
+export const evaluationInstructions = `${systemInstructions}\n\n${catalogInstructions}\n\n${CATALOG_RULES_INSTRUCTIONS}\n\n${responseContractInstructions}`;
+export const PROMPT_VERSION = 'pulso-audit-v5-contract-2';
 export const RULES_VERSION = 'pulso-rules-v5';
 export const interactionTypes = ['cotización', 'pedido', 'disponibilidad', 'seguimiento de entrega', 'queja', 'devolución', 'otro'];
 export const supportsAiVariable = v => ['IA', 'IA + código'].includes(v.method) && (v.type === 'Flag' || (v.type === 'Descriptor' && ['tipo_interaccion', 'productos_solicitados'].includes(v.id)));
-export function evaluationInput(conversation, variables) {
-  return JSON.stringify({ estadoConversacion: conversation.completed === false ? 'abierta' : 'cerrada', variables: variables.map(v => ({ id: v.id, nombre: v.name, tipo: v.type, definicion: v.definition, condicion: v.condition, prioridad: v.mark })), mensajes: conversation.messages.map(m => ({ id: m.id, actor: m.actor, texto: m.text })) });
+const validationRules = new Set(['missing_item', 'invalid_status', 'invalid_value_type', 'invalid_reason', 'invalid_evidence_count',
+  'unknown_evidence_message', 'missing_evidence', 'unexpected_evidence', 'inconsistent_status_value']);
+export function evaluationValidationFeedback(variables, errors = []) {
+  if (!Array.isArray(errors)) return [];
+  return variables.flatMap(variable => {
+    const rules = [...new Set(errors.filter(error => error?.variableId === variable.id)
+      .flatMap(error => Array.isArray(error.rules) ? error.rules.filter(rule => validationRules.has(rule)) : []))];
+    return rules.length ? [{ variableId: variable.id, rules }] : [];
+  });
+}
+export function evaluationInput(conversation, variables, { validationErrors = [] } = {}) {
+  const feedback = evaluationValidationFeedback(variables, validationErrors);
+  return JSON.stringify({ estadoConversacion: conversation.completed === false ? 'abierta' : 'cerrada', variables: variables.map(v => ({ id: v.id, nombre: v.name, tipo: v.type, definicion: v.definition, condicion: v.condition, prioridad: v.mark })), mensajes: conversation.messages.map(m => ({ id: m.id, actor: m.actor, texto: m.text })),
+    ...(feedback.length ? { correccionesFormato: feedback } : {}) });
 }
 
 export function evaluationSchema(variables) {
@@ -23,8 +44,8 @@ export function evaluationSchema(variables) {
       value: variable.type !== 'Descriptor' ? { type: ['integer', 'null'], enum: [0, 1, null] }
         : variable.id === 'tipo_interaccion' ? { type: ['string', 'null'], enum: [...interactionTypes, null] }
         : { type: ['array', 'null'], items: { type: 'string' } },
-      reason: { type: 'string' },
-      evidence_message_ids: { type: 'array', items: { type: 'string' } },
+      reason: { type: 'string', minLength: 1, maxLength: 1000 },
+      evidence_message_ids: { type: 'array', items: { type: 'string' }, minItems: 0, maxItems: 3 },
     },
     required: ['status', 'value', 'reason', 'evidence_message_ids'],
   });
@@ -89,11 +110,11 @@ export class OpenAIEvaluator {
     this.timeoutMs = timeoutMs; this.fetchImpl = fetchImpl;
   }
   get configured() { return !!(this.apiKey && this.baseUrl && this.model); }
-  async evaluate(conversation, variables) {
+  async evaluate(conversation, variables, options) {
     if (!this.configured) throw new AppError(503, 'Falta configurar el servicio de IA.', 'AI_NOT_CONFIGURED');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist activo incluye variables que aún no admite este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
-    const input = evaluationInput(conversation, variables);
+    const input = evaluationInput(conversation, variables, options);
     let response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}/responses`, {
