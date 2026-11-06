@@ -38,7 +38,46 @@ Sin `AI_MODEL_PROFILES` se registran `openai-default` y `gemini-default`. Se pue
 ]
 ```
 
-Los adaptadores implementan `configured` y `evaluate(conversation, variables)`, devolviendo resultados normalizados, modelo efectivo, uso disponible e ID del proveedor. La integración local se incorporará con ese contrato cuando se defina infraestructura; no hay un endpoint local real habilitado.
+Los adaptadores implementan `configured` y `evaluate(conversation, variables)`, devolviendo resultados normalizados, modelo efectivo, uso disponible e ID del proveedor. `GatewayEvaluator` implementa ese contrato para modelos locales, sin usar directamente sus direcciones privadas. Su conexión real requiere las credenciales, herramienta y modelo exactos del Gateway.
+
+## Clef y Gemma mediante GatewayAgents
+
+Todo el consumo sale del backend: `GET /v1/tools` descubre las herramientas y `POST /v1/tools/{toolKey}/invoke` invoca las rutas documentadas de modelos y Chat Completions. El token compartido solo se envía como `X-Gateway-Token`; no se expone a React, logs ni respuestas de Pulso. `portal_key` debe ser el identificador real asignado al portal. Pulso no sigue redirecciones ni utiliza la URL privada devuelta por el catálogo como destino de red.
+
+Configurar en `api/.env`:
+
+```dotenv
+AI_MODEL_PROFILES=[{"id":"clef-local","label":"Clef","provider":"gateway","envPrefix":"CLEF"},{"id":"gemma-local","label":"Gemma","provider":"gateway","envPrefix":"GEMMA"}]
+GATEWAY_BASE_URL=
+AGENT_SHARED_TOKEN=
+GATEWAY_PORTAL_KEY=
+CLEF_TOOL_KEY=
+CLEF_MODEL=
+CLEF_EVALUATION_ENABLED=true
+GEMMA_TOOL_KEY=gemma
+GEMMA_MODEL=gemma-4-26b-a4b-it-mlx
+GEMMA_EVALUATION_ENABLED=true
+OPENAI_EVALUATION_ENABLED=false
+GEMINI_EVALUATION_ENABLED=false
+```
+
+Confirmar los IDs exactos con DevOps y `/v1/models` del Gateway. La guía recibida documenta Gemma; no se presupone la herramienta ni el modelo Clef. Los demás ajustes están en `api/.env.example`: timeout máximo de 180 segundos por intento, temperatura, límite de salida y formato `json_schema` o `json_object`. El formato se elige explícitamente según lo que soporte el servicio, sin degradarlo automáticamente. La respuesta debe informar el mismo modelo solicitado. Una identidad distinta, una negativa de seguridad o un error de configuración no se convierten en un resultado válido.
+
+Estos perfiles reemplazan el registro de proveedores públicos; incluso si quedan claves antiguas en el entorno, las tareas del piloto solo pueden seleccionar los dos perfiles locales. La configuración guardada en MySQL se cambia a doble revisión al aplicar el piloto. El resultado conserva el `request_uuid` del Gateway como ID de respuesta para auditoría y el uso numérico disponible. La coincidencia requiere dos modelos efectivos distintos y resultados equivalentes; fallos, abstenciones y código no aportan votos adicionales.
+
+### Piloto controlado y limpieza respaldada
+
+El despliegue no borra ni evalúa datos por sí solo. Esta secuencia se ejecuta únicamente cuando se haya solicitado la limpieza. Desde `api/`, con el entorno real y la nueva versión disponibles:
+
+1. `node scripts/evaluate-local-pilot.js --plan`: comprueba el catálogo del Gateway, los modelos y dos respuestas sintéticas; después fija las cinco conversaciones más recientes por **última actividad**, incluidas las abiertas. Guarda un manifiesto local con permisos `0600`, IDs, huellas y versiones, sin transcripciones. No modifica MySQL ni evalúa conversaciones reales.
+2. `node scripts/reset-evaluations.js`: consultar los totales antes de limpiar. No continuar si hay una ejecución activa o falló el preflight.
+3. `node scripts/reset-evaluations.js --apply --expected-evaluations TOTAL_VERIFICADO`: crea y comprueba un respaldo con SHA-256; después limpia las tablas de evaluaciones, revisiones y comparaciones bajo transacción. Conserva Atom, catálogo, usuarios y sesiones. Pausa el diario y devuelve `maintenanceId`. Guardar el respaldo en almacenamiento protegido y duradero antes de retirar la copia de trabajo.
+4. `node scripts/evaluate-local-pilot.js --apply --manifest RUTA_MANIFIESTO --maintenance-id ID_MANTENIMIENTO`: repite el preflight sintético, valida que la muestra y el catálogo no hayan cambiado, guarda la política dual Clef/Gemma sin respaldo público y ejecuta exactamente cinco conversaciones (diez tareas), con concurrencia uno.
+5. Si hay resultados parciales, usar `--resume` con los mismos argumentos. Conserva resultados válidos, reintenta solo pendientes y solo reanuda el mantenimiento que pertenece al trabajo. Si Atom cambió **antes de iniciar** y las tablas siguen vacías, `--plan --maintenance-id ID_MANTENIMIENTO` permite fijar una muestra nueva sin repetir la limpieza.
+
+Solo diez tareas completas con identidades y huellas válidas liberan el mantenimiento. La programación diaria permanece **pausada**, incluso tras el éxito, para revisar el piloto antes de ampliar el universo. No ejecutar `evaluate-all.js` para esta prueba: procesaría todo el histórico. La restauración existente requiere tablas de evaluación vacías; no debe sobrescribir resultados del piloto. También restaura la configuración anterior, por lo que un rollback debe conservar la pausa diaria y evitar reactivar proveedores antiguos inadvertidamente.
+
+Después de revisar el piloto, desplegar/reiniciar la API con la misma configuración local antes de habilitar nuevas ejecuciones o definir la continuación automática. Ninguna prueba sintética demuestra conectividad ni resultados reales por sí sola.
 
 ## Acuerdo y métricas
 
@@ -95,14 +134,14 @@ La arquitectura existente carga el histórico completo de Atom y documentos JSON
 
 ## Doble revisión operativa (noviembre de 2026)
 
-En Evaluaciones → Herramientas internas → Revisión y contingencia, seleccionar **Doble revisión**, GPT como principal y Gemini como segundo modelo. Ambos deben estar configurados y habilitados. La política queda versionada y solo afecta ejecuciones nuevas; cambiarla no dispara IA ni reemplaza evaluaciones anteriores.
+En Evaluaciones → Herramientas internas → Revisión y contingencia, seleccionar **Doble revisión** y dos perfiles distintos, configurados y habilitados. Para la operación local serán Clef y Gemma. La política queda versionada y solo afecta ejecuciones nuevas; cambiarla no dispara IA ni reemplaza evaluaciones anteriores.
 
 - Se crean dos tareas independientes por conversación con la misma huella de contenido, checklist e instrucciones. Las respuestas no se comparten entre proveedores.
-- La vista operativa combina las detecciones: una variable detectada por cualquiera aparece una sola vez. No se guardan respuestas agregadas fingiendo que las produjo un modelo.
+- La vista operativa publica un flag automático únicamente cuando ambos modelos detectan la misma variable sobre contenido y versiones equivalentes. Las detecciones individuales quedan disponibles para revisión, sin contar como flags operativos. No se guardan respuestas agregadas fingiendo que las produjo un modelo.
 - Dos detecciones independientes: **Coinciden 2 modelos**. Una detección frente a un cero: **Discrepancia · requiere revisión**. Fallo o abstención: **comparación incompleta**. No se calcula un porcentaje de certeza.
 - Un cero y una abstención/fallo no equivalen a ausencia confirmada: el resultado agregado queda sin conclusión. Los cálculos se ejecutan una vez por conversación y no votan. Las reglas híbridas muestran la respuesta de IA y el ajuste de código, sin convertir la coincidencia impuesta en consenso.
-- La vista de conversación permite consultar GPT/Gemini, resultado, justificación, citas y versión del criterio. Se puede refutar el flag compartido; levantar uno omitido requiere la conversación completa. Autor, motivo, fecha y evidencia originales se conservan.
-- Si GPT falla técnicamente tras su reintento, Gemini se evalúa una vez como segunda revisión y puede mantener el resultado operativo. No se llama a Gemini otra vez como un respaldo adicional. Un fallo de configuración, entrada o seguridad del principal no publica al secundario como sustitución automática.
+- La vista de conversación permite consultar las dos identidades reales, resultado, justificación, citas y versión del criterio. Se puede refutar el flag compartido; levantar uno omitido requiere la conversación completa. Autor, motivo, fecha y evidencia originales se conservan.
+- Si un modelo falla técnicamente tras su reintento, se conserva la revisión del otro, identificando la comparación incompleta. No se convierte en coincidencia de dos modelos ni se ejecuta de nuevo al modelo completado como respaldo adicional. Un fallo de configuración, entrada o seguridad requiere intervención. El piloto local nunca recurre a GPT o Gemini.
 - **Detalle → Reanudar pendientes y fallidos** reanuda solo las tareas no completadas. Cambios de contenido, checklist, instrucciones, modelo o una ejecución operativa posterior impiden reutilizar un caso incompatible.
 - El historial distingue conversaciones de revisiones: 20 conversaciones en modo dual producen hasta 40 revisiones, además de los reintentos técnicos registrados por separado.
 - Se conserva el procesamiento existente de conversaciones abiertas y modificadas. No se dividen chats en atenciones.

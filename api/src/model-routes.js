@@ -29,7 +29,8 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
       if (!profiles.some(p => (p.viewId || p.id) === id)) profiles.push({ id, label: e.profileLabel || e.model || 'Evaluación histórica', model: e.model || null,
         provider: e.provider || 'legacy', available: false, enabled: false, configured: false, historical: true, demo: !!e.demo });
     }
-    res.json({ profiles, policy: registry.policy(state), localStatus: 'Pendiente de definir infraestructura' });
+    const localProfiles = profiles.filter(p => p.provider === 'gateway' && !p.historical);
+    res.json({ profiles, policy: registry.policy(state), localStatus: localProfiles.some(p => p.available) ? 'Modelos locales habilitados' : 'Modelos locales pendientes de configuración' });
   });
   app.patch(`${prefix}/models/policy`, requireAdmin, async (req, res) => {
     const input = z.object({ mode: z.enum(['single', 'dual']).default('single'), secondaryId: z.string().max(80).nullable().default(null), primaryId: z.string().max(80), fallbackId: z.string().max(80).nullable(), expectedVersion: z.number().int().positive() }).strict().parse(req.body);

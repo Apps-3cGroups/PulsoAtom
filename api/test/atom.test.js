@@ -21,6 +21,7 @@ test('Atom se transforma en conversación pendiente, con país de catálogo y si
   assert.equal(conversation.id, '9');
   assert.equal(conversation.country, 'CR');
   assert.equal(conversation.date, '2026-10-20');
+  assert.equal(conversation.lastActivityAt, '2026-10-21T02:20:00.000Z');
   assert.equal(conversation.evaluationId, null);
   assert.equal(conversation.completed, false);
   assert.equal(conversation.client.phoneLast4, null);

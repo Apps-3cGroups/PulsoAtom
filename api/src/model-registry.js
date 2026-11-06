@@ -1,10 +1,11 @@
 import { AppError } from './errors.js';
 import { OpenAIEvaluator } from './evaluator.js';
 import { GeminiEvaluator } from './gemini-evaluator.js';
+import { GatewayEvaluator } from './gateway-evaluator.js';
 import { digest } from './evaluation-context.js';
 
 // Provider adapters implement configured + evaluate(conversation, variables).
-// Local adapters can join this registry when the deployment is defined.
+// Gateway profiles keep local infrastructure and credentials in the backend.
 export class ModelRegistry {
   constructor(profiles) {
     if (new Set(profiles.map(p => p.id)).size !== profiles.length) throw new Error('Los perfiles de IA deben tener IDs únicos.');
@@ -13,7 +14,13 @@ export class ModelRegistry {
   get configured() { return this.profiles.some(p => p.enabled && p.evaluator?.configured); }
   list() { return this.profiles.map(p => ({ ...this.snapshot(p), configured: !!p.evaluator?.configured,
     enabled: !!p.enabled, available: !!(p.enabled && p.evaluator?.configured) })); }
-  snapshot(p) { const configurationHash = digest([p.provider, p.model, p.evaluator?.baseUrl, p.evaluator?.timeoutMs]); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
+  snapshot(p) {
+    // Preserve hashes of existing providers; local routes and generation options
+    // are part of a gateway profile's identity. Credentials never enter snapshots.
+    const settings = [p.provider, p.model, p.evaluator?.baseUrl, p.evaluator?.timeoutMs];
+    if (p.provider === 'gateway') settings.push({ toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey,
+      responseFormat: p.evaluator.responseFormat, maxTokens: p.evaluator.maxTokens, temperature: p.evaluator.temperature });
+    const configurationHash = digest(settings); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
     configurationHash, demo: !!p.demo }; }
   resolve(id, expected) {
     const p = this.profiles.find(p => p.id === id);
@@ -27,7 +34,8 @@ export class ModelRegistry {
 }
 export function asRegistry(evaluator) {
   if (evaluator instanceof ModelRegistry) return evaluator;
-  return new ModelRegistry([{ id: 'openai-default', label: evaluator.model || 'OpenAI', provider: 'openai',
+  const provider = evaluator instanceof GatewayEvaluator ? 'gateway' : 'openai';
+  return new ModelRegistry([{ id: `${provider}-default`, label: evaluator.model || (provider === 'gateway' ? 'Modelo local' : 'OpenAI'), provider,
     model: evaluator.model || 'configured-model', enabled: true, evaluator }]);
 }
 export function registryFromEnv({ demo = false, env = process.env, fetchImpl = fetch } = {}) {
@@ -54,11 +62,19 @@ export function registryFromEnv({ demo = false, env = process.env, fetchImpl = f
   const specs = env.AI_MODEL_PROFILES ? JSON.parse(env.AI_MODEL_PROFILES) : defaults;
   if (!Array.isArray(specs) || !specs.length || specs.length > 12) throw new Error('AI_MODEL_PROFILES debe contener entre 1 y 12 perfiles.');
   return new ModelRegistry(specs.map(spec => {
-    if (!/^[a-z0-9-]{1,80}$/.test(spec.id) || !['openai', 'gemini'].includes(spec.provider) || !/^[A-Z][A-Z0-9_]*$/.test(spec.envPrefix) || typeof spec.model !== 'string' || typeof spec.label !== 'string') throw new Error('Perfil de IA inválido.');
+    if (!spec || !/^[a-z0-9-]{1,80}$/.test(spec.id) || !['openai', 'gemini', 'gateway'].includes(spec.provider) || !/^[A-Z][A-Z0-9_]*$/.test(spec.envPrefix) || (spec.model !== undefined && typeof spec.model !== 'string') || typeof spec.label !== 'string') throw new Error('Perfil de IA inválido.');
     const prefix = spec.envPrefix;
-    const options = { apiKey: env[`${prefix}_API_KEY`], baseUrl: env[`${prefix}_BASE_URL`], model: spec.model,
+    const model = spec.model ?? env[`${prefix}_MODEL`] ?? '';
+    if (spec.provider === 'gateway') {
+      const evaluator = new GatewayEvaluator({ baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
+        portalKey: env.GATEWAY_PORTAL_KEY, toolKey: env[`${prefix}_TOOL_KEY`], model,
+        timeoutMs: Number(env[`${prefix}_TIMEOUT_MS`] || 180000), maxTokens: Number(env[`${prefix}_MAX_TOKENS`] || 16000),
+        temperature: Number(env[`${prefix}_TEMPERATURE`] || 0), responseFormat: env[`${prefix}_RESPONSE_FORMAT`] || 'json_schema', fetchImpl });
+      return { ...spec, model, enabled: env[`${prefix}_EVALUATION_ENABLED`] === 'true', evaluator };
+    }
+    const options = { apiKey: env[`${prefix}_API_KEY`], baseUrl: env[`${prefix}_BASE_URL`], model,
       timeoutMs: Math.min(180000, Math.max(1000, Number(env[`${prefix}_TIMEOUT_MS`]) || 120000)), fetchImpl };
     if (spec.provider === 'openai' && !options.baseUrl) options.baseUrl = 'https://api.openai.com/v1';
-    return { ...spec, enabled: env[`${prefix}_EVALUATION_ENABLED`] === 'true', evaluator: spec.provider === 'openai' ? new OpenAIEvaluator(options) : new GeminiEvaluator(options) };
+    return { ...spec, model, enabled: env[`${prefix}_EVALUATION_ENABLED`] === 'true', evaluator: spec.provider === 'openai' ? new OpenAIEvaluator(options) : new GeminiEvaluator(options) };
   }));
 }

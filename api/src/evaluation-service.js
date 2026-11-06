@@ -273,7 +273,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
   const state = ensureEvaluationState(await readHistory(store));
   const job = state.jobs.find(j => j.id === jobId);
   if (!job || !job.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
-  if (state.settings.evaluationMaintenance) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
+  if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const catalog = restoreCatalog(state, job.catalogVersions);
   // MySQL JSON may reorder object keys; normalize both reference sets without
   // changing the digest function or any historical context fingerprints.
@@ -291,6 +291,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
   }
   await store.transaction(s => {
     recoverInterrupted(s);
+    if (s.settings.evaluationMaintenance && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
     if (s.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
     const j = s.jobs.find(j => j.id === jobId); Object.assign(j, { status: 'running', updatedAt: now(), finishedAt: null });
     for (const t of s.tasks.filter(t => t.jobId === jobId && t.status !== 'completed')) { t.status = 'pending'; t.round++; t.error = null; }
