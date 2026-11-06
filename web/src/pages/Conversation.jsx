@@ -39,7 +39,6 @@ export default function Conversation() {
   const attentionVariables = variables.filter(v => classificationOf(v) !== 'positive');
   const positiveVariables = variables.filter(v => classificationOf(v) === 'positive');
   const groups = [...[...new Set(attentionVariables.map(v => v.family))].map(family => ({ title: family, variables: attentionVariables.filter(v => v.family === family) })), { title: 'Resultados positivos', variables: positiveVariables, positive: true }].filter(group => group.variables.length);
-  if (!id) return <div><PageHeading eyebrow="REVISIÓN CON EVIDENCIA" title="Detalle de conversación" description="Abre una conversación para consultar sus mensajes y los resultados del checklist." /><EmptyState title="Selecciona una conversación" description="Puedes abrirla desde el resumen, el histórico o los resultados de búsqueda." action={<Button type="primary" onClick={() => navigate('/historico')}>Explorar el histórico <ArrowRightOutlined /></Button>} /></div>;
   if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Volver al histórico</Button><ErrorState error={request.error} retry={request.reload} /></>;
   if (request.loading || !conversation) return <LoadingState />;
   const c = conversation;
