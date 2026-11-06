@@ -6,14 +6,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Checkbox, Modal, Select, Tag, Timeline, Tooltip } from 'antd';
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, HistoryOutlined, MessageOutlined } from '@ant-design/icons';
-import { useApi, usePortal } from '../hooks';
+import { useApi } from '../hooks';
 import ReviewModal, { reviewActions as actions, canReviewVariable, nextReviewAction } from '../components/ReviewModal';
 import { PageHeading, ErrorState, LoadingState, EmptyState, Mark, PriorityTag, FlagSymbol, dateText, timeText } from '../components/common';
 
 const actorName = actor => ({ cliente: 'Cliente', humano: 'Asistente de venta', bot: 'Bot', sistema: 'Sistema' }[actor] || actor);
 export default function Conversation() {
   const { id } = useParams();
-  const { rememberConversation } = usePortal();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const requestPath = id ? `/conversations/${encodeURIComponent(id)}` : null;
@@ -27,9 +26,6 @@ export default function Conversation() {
   const [comparing, setComparing] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const conversation = request.data?.conversation;
-  useEffect(() => {
-    if (!request.loading && !request.error && request.dataPath === requestPath && conversation?.id === id) rememberConversation(id);
-  }, [id, conversation?.id, request.loading, request.error, request.dataPath, requestPath, rememberConversation]);
   const requestedMetricDate = params.get('metricDate');
   const metricSelection = useMemo(() => dailyMetricsView(conversation?.dailyMetrics, requestedMetricDate), [conversation?.dailyMetrics, requestedMetricDate]);
   useEffect(() => {
@@ -44,7 +40,7 @@ export default function Conversation() {
   const positiveVariables = variables.filter(v => classificationOf(v) === 'positive');
   const groups = [...[...new Set(attentionVariables.map(v => v.family))].map(family => ({ title: family, variables: attentionVariables.filter(v => v.family === family) })), { title: 'Resultados positivos', variables: positiveVariables, positive: true }].filter(group => group.variables.length);
   if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Volver al histórico</Button><ErrorState error={request.error} retry={request.reload} /></>;
-  if (request.loading || request.dataPath !== requestPath || conversation?.id !== id) return <LoadingState />;
+  if (request.loading || !conversation) return <LoadingState />;
   const c = conversation;
   return <div className="detail-page"><div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Histórico</Button><span>/</span><span>Conversación</span><span className="mono muted">{c.id}</span></div><PageHeading eyebrow="CONVERSACIÓN" title={<>{c.client.name}{c.client.phoneLast4 && <span className="heading-phone"> …{c.client.phoneLast4}</span>}</>} description={`${c.agent.name} · ${c.countryName} · ${dateText(c.date)} · ${c.channel}`} actions={<div className="conversation-heading-actions"><Button icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>Revisiones ({c.reviews.length})</Button></div>} /><div className="conversation-meta"><div className="topic-tags">{c.topics.map(topic => <Tag className="neutral-tag" key={topic}>{topic}</Tag>)}</div><span className="muted small">{c.evaluated ? `${c.evaluation.evaluatedCount} variables evaluadas · versión conservada por ítem` : 'Pendiente de evaluación'}</span><div className="priority-cell">{['critical', 'normal', 'positive'].map(kind => flagCount(c, kind) > 0 && <PriorityTag key={kind} priority={kind} count={flagCount(c, kind)} />)}</div></div>{!c.evaluated && <Alert className="detail-alert" showIcon type="info" message="Esta conversación todavía no está evaluada" description="La ausencia de resultados no significa que no existan flags. Puedes leer sus mensajes; los resultados aparecerán cuando se complete su evaluación." />}
     {c.evaluated && (c.evaluationIncomplete || c.consensusPendingFlags > 0) && <Alert className="detail-alert" showIcon type="warning" message={c.consensusPendingFlags > 0 ? `Doble revisión pendiente · ${c.consensusPendingFlags} variables` : `Evaluación parcial · ${c.pendingFlags} flags pendientes`} description={c.consensusPendingFlags > 0 ? 'Faltan respuestas equivalentes de ambos modelos. Los resultados individuales se conservan, pero no generan flags automáticos. Esto no significa que el evento esté ausente.' : c.evaluationErrors ? `${c.evaluationErrors} resultados presentan un error técnico. Los resultados válidos se conservan; lo pendiente no equivale a ausencia del evento.` : 'Hay variables sin datos o contexto suficientes. Los resultados disponibles se conservan; lo pendiente no equivale a ausencia del evento.'} action={<Button size="small" onClick={() => { setIncludeUnevaluated(true); setOnlyMarked(false); setPriority('all'); setFamily(undefined); }}>Ver pendientes</Button>} />}

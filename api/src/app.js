@@ -16,14 +16,12 @@ import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evalu
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { conversationDailyMetrics } from './daily-metrics.js';
-import { selectConversationEntry } from './conversation-entry.js';
 
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
 const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
 const grantSchema = z.object({ externalId: z.number().int().positive(), role: z.enum(['admin', 'supervisor']) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
-const conversationEntrySchema = z.object({ preferredId: z.string().trim().min(1).max(200).optional() }).strict();
 const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(20).default(20), idempotencyKey: z.string().uuid().optional() }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
 export const integrationStatus = () => ({
   ready: process.env.OPENAI_EVALUATION_ENABLED === 'true' && !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.ATOM_DB_HOST && process.env.APP_DB_HOST),
@@ -281,12 +279,6 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   };
   app.get(`${prefix}/conversations`, list());
   app.get(`${prefix}/search`, list(true));
-  app.get(`${prefix}/conversation-entry`, async (req, res) => {
-    const { preferredId } = conversationEntrySchema.parse(req.query);
-    const state = await readHistory();
-    // Selecting a destination does not reveal predictions or record exposure.
-    res.set('Cache-Control', 'no-store').json({ conversationId: selectConversationEntry(state.conversations, preferredId) });
-  });
   app.get(`${prefix}/conversations/:id`, async (req, res) => {
     const state = await readHistory();
     const conversation = state.conversations.find(c => c.id === req.params.id);
