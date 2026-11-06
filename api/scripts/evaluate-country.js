@@ -13,12 +13,19 @@ const evaluator = registryFromEnv();
 if (!/^[A-Z]{2}$/.test(country || '') || !Number.isInteger(max) || max < 1 || max > 20) {
   console.error('Uso: npm run eval:country -- HN 10');
   process.exitCode = 1;
-} else if (!appDb || !atomDb || !evaluator.configured) {
+} else if (!appDb || !atomDb) {
   console.error('La evaluación requiere APP_DB_*, ATOM_DB_*, un perfil de IA configurado y habilitado.');
   process.exitCode = 1;
 } else {
   const store = new AtomHistoryStore(new MysqlStore(appDb), new AtomReader(atomDb, config.timezone));
   try {
+    const settingsState = await store.read();
+    const models = evaluator.forState(settingsState);
+    if (!models.configured) throw new Error('Configura y habilita los modelos locales en Pulso.');
+    const policy = models.policy(settingsState);
+    models.resolve(policy.primaryId);
+    if (policy.mode === 'dual') models.resolve(policy.secondaryId);
+    else if (policy.fallbackId) models.resolve(policy.fallbackId);
     const state = await store.readWithConversations();
     const pending = eligibleConversations(state, { country });
     if (!pending.length) throw new Error(`No hay conversaciones pendientes de ${country}.`);

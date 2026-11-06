@@ -64,9 +64,9 @@ function pickCandidates(state, options) {
   return candidates.slice(0, options.max ?? 20);
 }
 export async function startEvaluationBatch(store, evaluator, options = {}) {
-  const registry = asRegistry(evaluator);
-  if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   const state = ensureEvaluationState(await readHistory(store));
+  const registry = asRegistry(evaluator).forState(state);
+  if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const purpose = options.purpose || 'operational';
   const limit = options.scheduleDate ? 100 : 20;
@@ -107,6 +107,8 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     ensureEvaluationState(draft); recoverInterrupted(draft);
     if (draft.settings.evaluationMaintenance && draft.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
     if (registry.policy(draft).version !== policy.version) throw new AppError(409, 'La política cambió. Vuelve a iniciar la evaluación.', 'VERSION_CONFLICT');
+    const currentRegistry = registry.forState(draft);
+    for (const profile of [...profiles, fallback].filter(Boolean)) currentRegistry.resolve(profile.id, profile);
     if (options.idempotencyKey && draft.jobs.some(j => j.idempotencyKey === options.idempotencyKey)) throw new AppError(409, 'Esta ejecución ya se registró. Consulta su progreso.', 'DUPLICATE_EXECUTION');
     if (options.scheduleDate) {
       if (!draft.settings.dailyEnabled || draft.settings.dailyStartedAt !== options.sourceChangedAfter) throw new AppError(409, 'La programación diaria cambió.', 'SCHEDULE_CHANGED');
@@ -269,8 +271,8 @@ async function processTask(store, registry, job, task, conversation, catalog) {
   });
 }
 export async function resumeEvaluationBatch(store, evaluator, jobId) {
-  const registry = asRegistry(evaluator);
   const state = ensureEvaluationState(await readHistory(store));
+  const registry = asRegistry(evaluator).forState(state);
   const job = state.jobs.find(j => j.id === jobId);
   if (!job || !job.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
@@ -293,6 +295,11 @@ export async function resumeEvaluationBatch(store, evaluator, jobId) {
     recoverInterrupted(s);
     if (s.settings.evaluationMaintenance && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
     if (s.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
+    const currentRegistry = registry.forState(s);
+    for (const task of pending) {
+      currentRegistry.resolve(task.profile.id, task.profile);
+      if (task.fallback) currentRegistry.resolve(task.fallback.id, task.fallback);
+    }
     const j = s.jobs.find(j => j.id === jobId); Object.assign(j, { status: 'running', updatedAt: now(), finishedAt: null });
     for (const t of s.tasks.filter(t => t.jobId === jobId && t.status !== 'completed')) { t.status = 'pending'; t.round++; t.error = null; }
   });

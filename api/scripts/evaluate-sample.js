@@ -8,12 +8,19 @@ import { runEvaluationBatch } from '../src/evaluation-service.js';
 const appDb = databaseConfig();
 const atomDb = atomDatabaseConfig();
 const evaluator = registryFromEnv();
-if (!appDb || !atomDb || !evaluator.configured) {
+if (!appDb || !atomDb) {
   console.error('La muestra requiere APP_DB_*, ATOM_DB_*, un perfil de IA configurado y habilitado.');
   process.exitCode = 1;
 } else {
   const store = new AtomHistoryStore(new MysqlStore(appDb), new AtomReader(atomDb, config.timezone));
   try {
+    const settingsState = await store.read();
+    const models = evaluator.forState(settingsState);
+    if (!models.configured) throw new Error('Configura y habilita los modelos locales en Pulso.');
+    const policy = models.policy(settingsState);
+    models.resolve(policy.primaryId);
+    if (policy.mode === 'dual') models.resolve(policy.secondaryId);
+    else if (policy.fallbackId) models.resolve(policy.fallbackId);
     const sourceJobId = process.argv[2] === '--recheck' ? process.argv[3] : null;
     let options = { max: 5, random: true, pendingOnly: true };
     if (sourceJobId) {

@@ -6,8 +6,9 @@ import { AtomReader } from '../src/atom.js';
 import { registryFromEnv } from '../src/model-registry.js';
 import { eligibleConversations, runEvaluationBatch } from '../src/evaluation-service.js';
 import { currentEvaluation, sourceFingerprint } from '../src/source-state.js';
+import { AppError } from '../src/errors.js';
 
-if (!process.argv.includes('--execute') || process.env.OPENAI_EVALUATION_ENABLED !== 'true') throw new Error('Requiere --execute y OPENAI_EVALUATION_ENABLED=true.');
+if (!process.argv.includes('--execute')) throw new Error('Requiere --execute para renovar las evaluaciones.');
 const base = new MysqlStore(databaseConfig());
 const store = new AtomHistoryStore(base, new AtomReader(atomDatabaseConfig(), config.timezone));
 const evaluator = registryFromEnv();
@@ -22,10 +23,19 @@ const inspect = state => {
     pending: current.filter(c => c && !done.some(d=>d.id===c.id)) };
 };
 try {
-  if (!evaluator.configured) throw new Error('Falta configurar el evaluador.');
-  let state = await store.readWithConversations({ fresh: true });
-  const maintenanceId = state.settings.evaluationMaintenance;
+  const settingsState = await store.read();
+  const models = evaluator.forState(settingsState);
+  if (!models.configured) throw new Error('Configura y habilita los modelos locales en Pulso.');
+  const policy = models.policy(settingsState);
+  // This legacy command's progress check only tracks one operational anchor.
+  // It cannot prove dual completion and must not clear maintenance or enable
+  // daily processing based on a successful result from only one model.
+  if (policy.mode === 'dual') throw new AppError(409, 'La renovación masiva no admite evaluación dual. Usa el piloto de cinco conversaciones: node scripts/evaluate-local-pilot.js --plan.', 'MASS_DUAL_UNSUPPORTED');
+  models.resolve(policy.primaryId);
+  if (policy.fallbackId) models.resolve(policy.fallbackId);
+  const maintenanceId = settingsState.settings.evaluationMaintenance;
   if (!maintenanceId) throw new Error('No hay un reinicio pendiente. Este comando solo reanuda una renovación autorizada.');
+  let state = await store.readWithConversations({ fresh: true });
   await mkdir(directory, { recursive: true, mode: 0o700 });
   filename = path.join(directory, `${maintenanceId}.json`);
   try { manifest = JSON.parse(await readFile(filename,'utf8')); }
@@ -35,7 +45,7 @@ try {
       conversationIds: eligibleConversations(state, { pendingOnly: false, includeOpen: true }).map(c=>c.id), jobs: [] };
     await persist();
   }
-  console.log(JSON.stringify({ event: 'start', total: manifest.conversationIds.length, models: evaluator.list().map(p=>({id:p.id,model:p.model,available:p.available})), manifest: filename }));
+  console.log(JSON.stringify({ event: 'start', total: manifest.conversationIds.length, models: models.list().map(p=>({id:p.id,model:p.model,available:p.available})), manifest: filename }));
   // A maximum of three passes; failed cases remain explicitly pending, never fabricated.
   for (let pass = 1; pass <= 3; pass++) {
     state = await store.readWithConversations({ fresh: true });

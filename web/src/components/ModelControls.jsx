@@ -6,21 +6,24 @@ import { useNavigate } from 'react-router-dom';
 import { useApi, useDebounced, usePortal } from '../hooks';
 import { api, queryString } from '../services/api';
 import { ErrorState, LoadingState, tableLoading } from './common';
+import LocalModelConfiguration from './LocalModelConfiguration';
+import { executableProfiles, policySelection } from '../services/localModels';
 
 export const jobStatus = status => ({ running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
 export function ModelControls({ onSaved, running }) {
   const request = useApi('/models');
-  const { user } = usePortal();
-  if (request.error) return <ErrorState error={request.error} retry={request.reload} />;
-  if (!request.data) return <LoadingState />;
-  return <div className="model-controls-grid"><PolicyCard key={request.data.policy.version} data={request.data} isAdmin={user.role === 'admin'} onSaved={() => { request.reload(); onSaved(); }} /><SampleCard profiles={request.data.profiles} isAdmin={user.role === 'admin'} running={running} /></div>;
+  const { user, bootstrap } = usePortal();
+  const refresh = () => { request.reload(); onSaved(); };
+  const data = request.data && { ...request.data, profiles: executableProfiles(request.data.profiles, bootstrap.mode === 'demo') };
+  return <><LocalModelConfiguration demo={bootstrap.mode === 'demo'} isAdmin={user.role === 'admin'} running={running} onSaved={refresh} />{request.error ? <ErrorState error={request.error} retry={request.reload} /> : !data ? <LoadingState /> : <div className="model-controls-grid"><PolicyCard key={`${data.policy.version}:${data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')}`} data={data} isAdmin={user.role === 'admin'} onSaved={refresh} /><SampleCard key={data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')} profiles={data.profiles} isAdmin={user.role === 'admin'} running={running} /></div>}</>;
 }
 function PolicyCard({ data, isAdmin, onSaved }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(null);
   const { message } = App.useApp();
   const [form] = Form.useForm();
+  const selection = policySelection(data.policy, data.profiles);
   const primary = Form.useWatch('primaryId', form);
-  const mode = Form.useWatch('mode', form) || data.policy.mode || 'single';
+  const mode = Form.useWatch('mode', form) || selection.mode || 'single';
   const localProfiles = data.profiles.filter(p => !p.historical && p.provider === 'gateway');
   const options = data.profiles.filter(p => !p.historical).map(p => ({ value: p.id, label: `${p.label}${p.model ? ` · ${p.model}` : ''}${p.available ? '' : ' · Pendiente'}`, disabled: !p.available }));
   const save = async values => {
@@ -29,9 +32,10 @@ function PolicyCard({ data, isAdmin, onSaved }) {
     catch (e) { setError(e); } finally { setBusy(false); }
   };
   return <section className="evaluation-card model-policy"><div className="evaluation-icon"><SafetyCertificateOutlined /></div><h2>Revisión y contingencia</h2><p>Dos revisiones independientes o un modelo con respaldo. Pulso conserva un único flag operativo y la respuesta de cada modelo.</p>{error && <Alert type="error" showIcon message={error.message} />}
-    <Form form={form} layout="vertical" initialValues={{ mode: data.policy.mode || 'single', primaryId: data.policy.primaryId, secondaryId: data.policy.secondaryId, fallbackId: data.policy.fallbackId }} onFinish={save} disabled={!isAdmin || busy}>
+    {selection.pending && <Alert type="warning" showIcon message="Política pendiente de configurar" description="Selecciona los modelos habilitados y guarda la política para las nuevas ejecuciones. La selección mostrada aún no está guardada." />}
+    <Form form={form} layout="vertical" initialValues={{ mode: selection.mode || 'single', primaryId: selection.primaryId, secondaryId: selection.secondaryId, fallbackId: selection.fallbackId }} onFinish={save} disabled={!isAdmin || busy}>
       <Form.Item name="mode" label="Método de evaluación"><Radio.Group options={[{ value: 'single', label: 'Principal + respaldo' }, { value: 'dual', label: 'Doble revisión' }]} /></Form.Item>
-      <Form.Item name="primaryId" label="Modelo principal" rules={[{ required: true }]}><Select aria-label="Modelo principal" options={options} onChange={value => { if (form.getFieldValue('fallbackId') === value) form.setFieldValue('fallbackId', null); if (form.getFieldValue('secondaryId') === value) form.setFieldValue('secondaryId', null); }} /></Form.Item>
+      <Form.Item name="primaryId" label="Modelo principal" rules={[{ required: true, message: 'Selecciona un modelo habilitado.' }]}><Select aria-label="Modelo principal" placeholder="Seleccionar modelo habilitado" options={options} onChange={value => { if (form.getFieldValue('fallbackId') === value) form.setFieldValue('fallbackId', null); if (form.getFieldValue('secondaryId') === value) form.setFieldValue('secondaryId', null); }} /></Form.Item>
       {mode === 'dual' ? <><Form.Item name="secondaryId" label="Segundo modelo" rules={[{ required: true, message: 'Selecciona un segundo modelo habilitado.' }]}><Select aria-label="Segundo modelo" placeholder="Seleccionar segundo modelo" options={options.filter(p => p.value !== primary)} /></Form.Item><Alert type="info" showIcon message="Dos revisiones por conversación" description="Ambos modelos reciben el mismo contenido y checklist. Si uno falla técnicamente, el otro mantiene el resultado disponible; la comparación queda incompleta. Cada proveedor genera su propio consumo." /></> : <Form.Item name="fallbackId" label="Respaldo automático"><Select aria-label="Modelo de respaldo" allowClear placeholder="Sin respaldo configurado" options={options.filter(p => p.value !== primary)} /></Form.Item>}
       <div className="evaluation-card-bottom">{isAdmin && <Button htmlType="submit" loading={busy} block>Guardar política</Button>}<p>{mode === 'dual' ? 'Un reintento por modelo. Reanudar una revisión fallida conserva la respuesta del otro modelo.' : 'Un reintento y, si el fallo técnico persiste, el respaldo.'} Los resultados históricos permanecen asociados a su evaluación.</p></div>
     </Form>{localProfiles.length > 0 && <div className="local-model-note">Modelos locales {localProfiles.map(p => <Tag key={p.id} color={p.available ? 'green' : 'default'}>{p.label} · {p.available ? 'Habilitado' : p.configured ? 'Deshabilitado' : 'Sin configurar'}</Tag>)}<span>Las nuevas ejecuciones utilizan la política guardada.</span></div>}

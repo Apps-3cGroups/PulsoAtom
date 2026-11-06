@@ -26,8 +26,11 @@ try {
   if (config.demo || !databaseConfig() || !atomDatabaseConfig()) throw new Error('REAL_MODE_REQUIRED');
   if (mode !== '--plan' && (!filename || !option('--maintenance-id'))) throw new Error('MANIFEST_AND_MAINTENANCE_ID_REQUIRED');
   const registry = registryFromEnv();
-  const preflight = await preflightLocalModels(registry);
   store = new AtomHistoryStore(new MysqlStore(databaseConfig()), new AtomReader(atomDatabaseConfig(), config.timezone));
+  // Read the saved model settings first. Credentials stay in the backend, and
+  // preflight sends only its synthetic probe before loading Atom transcripts.
+  const settingsState = await store.read();
+  const preflight = await preflightLocalModels(registry, settingsState);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   if (mode === '--plan') {
     if (filename) throw new Error('PLAN_CREATES_NEW_MANIFEST');

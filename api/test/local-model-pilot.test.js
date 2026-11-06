@@ -40,6 +40,28 @@ function fixture() {
   return { state, registry, store, calls, control, plan, reset };
 }
 
+function savedConfigurationFixture() {
+  const context = fixture();
+  const { state, registry } = context;
+  state.settings.localModelConfiguration = { version: 1, profiles: registry.profiles.map(profile => ({
+    id: profile.id, label: `Guardado ${profile.label}`, toolKey: `saved-${profile.evaluator.toolKey}`,
+    model: `saved-${profile.model}`, enabled: true, responseFormat: 'json_object',
+  })) };
+  // The environment registry starts unavailable. Resolving the persisted
+  // settings must happen before checking readiness, discovery or execution.
+  registry.profiles.forEach(profile => { profile.enabled = false; });
+  registry.forState = current => new ModelRegistry(current.settings.localModelConfiguration.profiles.map(spec => {
+    const original = registry.profiles.find(profile => profile.id === spec.id);
+    return { ...original, ...spec, provider: 'gateway', evaluator: { ...original.evaluator,
+      model: spec.model, toolKey: spec.toolKey, responseFormat: spec.responseFormat,
+      async discovery() { return { catalog: { tools: [{ key: spec.toolKey, status: 'active' }] }, models: { data: [{ id: spec.model }] }, requestId: 'saved-discovery' }; },
+      async evaluate(conversation, variables) { return { ...await original.evaluator.evaluate(conversation, variables), model: spec.model }; },
+    } };
+  }));
+  context.plan = async () => createLocalPilotPlan(state, registry, await preflightLocalModels(registry, state));
+  return context;
+}
+
 test('preflight fails closed for public providers, duplicate models and unavailable Gateway discovery', async () => {
   const { registry, control, calls } = fixture();
   registry.profiles[0].provider = 'openai';
@@ -152,4 +174,40 @@ test('partial local pilot retains maintenance; only matching maintenance can res
   assert.equal(final.maintenanceReleased, true);
   assert.equal(calls.filter(c => c.name === 'clef').length, clefCalls);
   assert.equal(state.settings.dailyEnabled, false);
+});
+
+test('preflight and plan use saved tool/model configuration instead of disabled environment defaults', async () => {
+  const { state, registry, calls, control } = savedConfigurationFixture();
+  const preflight = await preflightLocalModels(registry, state);
+  const manifest = createLocalPilotPlan(state, registry, preflight);
+  assert.deepEqual(manifest.profiles.map(profile => profile.model), ['saved-clef-synthetic', 'saved-gemma-synthetic']);
+  assert.ok(preflight.checks.every(check => check.configurationHash));
+  assert.equal(calls.length, 2);
+  assert.equal(control.mutations, 0);
+  state.settings.localModelConfiguration.profiles[0].toolKey = 'another-tool-same-model';
+  state.settings.localModelConfiguration.version++;
+  assert.throws(() => createLocalPilotPlan(state, registry, preflight), { code: 'LOCAL_PREFLIGHT_REQUIRED' });
+  assert.equal(calls.length, 2);
+  state.settings.localModelConfiguration.profiles[0].enabled = false;
+  await assert.rejects(preflightLocalModels(registry, state), { code: 'LOCAL_MODELS_REQUIRED' });
+});
+
+test('apply rejects a persisted configuration change after planning before any evaluation or write', async () => {
+  const { state, registry, store, plan, reset, calls, control } = savedConfigurationFixture();
+  const manifest = await plan(); reset();
+  state.settings.localModelConfiguration.profiles[0].model = 'changed-clef-model';
+  state.settings.localModelConfiguration.version++;
+  await assert.rejects(executeLocalPilot(store, registry, manifest, { maintenanceId: 'reset-synthetic' }), { code: 'MODEL_CHANGED' });
+  assert.equal(calls.length, 2);
+  assert.equal(control.mutations, 0);
+});
+
+test('apply evaluates with saved local models and keeps the scheduler paused', async () => {
+  const { state, registry, store, plan, reset } = savedConfigurationFixture();
+  const manifest = await plan(); reset();
+  const summary = await executeLocalPilot(store, registry, manifest, { maintenanceId: 'reset-synthetic' });
+  assert.equal(summary.completed, 10);
+  assert.equal(state.settings.dailyEnabled, false);
+  assert.deepEqual([...new Set(state.evaluations.map(e => e.model))], ['saved-clef-synthetic', 'saved-gemma-synthetic']);
+  assert.ok(state.evaluations.every(e => e.modelConfiguration.configurationHash === manifest.profiles.find(p => p.id === e.profileId).configurationHash));
 });
