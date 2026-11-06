@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { App, Alert, Form, Input, Modal, Select } from 'antd';
 import { api } from '../services/api';
+export { canReviewVariable, nextReviewAction } from '../services/reviewPolicy';
 
 export const reviewReasons = {
   falso_positivo: 'Falso positivo',
@@ -11,8 +12,6 @@ export const reviewReasons = {
   validacion_humana: 'Validación humana del checklist',
 };
 export const reviewActions = { refutar: 'Refutar flag', levantar: 'Levantar flag', deshacer: 'Deshacer revisión' };
-export const canReviewVariable = (conversation, variable) => conversation.evaluated && variable.enabledInEvaluation && (variable.result.status === 'evaluado' || variable.review) && ['Flag', 'Calculado'].includes(variable.type) && (['negativo', 'positivo', 'contexto'].includes(variable.polarity) || variable.type === 'Flag');
-export const nextReviewAction = variable => variable.review ? 'deshacer' : variable.result.value === 1 ? 'refutar' : 'levantar';
 const actorName = actor => ({ cliente: 'Cliente', humano: 'Asistente de venta', bot: 'Bot', sistema: 'Sistema' }[actor] || actor);
 
 export default function ReviewModal({ conversation, editing, onClose, onSaved }) {
