@@ -30,19 +30,15 @@ export const integrationStatus = (registry = registryFromEnv(), env = process.en
     blockers: [...(atomConfigured ? [] : ['Configurar la lectura histórica de Atom.']), ...(aiConfigured ? [] : ['Configurar y habilitar los modelos de evaluación.'])] };
 };
 
-export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}) {
+export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}, modelServices = {}) {
   const registry = asRegistry(evaluator);
   const status = state => {
+    const currentRegistry = registry.forState(state);
     const blockers = [];
     if (!store.readWithConversations) blockers.push('Configura la lectura histórica de Atom.');
-    let modelsReady = registry.configured;
-    if (state) {
-      const policy = registry.policy(state);
-      try { for (const id of [policy.primaryId, policy.mode === 'dual' ? policy.secondaryId : policy.fallbackId].filter((id, index) => index === 0 || policy.mode === 'dual' || id)) registry.resolve(id); }
-      catch { modelsReady = false; }
-    }
+    const modelsReady = currentRegistry.configured && currentRegistry.policyAvailable(state);
     if (!modelsReady) blockers.push('Configura y habilita los modelos de la política seleccionada.');
-    return { ...integrationStatus(registry), aiConfigured: modelsReady, ready: !config.demo && !!store.readWithConversations && modelsReady, blockers };
+    return { ...integrationStatus(currentRegistry), aiConfigured: modelsReady, ready: !config.demo && !!store.readWithConversations && modelsReady, blockers };
   };
   const basePath = normalizeBasePath(config.basePath);
   const prefix = `${basePath}/api`;
@@ -143,7 +139,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
-  mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory });
+  mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory, ...modelServices });
   mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });
   app.get(`${prefix}/access/grants`, requireAdmin, async (_req, res) => {
     if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
@@ -306,7 +302,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !status().ready)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y un modelo habilitado en modo real.', 'INTEGRATION_PENDING', status().blockers);
+    if (input.dailyEnabled && (config.demo || !store.readWithConversations)) throw new AppError(409, 'La evaluación diaria requiere Atom y Pulso en modo real.', 'INTEGRATION_PENDING');
     const settings = await store.transaction(state => {
       if (state.settings.evaluationMaintenance) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
       if (input.dailyEnabled && !status(state).ready) throw new AppError(409, 'Completa la configuración de los modelos seleccionados.', 'AI_CONFIGURATION');
@@ -317,7 +313,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ settings });
   });
   app.post(`${prefix}/evaluations`, requireAdmin, async (req, res) => {
-    if (!registry.configured) throw new AppError(409, 'No hay un modelo configurado y habilitado.', 'EVALUATION_DISABLED');
+    if (!status(await store.read()).aiConfigured) throw new AppError(409, 'Configura y habilita los modelos de la política seleccionada.', 'EVALUATION_DISABLED');
     if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
     const input = evaluationRequestSchema.parse(req.body);
     const { job, completion } = await startEvaluationBatch(store, registry, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max, idempotencyKey: input.idempotencyKey, author: req.user });

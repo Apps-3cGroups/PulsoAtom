@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { registryFromEnv, asRegistry } from '../src/model-registry.js';
+import { registryFromEnv, asRegistry, ModelRegistry } from '../src/model-registry.js';
+import { OpenAIEvaluator } from '../src/evaluator.js';
 import { digest } from '../src/evaluation-context.js';
 import { integrationStatus } from '../src/app.js';
 
@@ -51,9 +52,49 @@ test('local profiles default to the confirmed portal identity when no environmen
 });
 
 test('existing OpenAI/Gemini configuration hashes stay compatible', () => {
-  const models = registryFromEnv({ env: { OPENAI_MODEL: 'legacy-exact', OPENAI_API_KEY: 'synthetic', OPENAI_EVALUATION_ENABLED: 'true' }, fetchImpl: offline });
+  const models = new ModelRegistry([{ id: 'historical', provider: 'openai', model: 'legacy-exact', enabled: true,
+    evaluator: new OpenAIEvaluator({ apiKey: 'synthetic', baseUrl: 'https://api.openai.com/v1', model: 'legacy-exact', timeoutMs: 120000, fetchImpl: offline }) }]);
   assert.equal(models.list()[0].configurationHash, digest(['openai', 'legacy-exact', 'https://api.openai.com/v1', 120000]));
   assert.equal(models.list()[0].available, true);
+});
+
+test('default installation exposes only local slots even with a legacy public registry and enabled keys', () => {
+  const cloud = { OPENAI_MODEL: 'old-public', OPENAI_API_KEY: 'unused', OPENAI_EVALUATION_ENABLED: 'true',
+    GEMINI_MODEL: 'old-other', GEMINI_API_KEY: 'unused-other', GEMINI_EVALUATION_ENABLED: 'true' };
+  for (const extra of [{}, { AI_MODEL_PROFILES: JSON.stringify([
+    { id: 'openai-default', label: 'Luna', provider: 'openai', model: 'old-public', envPrefix: 'OPENAI' },
+    { id: 'gemini-default', label: 'Gemini', provider: 'gemini', envPrefix: 'GEMINI' },
+  ]) }]) {
+    const models = registryFromEnv({ env: { ...cloud, ...extra }, fetchImpl: offline });
+    assert.deepEqual(models.list().map(p => [p.id, p.label, p.provider, p.available]), [
+      ['clef-local', 'Clef', 'gateway', false], ['gemma-local', 'Gemma', 'gateway', false],
+    ]);
+    assert.equal(models.configured, false);
+    assert.throws(() => models.resolve('openai-default'), { code: 'AI_CONFIGURATION' });
+    assert.throws(() => models.resolve('gemini-default'), { code: 'AI_CONFIGURATION' });
+  }
+});
+
+test('saved local profile settings bind without mutating old evaluators or exposing backend credentials', () => {
+  const models = registry({ AI_MODEL_PROFILES: undefined, CLEF_MODEL: '', GEMMA_MODEL: '', CLEF_EVALUATION_ENABLED: 'false', GEMMA_EVALUATION_ENABLED: 'false' });
+  const state = { settings: { localModelConfiguration: { version: 3, profiles: [
+    { id: 'clef-local', toolKey: 'clef-tool', model: 'clef-saved', responseFormat: 'json_object', enabled: true },
+    { id: 'gemma-local', toolKey: 'gemma-tool', model: 'gemma-saved', responseFormat: 'json_schema', enabled: true },
+  ] }, aiPolicy: { mode: 'dual', primaryId: 'clef-local', secondaryId: 'gemma-local', version: 2 } } };
+  const bound = models.forState(state);
+  assert.equal(models.configured, false);
+  assert.equal(bound.resolve('clef-local').model, 'clef-saved');
+  const oldSnapshot = bound.list()[0];
+  const safe = models.localConfiguration(state);
+  assert.equal(safe.gatewayConfigured, true);
+  assert.equal(safe.policyReady, true);
+  assert.equal(safe.version, 3);
+  assert.doesNotMatch(JSON.stringify(safe), /synthetic-private-token|gateway\.example|baseUrl|portalKey/);
+  state.settings.localModelConfiguration.profiles[0].model = 'changed';
+  assert.equal(bound.resolve('clef-local').model, 'clef-saved');
+  assert.throws(() => models.forState(state).resolve('clef-local', oldSnapshot), { code: 'MODEL_CHANGED' });
+  state.settings.localModelConfiguration.profiles[0].enabled = false;
+  assert.equal(models.localConfiguration(state).policyReady, false);
 });
 
 test('a standalone Gateway adapter is never attributed to OpenAI by the compatibility wrapper', () => {

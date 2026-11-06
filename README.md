@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. Los modelos configurados evalúan las variables activas del checklist. Admite OpenAI, Gemini y modelos locales mediante GatewayAgents; cada instalación habilita explícitamente los perfiles que puede utilizar.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. Los modelos configurados evalúan las variables activas del checklist. Esta instalación utiliza Clef y Gemma mediante GatewayAgents. Los proveedores públicos quedan fuera de nuevas ejecuciones; sus resultados históricos conservan su identidad.
 
 ## Abrir y ejecutar
 
@@ -88,8 +88,8 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 | --- | --- |
 | `APP_DB_*` | Base MySQL propia `dbPulsosAtom`: cuentas, catálogo, versiones, evaluaciones y auditoría. |
 | `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente de lectura a conversaciones, eventos y países. El catálogo de países proviene de `dbSomos3c_2.tblCatalogoPaises`. |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_MS` | OpenAI Responses API con salida JSON Schema estricta. La clave permanece solo en `api/.env`. |
-| `OPENAI_EVALUATION_ENABLED` | Bloqueo explícito de transferencia; `false` por defecto. Se activa solo al habilitar nuevos lotes de evaluación. |
+| `GATEWAY_BASE_URL`, `AGENT_SHARED_TOKEN`, `GATEWAY_PORTAL_KEY` | Conexión privada a GatewayAgents. Clave solo en backend; identidad `portal-pulso`. |
+| `CLEF_*`, `GEMMA_*` | Ajustes iniciales y límites de generación. Herramientas, IDs y activación se pueden guardar en Evaluaciones → Herramientas internas → Modelos locales. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
 | `APP_TIMEZONE` | Zona horaria de presentación; el horario diario también conserva su propia zona. |
 | `TD_API_BASE_URL` | URL base de la API TD para S3 y SMTP. Se configura solo en `api/.env`; no se envía al navegador. También se acepta la clave heredada `URL-Base`. |
@@ -119,11 +119,13 @@ Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Ser
 
 En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
 
-### Evaluación con OpenAI
+### Evaluación con Clef y Gemma
 
-La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las definiciones activas compatibles con IA, a Responses API. Solicita `store: false`, valida que los resultados incluyan todas las variables solicitadas y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
+La lectura histórica de Atom consulta conversaciones y mensajes sin guardar transcripciones en Pulso. Los modelos locales reciben roles, IDs, texto y definiciones activas compatibles con IA a través del Gateway. Las respuestas se validan por variable, identidad de modelo y evidencia. Código y métricas se calculan una sola vez y no cuentan como votos.
 
-La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). En esta instalación local ya se autorizó y habilitó para futuros lotes, y el portal está configurado en modo real. Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda de hasta 20 conversaciones. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md).
+En **Evaluaciones → Herramientas internas → Modelos locales**, consultar el Gateway, seleccionar las herramientas e IDs exactos de Clef/Gemma y guardar. Las credenciales permanecen en el servidor. El guardado selecciona doble revisión y pausa el diario para el piloto; no ejecuta IA ni borra evaluaciones. No se requiere `AI_MODEL_PROFILES`, ni claves de GPT/Luna o Gemini. Una política antigua con esos proveedores permanece sin disponibilidad hasta guardar la política local.
+
+El endpoint operativo permite hasta 20 conversaciones por lote. Para la limpieza respaldada y prueba inicial de las últimas cinco, seguir [la guía del piloto local](docs/MODELOS_Y_COMPARACION.md#piloto-controlado-y-limpieza-respaldada). Los comandos de evaluación leen la configuración guardada en Pulso. Las pruebas originales de OpenAI quedan como documentación histórica en [el informe de octubre](docs/PRUEBA_IA_2026-10-27.md).
 
 La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y los modelos de la política vigente. Los pendientes que superen el límite quedan para días posteriores.
 
@@ -182,4 +184,4 @@ python3 api/scripts/import-catalog.py \
 
 La rama de doble revisión añade dos respuestas independientes por conversación y un único flag operativo. Desde el flag se consultan razones y citas lado a lado; la revisión humana conserva los originales. Administración configura doble revisión o principal con respaldo en **Evaluaciones → Herramientas internas**.
 
-Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. Instalar una versión no habilita proveedores ni reevalúa el histórico. Para sustituir GPT/Gemini por Clef/Gemma, configurar exclusivamente los dos perfiles `gateway` descritos en `api/.env.example`, verificar su conexión y preparar el piloto limitado a las cinco conversaciones más recientes. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
+Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. Instalar una versión no habilita proveedores ni reevalúa el histórico. Para utilizar Clef/Gemma, configurar GatewayAgents en el servidor y completar Modelos locales en el portal; verificar su inferencia mediante el piloto limitado a las cinco conversaciones más recientes. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).

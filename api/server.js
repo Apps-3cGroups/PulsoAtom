@@ -18,7 +18,9 @@ if (!config.demo && options) await store.transaction(state => migrateCatalogV5(s
 const evaluator = registryFromEnv({ demo: config.demo });
 const identity = identityOptions ? identityOptions.mode === 'person-email' ? new Somos3cPersonIdentity(identityOptions) : new Somos3cIdentity(identityOptions) : null;
 const app = createApp(store, config, evaluator, identity);
-const stopScheduler = !config.demo && atomOptions && evaluator.configured
+// Configuration can be completed in the portal after boot. Each tick checks the
+// saved policy before doing any work; no process restart is needed after edits.
+const stopScheduler = !config.demo && atomOptions
   ? startDailyScheduler(store, evaluator) : () => {};
 const server = app.listen(config.port, config.host, () => {
   console.log(`Pulso API: http://${config.host}:${config.port}${config.basePath}/api/health`);

@@ -5,6 +5,7 @@ import { startEvaluationBatch, resumeEvaluationBatch } from './evaluation-servic
 
 const fail = (code, message) => { throw new AppError(409, message, code); };
 const readHistory = store => store.readWithConversations({ fresh: true });
+const forState = (registry, state) => state !== undefined && registry.forState ? registry.forState(state) : registry;
 const operator = { name: 'CLI · piloto local autorizado', id: null };
 const probeVariables = [
   { id: 'local_probe_present', version: 1, type: 'Flag', method: 'IA', active: true,
@@ -17,7 +18,8 @@ const probeConversation = { id: 'pulso-local-connectivity-synthetic', country: '
   { id: 'probe-message-2', actor: 'humano', text: 'Recibí la prueba sintética.', timestamp: '2026-01-01T12:00:01.000Z' },
 ] };
 
-export function localPilotProfiles(registry) {
+export function localPilotProfiles(registry, state) {
+  registry = forState(registry, state);
   const enabled = registry.list().filter(p => p.enabled);
   if (enabled.length !== 2 || enabled.some(p => !p.available || p.demo || p.provider !== 'gateway')) {
     fail('LOCAL_MODELS_REQUIRED', 'El piloto requiere exactamente dos perfiles locales habilitados y configurados; deshabilita los proveedores externos.');
@@ -28,7 +30,8 @@ export function localPilotProfiles(registry) {
 
 // Only this explicitly synthetic transcript is sent during preflight. No source
 // conversation is read or evaluated until both services pass these checks.
-export async function preflightLocalModels(registry) {
+export async function preflightLocalModels(registry, state) {
+  registry = forState(registry, state);
   const profiles = localPilotProfiles(registry);
   const checks = [];
   for (const profile of profiles) {
@@ -51,7 +54,8 @@ export async function preflightLocalModels(registry) {
       || absent?.status !== 'evaluado' || absent.value !== 0 || absent.error) {
       fail('LOCAL_PREFLIGHT_FAILED', 'El modelo no superó la prueba sintética de formato, identidad y evidencia; no se modifica la base.');
     }
-    checks.push({ profileId: profile.id, model: profile.model, discoveryRequestId: discovery.requestId, probeRequestId: response.responseId });
+    checks.push({ profileId: profile.id, model: profile.model, configurationHash: registry.snapshot(profile).configurationHash,
+      discoveryRequestId: discovery.requestId, probeRequestId: response.responseId });
   }
   return { checkedAt: new Date().toISOString(), synthetic: true, checks };
 }
@@ -77,6 +81,7 @@ export function latestFiveConversations(conversations) {
 }
 
 export function createLocalPilotPlan(state, registry, preflight, { createdAt = new Date().toISOString(), maintenanceId } = {}) {
+  registry = forState(registry, state);
   const profiles = localPilotProfiles(registry);
   if (state.metadata?.demo !== false) fail('REAL_MODE_REQUIRED', 'El piloto requiere el origen real de Pulso.');
   if (state.settings.evaluationMaintenance || maintenanceId) {
@@ -86,7 +91,8 @@ export function createLocalPilotPlan(state, registry, preflight, { createdAt = n
     }
   }
   if (state.jobs.some(j => j.status === 'running')) fail('EVALUATION_RUNNING', 'Hay una evaluación en curso.');
-  if (!preflight?.synthetic || preflight.checks?.length !== 2 || profiles.some(p => !preflight.checks.some(c => c.profileId === p.id && c.model === p.model))) {
+  if (!preflight?.synthetic || preflight.checks?.length !== 2 || profiles.some(p => !preflight.checks.some(c => c.profileId === p.id && c.model === p.model
+    && c.configurationHash === registry.snapshot(p).configurationHash))) {
     fail('LOCAL_PREFLIGHT_REQUIRED', 'Primero verifica ambos modelos con la prueba sintética.');
   }
   return { format: 1, id: randomUUID(), createdAt, maintenanceId: maintenanceId || null, status: 'planned', selection: 'Última actividad descendente; ID descendente en empate',
@@ -96,6 +102,7 @@ export function createLocalPilotPlan(state, registry, preflight, { createdAt = n
 }
 
 function validatePlan(state, registry, manifest, maintenanceId) {
+  registry = forState(registry, state);
   const profiles = localPilotProfiles(registry);
   if (manifest?.format !== 1 || typeof manifest.id !== 'string' || !/^[0-9a-f-]{36}$/.test(manifest.id)
     || !Array.isArray(manifest.conversations) || manifest.conversations.length !== 5
@@ -134,7 +141,7 @@ export async function executeLocalPilot(store, registry, manifest, { maintenance
       ensureEvaluationState(draft);
       validatePlan({ ...draft, conversations: state.conversations }, registry, manifest, maintenanceId);
       if (draft.jobs.length || draft.evaluations.length || draft.tasks.length || draft.operationalRefs.length) fail('LOCAL_RESET_REQUIRED', 'El estado cambió después del reinicio.');
-      const current = registry.policy(draft);
+      const current = forState(registry, draft).policy(draft);
       if (!draft.modelPolicies.some(p => p.version === current.version)) draft.modelPolicies.push({ id: String(current.version), ...current });
       const policy = { mode: 'dual', primaryId: profiles[0].id, secondaryId: profiles[1].id, fallbackId: null,
         version: current.version + 1, updatedAt: new Date().toISOString(), updatedBy: operator.name, updatedById: operator.id, localPilotId: manifest.id };
