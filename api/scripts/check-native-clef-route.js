@@ -1,7 +1,9 @@
 import '../src/config.js';
+import { safeGatewayErrorDetails } from '../src/services/safeGatewayError.js';
 
-// One bounded synthetic request, only after the exact loaded decision instance
-// is verified. No source conversations, DB operations or policy changes.
+// One bounded synthetic contract probe of the exact loaded ID, even when the
+// inventory says llm, to identify the runtime rejection. This is diagnostic,
+// never a bypass of the production evaluator's decision identity guard.
 const env = process.env;
 async function main() {
   const base = new URL(env.GATEWAY_BASE_URL);
@@ -29,11 +31,11 @@ async function main() {
   const models = inventory.data?.response?.models;
   if (!Array.isArray(models)) { console.log(JSON.stringify(report)); return; }
   const id = value => typeof value === 'string' && /^[a-zA-Z0-9._:/@-]{1,200}$/.test(value) && !value.includes('://') ? value : null;
-  report.models = models.filter(m => m?.loaded_instances?.length).slice(0, 30).map(m => ({ key: id(m.key), type: id(m.type),
-    instances: m.loaded_instances.map(i => ({ id: id(i.id), contextLength: Number.isSafeInteger(i.config?.context_length) ? i.config.context_length : null })) }));
+  report.models = models.slice(0, 30).map(m => ({ key: id(m.key), type: id(m.type),
+    instances: (m.loaded_instances || []).map(i => ({ id: id(i.id), contextLength: Number.isSafeInteger(i.config?.context_length) ? i.config.context_length : null })) }));
   const candidate = models.find(m => m.type === 'decision' && m.loaded_instances?.some(i => i.id === 'clef-flash'));
   report.clefDecisionLoaded = !!candidate;
-  if (!candidate) { console.log(JSON.stringify(report, null, 2)); return; }
+  if (!models.some(m => m.loaded_instances?.some(i => i.id === 'clef-flash'))) { console.log(JSON.stringify(report, null, 2)); return; }
   const probe = await invoke('POST', '/v1/systemone', { model: 'clef-flash', state: 'ENSAYO SINTETICO: el cliente escribió PRUEBA_POSITIVA_LOCAL.', questions: {
     marker: { type: 'choice', instructions: 'Selecciona present si el texto contiene literalmente PRUEBA_POSITIVA_LOCAL; absent si no aparece.', criteria: { present: 'El texto contiene el marcador.', absent: 'El texto no contiene el marcador.' } },
   } });
@@ -44,6 +46,7 @@ async function main() {
   report.responseModel = id(result?.model);
   report.answer = result?.answers?.marker?.choice === 'present' || result?.answers?.marker?.choice === 'absent' ? result.answers.marker.choice : null;
   report.valid = report.probeStatus === 200 && report.responseModel === 'clef-flash' && report.answer === 'present';
+  if (!report.valid) report.errorDetails = safeGatewayErrorDetails(result || probe.data, env);
   console.log(JSON.stringify(report, null, 2));
 }
 main().catch(() => { console.error(JSON.stringify({ operation: 'native-clef-synthetic-probe', error: 'NATIVE_PROBE_UNAVAILABLE' })); process.exitCode = 1; });
