@@ -42,11 +42,15 @@ export class ModelRegistry {
       settings.push(p.evaluator.protocol === 'systemone'
         ? { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, protocol: 'systemone', adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash }
         : { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, responseFormat: p.evaluator.responseFormat,
-          maxTokens: p.evaluator.maxTokens, temperature: p.evaluator.temperature });
+          maxTokens: p.evaluator.maxTokens, temperature: p.evaluator.temperature,
+          ...(p.evaluator.outputSchemaVersion ? { outputSchemaVersion: p.evaluator.outputSchemaVersion } : {}),
+          ...(p.evaluator.decisionInstructionsVersion ? { decisionInstructionsVersion: p.evaluator.decisionInstructionsVersion } : {}) });
     }
     const configurationHash = digest(settings); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
     configurationHash, demo: !!p.demo, ...(p.provider === 'gateway' ? { protocol: p.evaluator.protocol || 'chat',
       explanationType: p.evaluator.protocol === 'systemone' ? 'typed_decision' : 'model_text',
+      ...(p.evaluator.outputSchemaVersion ? { outputSchemaVersion: p.evaluator.outputSchemaVersion } : {}),
+      ...(p.evaluator.decisionInstructionsVersion ? { decisionInstructionsVersion: p.evaluator.decisionInstructionsVersion } : {}),
       ...(p.evaluator.protocol === 'systemone' ? { adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash } : {}) } : {}) }; }
   resolve(id, expected) {
     const p = this.profiles.find(p => p.id === id);

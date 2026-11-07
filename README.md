@@ -186,9 +186,17 @@ La rama de doble revisión añade dos respuestas independientes por conversació
 
 Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. Instalar una versión no habilita proveedores ni reevalúa el histórico. Para utilizar Clef/Gemma, configurar GatewayAgents en el servidor y completar Modelos locales en el portal; verificar su inferencia mediante el piloto limitado a las cinco conversaciones más recientes. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
 
+### Clef Flash: respuesta de chat
+
+La instancia `clef-flash` comprobada en el Gateway utiliza **Chat** (`POST /v1/chat/completions`). Si deja `content` vacío y entrega un objeto JSON completo del checklist en `reasoning_content`, Pulso valida ese objeto con las mismas reglas de valores, motivos y evidencia. Esta compatibilidad se limita al ID exacto `clef-flash`; no extrae JSON de prosa ni sustituye una respuesta final no vacía. Las variables ausentes o inválidas siguen pendientes, nunca se convierten en ceros.
+
+El esquema específico de Clef Flash exige las combinaciones válidas de estado, valor y evidencia, y limita las citas a IDs de mensajes existentes. Cada intento registra el campo utilizado (`responseField`) y la versión del esquema, sin conservar el texto original. Esa versión forma parte de la configuración de Clef: sus ejecuciones iniciadas con una versión anterior deben comenzar una nueva ejecución. Las instrucciones comunes, las huellas de Gemma, la política, la programación y las evaluaciones existentes se preservan.
+
+Clef Flash también recibe una aclaración versionada (`decisionInstructionsVersion: clef-flash-decisions-1`) con ejemplos sintéticos de evento presente, evento ausente y contexto insuficiente. Un evento no observado en texto relevante suficiente corresponde a `evaluado/0`; `no_evaluado/null` exige un impedimento concreto. La versión participa en la huella de configuración y se conserva en los intentos. Pulso no transforma abstenciones en ceros a partir de sus motivos; conserva la decisión recibida. Los otros modelos mantienen sus instrucciones actuales.
+
 ### Clef: decisiones nativas
 
-Clef Flash utiliza `POST /v1/systemone`. En Modelos locales, seleccionar **Decisiones (System One)** para Clef y el ID exacto de la instancia cargada. El Gateway debe publicar esa ruta y `GET /api/v1/models`. Pulso verifica que la instancia sea de tipo `decision`; un ID publicado únicamente como modelo de chat no es suficiente. Gemma conserva su interfaz de chat.
+El adaptador opcional de decisiones utiliza `POST /v1/systemone` y requiere una instancia que el servidor publique como tipo `decision`. En Modelos locales, seleccionar **Decisiones (System One)** únicamente para ese tipo de instancia y su ID exacto. El Gateway debe publicar esa ruta y `GET /api/v1/models`. La instancia de chat `clef-flash` descrita arriba debe usar **Chat**. Gemma conserva su interfaz de chat.
 
 El adaptador clasifica eventos como presentes, ausentes o con contexto insuficiente. Una segunda decisión selecciona un mensaje de evidencia sin recibir respuestas de Gemma. Las descripciones visibles son plantillas de Pulso, identificadas como tales; Clef no genera justificaciones libres. Las probabilidades se conservan para trazabilidad, no se presentan como certeza.
 

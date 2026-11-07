@@ -21,7 +21,7 @@ export const RULES_VERSION = 'pulso-rules-v5';
 export const interactionTypes = ['cotización', 'pedido', 'disponibilidad', 'seguimiento de entrega', 'queja', 'devolución', 'otro'];
 export const supportsAiVariable = v => ['IA', 'IA + código'].includes(v.method) && (v.type === 'Flag' || (v.type === 'Descriptor' && ['tipo_interaccion', 'productos_solicitados'].includes(v.id)));
 const validationRules = new Set(['missing_item', 'invalid_status', 'invalid_value_type', 'invalid_reason', 'invalid_evidence_count',
-  'unknown_evidence_message', 'missing_evidence', 'unexpected_evidence', 'inconsistent_status_value']);
+  'unknown_evidence_message', 'missing_evidence', 'unexpected_evidence', 'inconsistent_status_value', 'unexpected_fields']);
 export function evaluationValidationFeedback(variables, errors = []) {
   if (!Array.isArray(errors)) return [];
   return variables.flatMap(variable => {

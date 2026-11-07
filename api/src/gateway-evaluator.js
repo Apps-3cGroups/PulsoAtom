@@ -1,6 +1,8 @@
 import { AppError } from './errors.js';
 import { evaluationInput, evaluationInstructions, evaluationSchema, supportsAiVariable, validateEvaluation } from './evaluator.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
+import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from './services/clefFlashSchema.js';
+import { CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION, clefFlashDecisionInstructions } from './services/clefFlashInstructions.js';
 
 const safeUsage = value => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -15,6 +17,10 @@ export class GatewayEvaluator {
     maxTokens = 16000, temperature = 0, responseFormat = 'json_schema', fetchImpl = fetch } = {}) {
     this.#client = new GatewayApiClient({ baseUrl, token, portalKey, timeoutMs, fetchImpl });
     Object.assign(this, { baseUrl: this.#client.baseUrl, portalKey, toolKey, model, timeoutMs, maxTokens, temperature, responseFormat });
+    if (model === 'clef-flash') {
+      this.outputSchemaVersion = CLEF_FLASH_OUTPUT_SCHEMA_VERSION;
+      this.decisionInstructionsVersion = CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION;
+    }
   }
   get configured() {
     return this.#client.configured && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(this.toolKey || '')
@@ -34,8 +40,10 @@ export class GatewayEvaluator {
     if (!this.configured) throw new AppError(503, 'Falta configurar el modelo local y su herramienta en el Gateway.', 'AI_CONFIGURATION');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
-    const schema = evaluationSchema(variables);
-    const messages = [{ role: 'system', content: evaluationInstructions }];
+    const schema = this.model === 'clef-flash' ? clefFlashEvaluationSchema(variables, conversation) : evaluationSchema(variables);
+    const instructions = this.model === 'clef-flash'
+      ? `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}` : evaluationInstructions;
+    const messages = [{ role: 'system', content: instructions }];
     if (this.responseFormat === 'json_object') {
       messages.push({ role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
     }
@@ -55,11 +63,47 @@ export class GatewayEvaluator {
     const choice = payload.choices[0];
     if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new AppError(422, 'El modelo no puede evaluar este contenido.', 'AI_SAFETY_REFUSAL');
     if (choice?.finish_reason !== 'stop') throw new AppError(502, 'El modelo local no completó la evaluación.', 'AI_INCOMPLETE');
-    if (typeof choice.message?.content !== 'string' || !choice.message.content.trim()) throw new AppError(502, 'El modelo local no devolvió una evaluación estructurada.', 'INVALID_AI_RESULT');
+    const message = choice.message;
+    if (message?.function_call != null || (message?.tool_calls != null
+      && (!Array.isArray(message.tool_calls) || message.tool_calls.length))) {
+      throw new AppError(502, 'El modelo local devolvió una llamada de herramienta en lugar de una evaluación.', 'INVALID_AI_RESULT');
+    }
+    let text = message?.content, responseField = 'content';
+    // Clef Flash's current chat runtime can place its complete structured answer
+    // in reasoning_content while leaving content empty. Only this exact model
+    // may use that channel; never extract JSON fragments from reasoning prose
+    // or replace a nonempty final answer, even when that answer is invalid.
+    const emptyContent = text == null || (typeof text === 'string' && !text.trim());
+    if (payload.model === 'clef-flash' && emptyContent) {
+      text = message?.reasoning_content;
+      responseField = 'reasoning_content';
+    }
+    if (typeof text !== 'string' || !text.trim()) throw new AppError(502, 'El modelo local no devolvió una evaluación estructurada.', 'INVALID_AI_RESULT');
     let raw;
-    try { raw = JSON.parse(choice.message.content); }
+    try { raw = JSON.parse(text); }
     catch { throw new AppError(502, 'El modelo local no devolvió el JSON requerido.', 'INVALID_AI_RESULT'); }
-    return { ...validateEvaluation(raw, variables, conversation, { partial: true }), model: payload.model,
-      responseId: envelope.requestId, usage: safeUsage(payload.usage) };
+    if (responseField === 'reasoning_content' && (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || Object.keys(raw).length !== 1 || !Object.hasOwn(raw, 'results'))) {
+      throw new AppError(502, 'El modelo local no devolvió el objeto de evaluación requerido.', 'INVALID_AI_RESULT');
+    }
+    const validated = validateEvaluation(raw, variables, conversation, { partial: true });
+    if (responseField === 'reasoning_content') {
+      for (const variable of variables) {
+        const item = raw.results[variable.id];
+        if (!item || typeof item !== 'object' || Array.isArray(item)
+          || !Object.keys(item).some(key => !['status', 'value', 'reason', 'evidence_message_ids'].includes(key))) continue;
+        // Reject this item without discarding valid answers for other variables.
+        // Only the controlled rule enters retry feedback, never unexpected data.
+        validated.results = validated.results.filter(result => result.variableId !== variable.id);
+        const existing = validated.validationErrors.find(error => error.variableId === variable.id);
+        if (existing) existing.rules.push('unexpected_fields');
+        else validated.validationErrors.push({ variableId: variable.id, code: 'INVALID_AI_RESULT',
+          rules: ['unexpected_fields'], message: `Respuesta inválida para ${variable.id}: unexpected_fields.` });
+      }
+    }
+    return { ...validated, model: payload.model,
+      responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage),
+      ...(this.outputSchemaVersion ? { outputSchemaVersion: this.outputSchemaVersion } : {}),
+      ...(this.decisionInstructionsVersion ? { decisionInstructionsVersion: this.decisionInstructionsVersion } : {}) };
   }
 }
