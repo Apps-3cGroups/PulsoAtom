@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runClefConversationCheck, readProbeState } from '../scripts/check-clef-conversation.js';
 import { evaluationContext } from '../src/evaluation-context.js';
+import { evaluationInstructions } from '../src/evaluator.js';
 
 const env = { GATEWAY_BASE_URL: 'http://gateway.synthetic', AGENT_SHARED_TOKEN: 'private-synthetic-token' };
 const requestUuid = '00000000-1111-4222-8333-444444444444';
@@ -192,4 +193,26 @@ test('invalid variants fail before work and completed artifacts cannot be reused
   assert.equal(first.requestMode, 'schema');
   await assert.rejects(runClefConversationCheck({ ...args, requestMode: 'prompt-json' }), error => error.code === 'INVALID_SETTINGS');
   assert.equal(calls.length, 1);
+});
+
+test('compact mode keeps every variable and the same validation without embedding the full schema', async t => {
+  const { args, calls } = await fixture(t);
+  const summary = await runClefConversationCheck({ ...args, requestMode: 'compact-json' });
+  assert.equal(summary.success, true);
+  assert.equal(summary.requestMode, 'compact-json');
+  assert.equal(summary.gemmaComparable, false);
+  const body = calls[0].body;
+  assert.equal(body.response_format, undefined);
+  assert.equal(body.messages.length, 2);
+  assert.ok(body.messages[0].content.startsWith(evaluationInstructions));
+  assert.ok(body.messages[0].content.length - evaluationInstructions.length < 700);
+  assert.equal(JSON.parse(body.messages[1].content).variables.length, 2);
+  const malformed = await fixture(t, ({ envelope, raw }) => {
+    raw.results.cliente_felicito_al_asistente.reason = '';
+    envelope.response.choices[0].message.content = JSON.stringify(raw);
+  });
+  const partial = await runClefConversationCheck({ ...malformed.args, requestMode: 'compact-json' });
+  assert.equal(partial.success, false);
+  assert.equal(partial.validVariables, 1);
+  assert.equal(partial.pendingVariables, 1);
 });

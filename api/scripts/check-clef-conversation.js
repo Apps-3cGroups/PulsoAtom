@@ -90,7 +90,7 @@ async function completedArtifact(filename, requestMode) {
 // Isolated real-content probe: no store, jobs, evaluation persistence or policy changes.
 export async function runClefConversationCheck({ connection, reader, env = process.env, fetchImpl = fetch,
   outputPath = defaultOutput, readState = readProbeState, requestMode = 'schema' } = {}) {
-  if (!['schema', 'prompt-json'].includes(requestMode)) fail('AI_CONFIGURATION');
+  if (!['schema', 'prompt-json', 'compact-json'].includes(requestMode)) fail('AI_CONFIGURATION');
   if ((env.GATEWAY_PORTAL_KEY ?? 'portal-pulso') !== 'portal-pulso') fail('AI_CONFIGURATION');
   const existing = await completedArtifact(outputPath, requestMode);
   if (existing) return existing;
@@ -129,11 +129,14 @@ export async function runClefConversationCheck({ connection, reader, env = proce
         const [url, options] = args, invocation = JSON.parse(options.body);
         const body = invocation.body;
         if (invocation.method !== 'POST' || invocation.path !== '/v1/chat/completions' || body?.model !== model) fail('AI_CONFIGURATION');
-        if (requestMode === 'prompt-json') {
+        if (requestMode !== 'schema') {
           const schema = body.response_format?.json_schema?.schema;
           if (body.response_format?.type !== 'json_schema' || !schema || typeof schema !== 'object' || Array.isArray(schema)
             || !Array.isArray(body.messages)) fail('AI_CONFIGURATION');
-          body.messages.splice(1, 0, { role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
+          if (requestMode === 'compact-json') {
+            if (body.messages[0]?.role !== 'system' || typeof body.messages[0]?.content !== 'string') fail('AI_CONFIGURATION');
+            body.messages[0].content += '\n\nFormato obligatorio de salida: {"results":{"ID_VARIABLE":{"status":"evaluado","value":0,"reason":"Motivo breve en español","evidence_message_ids":[]}}}. Incluye exactamente una entrada por cada ID solicitado y ninguna propiedad adicional. El ejemplo de value=0 no es un resultado por defecto: decide cada variable. Para descriptores usa su categoría, lista o null según las instrucciones anteriores. No incluyas Markdown ni texto fuera del JSON. La respuesta final debe contener el objeto completo.';
+          } else body.messages.splice(1, 0, { role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
           delete body.response_format;
         }
         artifact.requestHash = digest(body);

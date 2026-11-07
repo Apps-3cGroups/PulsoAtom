@@ -47,7 +47,7 @@ export async function checkClefResponseModes({ connection, reader, env = process
   const schema = await runProbe({ ...common, outputPath: `${outputDirectory}/clef-flash-6135-schema-shape-v1.json`, requestMode: 'schema' });
   stages.push(schema); onStage(schema);
   if (shouldTryPromptJson(schema)) {
-    const prompt = await runProbe({ ...common, outputPath: `${outputDirectory}/clef-flash-6135-prompt-json-v1.json`, requestMode: 'prompt-json' });
+    const prompt = await runProbe({ ...common, outputPath: `${outputDirectory}/clef-flash-6135-compact-json-v1.json`, requestMode: 'compact-json' });
     stages.push(prompt); onStage(prompt);
   }
   return { operation: 'clef-response-modes', conversationId: '6135', success: stages.some(stage => stage.success), stages,

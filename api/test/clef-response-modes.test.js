@@ -26,7 +26,7 @@ test('diagnosis runs at most two explicit modes on the one fixed conversation', 
   } });
   assert.equal(result.success, true);
   assert.equal(result.conversationId, '6135');
-  assert.deepEqual(calls.map(c => c.requestMode), ['schema', 'prompt-json']);
+  assert.deepEqual(calls.map(c => c.requestMode), ['schema', 'compact-json']);
   assert.notEqual(calls[0].outputPath, calls[1].outputPath);
   assert.equal(calls[0].reader, calls[1].reader);
 });
