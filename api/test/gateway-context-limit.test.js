@@ -22,7 +22,8 @@ test('successful Gateway HTTP envelopes recognize explicit upstream chat context
     { error: { code: 'context_length_exceeded' } }, { error: 'Context window limit exceeded.' },
     { error: 'The prompt length exceeds the maximum context window.' },
     { error: "This model's maximum context length is 4096 tokens. However, you requested 9000 tokens." },
-    { error: 'Error: Cannot truncate prompt with n_keep (9000) >= n_ctx (4096)' }];
+    { error: 'Error: Cannot truncate prompt with n_keep (9000) >= n_ctx (4096)' },
+    { error: 'The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input.' }];
   for (const status of [400, 413, 422]) for (const body of bodies) {
     const raw = typeof body === 'string' ? `${body} ${base.token}` : { ...body, content: base.token, url: base.baseUrl };
     await assert.rejects(clientFor(envelope(raw, status)).invoke(operation), error => {
@@ -40,6 +41,10 @@ test('unknown input errors, schema/configuration errors and quoted transcript ph
     { error: { code: 'invalid_schema', message: 'The context length field must be an integer.' } },
     { error: 'Invalid request. Quoted transcript: "Context window exceeded".' },
     { error: '"Context window exceeded" was supplied in the user content.' },
+    { error: 'The number of tokens to keep from the initial prompt is not greater than the context length.' },
+    { error: 'Invalid schema: The number of tokens to keep from the initial prompt is greater than the context length.' },
+    { error: 'Quoted conversation: "The number of tokens to keep from the initial prompt is greater than the context length."' },
+    { error: 'The number of tokens to keep from the initial prompt is greater than the configured schema size.' },
     { prompt: contextError }, { messages: [{ content: contextError }] }, { error: { content: contextError } },
     { error: { details: { transcript: contextError } } }, { error: [{ message: contextError }] },
     { error: { error: { error: { error: { message: contextError } } } } },

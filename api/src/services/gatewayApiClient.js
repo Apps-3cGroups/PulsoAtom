@@ -24,6 +24,7 @@ const contextLimitPatterns = [
   /^(?:this\s+model['’]?s\s+|the\s+model['’]?s\s+)?maximum\s+context\s+length\s+is\s+\d+\s+tokens\b[^\n]{0,500}\b(?:you\s+(?:requested|submitted)|your\s+(?:messages|request)\s+resulted\s+in)\s+\d+\s+tokens\b/i,
   /^trying\s+to\s+keep\s+the\s+first\s+\d+\s+tokens\s+when\s+context\s+overflows\b/i,
   /^cannot\s+truncate\s+prompt\s+with\s+n_keep\s*(?:=\s*\d+|\(\d+\))\s*>=\s*n_ctx\s*(?:=\s*\d+|\(\d+\))/i,
+  /^(?:the\s+)?number\s+of\s+tokens\s+to\s+keep\s+from\s+the\s+(?:initial|system)\s+prompt\s+is\s+greater\s+than\s+the\s+context\s+(?:length|size|window)\b/i,
 ];
 function isContextLimit(response, depth = 0) {
   // Inspect only documented error fields, never serialize arbitrary payloads
