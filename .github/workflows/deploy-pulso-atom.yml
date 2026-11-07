@@ -145,7 +145,7 @@ jobs:
           }
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
-            'clef-check' { $entryScript = 'scripts/check-clef-availability.js'; $scriptArguments = '' }
+            'clef-check' { $entryScript = 'scripts/check-clef-availability.js'; $scriptArguments = '--mounted-clef' }
             'gemma-preflight' { $entryScript = 'scripts/check-gemma-contract.js'; $scriptArguments = '' }
             'gemma-inspect' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = '--inspect' }
             'gemma-prepare' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = "--prepare --expected-policy-version $($env:EXPECTED_POLICY_VERSION)" }

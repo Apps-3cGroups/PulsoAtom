@@ -22,7 +22,7 @@ function fixture({ models = { qwen: ['clef-flash'], gemma: ['cloudflare_clef'] }
     return response({ ...envelope, response: { model: body.body.model, choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(good()) } }] } });
   };
   const readConfiguration = settings || (async () => ({ localModelConfiguration: { profiles: [{ id: 'clef-local', toolKey: 'qwen', model: 'clef-flash', enabled: true, responseFormat: 'json_schema' }] }, aiPolicy: { version: 6, mode: 'single', primaryId: 'gemma-local', secondaryId: null, fallbackId: null }, dailyEnabled: false }));
-  return { calls, run: () => main({ env, fetchImpl, readConfiguration }) };
+  return { calls, run: (args = []) => main({ args, env, fetchImpl, readConfiguration }) };
 }
 const inferenceCalls = calls => calls.filter(call => call.options.body && JSON.parse(call.options.body).method === 'POST');
 
@@ -108,4 +108,25 @@ test('help and invalid arguments perform no discovery, configuration reads or in
   const forbidden = async () => assert.fail('Unexpected external operation');
   assert.equal((await main({ args: ['--help'], env: {}, fetchImpl: forbidden, readConfiguration: forbidden })).help, true);
   await assert.rejects(main({ args: ['--execute'], env: {}, fetchImpl: forbidden, readConfiguration: forbidden }), error => error.code === 'INVALID_ARGUMENTS');
+});
+
+
+test('explicit mounted probe selects cloudflare_clef on gemma while preserving the legacy configuration', async () => {
+  const { run, calls } = fixture();
+  const result = await run(['--mounted-clef']);
+  assert.equal(result.success, true);
+  assert.equal(result.candidate.toolKey, 'gemma');
+  assert.equal(result.candidate.model, 'cloudflare_clef');
+  assert.equal(result.candidate.matchesConfiguredProfile, false);
+  assert.equal(result.configuredClef.model, 'clef-flash');
+  assert.equal(result.policy.mode, 'single');
+  assert.equal(inferenceCalls(calls).length, 1);
+});
+
+test('explicit mounted probe never falls back to a different Clef if the target is missing', async () => {
+  const { run, calls } = fixture({ models: { qwen: ['clef-flash'], gemma: ['gemma-4'] } });
+  const result = await run(['--mounted-clef']);
+  assert.equal(result.success, false);
+  assert.equal(result.error.code, 'CLEF_MODEL_NOT_FOUND');
+  assert.equal(inferenceCalls(calls).length, 0);
 });

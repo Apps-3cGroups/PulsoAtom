@@ -35,8 +35,9 @@ async function readServerConfiguration({ env }) {
 // One synthetic inference at most. This function never reads Atom or calls a
 // model through Pulso's evaluation service, so it cannot persist an evaluation.
 export async function main({ args = [], env = process.env, fetchImpl = fetch, readConfiguration = readServerConfiguration } = {}) {
-  if (args.length === 1 && args[0] === '--help') return { help: true, message: 'Uso: node scripts/check-clef-availability.js\nDescubre herramientas/modelos, lee solo configuración y realiza como máximo una prueba sintética de Clef. No cambia política, catálogo ni evaluaciones.' };
-  if (args.length) throw new AppError(422, 'Este diagnóstico no admite argumentos salvo --help.', 'INVALID_ARGUMENTS');
+  if (args.length === 1 && args[0] === '--help') return { help: true, message: 'Uso: node scripts/check-clef-availability.js [--mounted-clef]\nDescubre herramientas/modelos, lee solo configuración y realiza como máximo una prueba sintética de Clef. No cambia política, catálogo ni evaluaciones.' };
+  const mountedClef = args.length === 1 && args[0] === '--mounted-clef';
+  if (args.length && !mountedClef) throw new AppError(422, 'Usa --help o --mounted-clef.', 'INVALID_ARGUMENTS');
   let host = '';
   try { host = new URL(env.GATEWAY_BASE_URL).hostname; } catch {}
   const secrets = [env.AGENT_SHARED_TOKEN, env.GATEWAY_BASE_URL, host].filter(Boolean);
@@ -70,7 +71,11 @@ export async function main({ args = [], env = process.env, fetchImpl = fetch, re
     fallbackId: safeId(settings.aiPolicy.fallbackId, secrets), dailyEnabled: settings.dailyEnabled === true };
   const matches = report.catalogs.flatMap(catalog => catalog.models.filter(model => /clef/i.test(model)).map(model => ({ toolKey: catalog.toolKey, model })));
   const preferred = matches.filter(candidate => candidate.toolKey !== 'gemma');
-  const candidates = preferred.length ? preferred : matches;
+  // The newly mounted model was confirmed in the Gateway catalog. This explicit
+  // probe never substitutes the saved clef-flash profile or persists a change.
+  const candidates = mountedClef
+    ? matches.filter(candidate => candidate.toolKey === 'gemma' && candidate.model === 'cloudflare_clef')
+    : preferred.length ? preferred : matches;
   const ids = [...new Set(candidates.map(candidate => candidate.model))];
   if (ids.length !== 1) return { ...report, error: { code: ids.length ? 'CLEF_MODEL_AMBIGUOUS' : 'CLEF_MODEL_NOT_FOUND',
     message: ids.length ? 'Hay varios identificadores Clef. Confirma el modelo exacto antes de probar.' : 'Ninguna herramienta consultada publica un modelo Clef inequívoco.' } };
@@ -119,7 +124,7 @@ export async function main({ args = [], env = process.env, fetchImpl = fetch, re
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    if (!(process.argv.length === 3 && process.argv[2] === '--help') && process.argv.length === 2) await import('../src/config.js');
+    if (process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === '--mounted-clef')) await import('../src/config.js');
     const result = await main({ args: process.argv.slice(2) });
     console.log(result.help ? result.message : JSON.stringify(result, null, 2));
     process.exitCode = result.help || result.success ? 0 : 1;
