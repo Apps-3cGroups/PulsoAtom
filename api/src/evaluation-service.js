@@ -251,12 +251,15 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         const responseField = ['content', 'reasoning_content'].includes(response.responseField) ? response.responseField : null;
         const outputSchemaVersion = profile.model === 'clef-flash' && response.outputSchemaVersion === 'clef-flash-schema-1'
           && response.outputSchemaVersion === profile.evaluator.outputSchemaVersion ? response.outputSchemaVersion : null;
+        const decisionInstructionsVersion = profile.model === 'clef-flash' && response.decisionInstructionsVersion === 'clef-flash-decisions-1'
+          && response.decisionInstructionsVersion === profile.evaluator.decisionInstructionsVersion ? response.decisionInstructionsVersion : null;
         const actualModel = response.model || profile.model;
         if (retained.size && metadata.model !== actualModel) throw new AppError(409, 'El proveedor cambió el modelo efectivo durante el reintento.', 'MODEL_CHANGED');
         attemptMetadata = nativeMetadata(response, profile, pending.map(v => v.id));
         const provenance = accumulatedMetadata(metadata, attemptMetadata, attempt.id);
         for (const result of response.results) retained.set(result.variableId, result);
-        metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null, ...provenance };
+        metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null, ...provenance,
+          ...(decisionInstructionsVersion ? { decisionInstructionsVersion } : {}) };
         itemErrors = pending.filter(v => !retained.has(v.id)).map(v => {
           const failure = response.validationErrors?.find(e => e.variableId === v.id);
           return { variableId: v.id, code: 'INVALID_AI_RESULT', rules: failure?.rules || ['missing_item'], message: failure?.message || `Falta un resultado válido para ${v.id}.` };
@@ -269,6 +272,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
           Object.assign(s.attempts.find(a => a.id === attempt.id), { status: lastError ? 'partial' : 'completed', finishedAt: now(), durationMs: Date.now() - started,
             ...(responseField ? { responseField } : {}),
             ...(outputSchemaVersion ? { outputSchemaVersion } : {}),
+            ...(decisionInstructionsVersion ? { decisionInstructionsVersion } : {}),
             actualModel, usage: response.usage || null, ...attemptMetadata, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
           s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
         });
@@ -307,6 +311,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     createdAt: now(), demo: job.demo, ...task.context, provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null, profileId: effective.id, provider: effective.provider,
     profileLabel: effective.label, requestedProfileId: task.profile.id, requestedProvider: task.profile.provider, requestedModel: task.profile.model,
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
+    ...(answer.decisionInstructionsVersion ? { decisionInstructionsVersion: answer.decisionInstructionsVersion } : {}),
     ...(answer.protocol ? { protocol: answer.protocol, adapterVersion: answer.adapterVersion, instructionsHash: answer.instructionsHash,
       requestIds: answer.requestIds, requests: answer.requests } : {}),
     providerResponseId: answer.responseId || null, usage: answer.usage || null, catalogVersions: job.catalogVersions,

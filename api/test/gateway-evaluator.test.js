@@ -4,6 +4,7 @@ import { GatewayApiClient } from '../src/services/gatewayApiClient.js';
 import { GatewayEvaluator } from '../src/gateway-evaluator.js';
 import { evaluationInput, evaluationInstructions, evaluationSchema } from '../src/evaluator.js';
 import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from '../src/services/clefFlashSchema.js';
+import { CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION, clefFlashDecisionInstructions } from '../src/services/clefFlashInstructions.js';
 
 const base = { baseUrl: 'http://gateway.test:9000', token: 'synthetic-secret-token', portalKey: 'pulsoAtom', toolKey: 'gemma', model: 'synthetic-gemma', timeoutMs: 180000 };
 const requestId = '00000000-1111-4222-8333-444444444444';
@@ -52,6 +53,8 @@ test('Gateway sends the audited envelope only to the configured backend and vali
   assert.equal(answer.model, base.model);
   assert.equal(instance.outputSchemaVersion, undefined);
   assert.equal(answer.outputSchemaVersion, undefined);
+  assert.equal(instance.decisionInstructionsVersion, undefined);
+  assert.equal(answer.decisionInstructionsVersion, undefined);
   assert.equal(answer.responseId, requestId);
   assert.deepEqual(answer.usage, { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 });
   assert.deepEqual(answer.validationErrors, []);
@@ -233,6 +236,31 @@ const flashPayload = (raw = valid(), content = '') => {
 };
 const flashEvaluator = response => evaluator(envelope(response), { model: 'clef-flash' });
 
+test('Clef clarification preserves detections, negative decisions and abstentions in both response modes', async () => {
+  const flags = ['detected', 'absent', 'unknown'].map(id => ({ ...variables[0], id }));
+  const raw = { results: {
+    detected: { status: 'evaluado', value: 1, reason: 'Evento explícito sintético.', evidence_message_ids: ['m1'] },
+    absent: { status: 'evaluado', value: 0, reason: 'El texto relevante permite descartar el evento.', evidence_message_ids: [] },
+    // Even this ambiguous reason must never become an absent event by code.
+    unknown: { status: 'no_evaluado', value: null, reason: 'No hay evidencia de enojo.', evidence_message_ids: [] },
+  } };
+  const options = { validationErrors: [{ variableId: 'absent', rules: ['inconsistent_status_value'] }] };
+  for (const responseFormat of ['json_schema', 'json_object']) {
+    const { instance, calls } = evaluator(envelope(flashPayload(raw)), { model: 'clef-flash', responseFormat });
+    const answer = await instance.evaluate(conversation, flags, options);
+    const body = JSON.parse(calls[0][1].body).body;
+    assert.equal(calls.length, 1);
+    assert.equal(body.messages[0].content, `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}`);
+    assert.equal(body.messages.at(-1).content, evaluationInput(conversation, flags, options));
+    assert.deepEqual(answer.results.map(result => [result.variableId, result.status, result.value]),
+      [['detected', 'evaluado', 1], ['absent', 'evaluado', 0], ['unknown', 'no_evaluado', null]]);
+    assert.equal(answer.results[2].reason, raw.results.unknown.reason);
+    assert.deepEqual(answer.results[0].evidence.map(e => e.messageId), ['m1']);
+    assert.deepEqual(answer.validationErrors, []);
+    assert.equal(answer.decisionInstructionsVersion, CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION);
+  }
+});
+
 test('Clef Flash accepts a complete structured answer in reasoning_content only when final content is empty', async () => {
   for (const empty of ['', ' \n ', null, undefined]) {
     const response = flashPayload(valid(), empty);
@@ -242,9 +270,10 @@ test('Clef Flash accepts a complete structured answer in reasoning_content only 
     assert.equal(calls.length, 1);
     assert.equal(instance.outputSchemaVersion, CLEF_FLASH_OUTPUT_SCHEMA_VERSION);
     assert.equal(answer.outputSchemaVersion, CLEF_FLASH_OUTPUT_SCHEMA_VERSION);
+    assert.equal(answer.decisionInstructionsVersion, CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION);
     const request = JSON.parse(calls[0][1].body).body;
     assert.deepEqual(request.response_format.json_schema.schema, clefFlashEvaluationSchema(variables, conversation));
-    assert.deepEqual(request.messages, [{ role: 'system', content: evaluationInstructions },
+    assert.deepEqual(request.messages, [{ role: 'system', content: `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}` },
       { role: 'user', content: evaluationInput(conversation, variables) }]);
     assert.equal(answer.responseField, 'reasoning_content');
     assert.equal(answer.model, 'clef-flash');

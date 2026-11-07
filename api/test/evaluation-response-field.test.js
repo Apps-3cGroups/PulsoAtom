@@ -25,10 +25,11 @@ function fixture(evaluate) {
   const registry = new ModelRegistry(['clef-local', 'gemma-local'].map((id, index) => ({
     id, provider: 'gateway', model: index ? 'synthetic-gemma' : 'clef-flash', label: id, enabled: true,
     evaluator: { configured: true, toolKey: 'gemma', portalKey: 'portal-pulso', responseFormat: 'json_schema',
-      ...(index === 0 ? { outputSchemaVersion: 'clef-flash-schema-1' } : {}),
+      ...(index === 0 ? { outputSchemaVersion: 'clef-flash-schema-1', decisionInstructionsVersion: 'clef-flash-decisions-1' } : {}),
       maxTokens: 16000, temperature: 0, baseUrl: 'http://gateway.synthetic', timeoutMs: 180000,
       async evaluate(conversation, variables) {
-        return { ...await evaluate(index, conversation, variables), model: index ? 'synthetic-gemma' : 'clef-flash',
+        return { ...(index === 0 ? { decisionInstructionsVersion: 'clef-flash-decisions-1' } : {}),
+          ...await evaluate(index, conversation, variables), model: index ? 'synthetic-gemma' : 'clef-flash',
           ...(index === 0 ? { outputSchemaVersion: 'clef-flash-schema-1' } : {}) };
       } },
   })));
@@ -56,12 +57,18 @@ test('each retry records its own output field without duplicating results or cha
   assert.equal(calls[1].length, 1);
   assert.ok(attempts.every(a => a.actualModel === 'clef-flash'));
   assert.ok(attempts.every(a => a.outputSchemaVersion === 'clef-flash-schema-1'));
+  assert.ok(attempts.every(a => a.decisionInstructionsVersion === 'clef-flash-decisions-1'));
   const evaluation = state.evaluations.find(e => e.profileId === 'clef-local');
   assert.equal(evaluation.model, 'clef-flash');
   assert.equal(evaluation.results.length, 2);
   assert.equal(new Set(evaluation.results.map(r => r.variableId)).size, 2);
   assert.equal(evaluation.modelConfiguration.configurationHash, profile.configurationHash);
   assert.equal(evaluation.modelConfiguration.outputSchemaVersion, 'clef-flash-schema-1');
+  assert.equal(evaluation.modelConfiguration.decisionInstructionsVersion, 'clef-flash-decisions-1');
+  assert.equal(evaluation.decisionInstructionsVersion, 'clef-flash-decisions-1');
+  assert.equal(state.tasks.find(t => t.profile.id === 'clef-local').profileStates['clef-local'].decisionInstructionsVersion, 'clef-flash-decisions-1');
+  assert.ok(state.attempts.filter(a => a.profileId === 'gemma-local').every(a => !Object.hasOwn(a, 'decisionInstructionsVersion')));
+  assert.ok(!Object.hasOwn(state.evaluations.find(e => e.profileId === 'gemma-local'), 'decisionInstructionsVersion'));
   for (const [key, value] of Object.entries(context)) assert.equal(evaluation[key], value);
   assert.ok(!Object.hasOwn(evaluation, 'responseField'));
   assert.ok(!Object.hasOwn(state.tasks.find(t => t.profile.id === 'clef-local').profileStates['clef-local'], 'responseField'));
@@ -78,5 +85,16 @@ test('missing or unrecognized output fields never become persisted metadata', as
     assert.equal(state.attempts.length, 1);
     assert.ok(!Object.hasOwn(state.attempts[0], 'responseField'));
     assert.ok(!JSON.stringify(state).includes('PRIVATE_RAW_OUTPUT'));
+  }
+});
+
+test('only the recognized decision instructions version from the configured Clef evaluator is retained', async () => {
+  for (const decisionInstructionsVersion of [undefined, null, 'PRIVATE_INSTRUCTIONS', { text: 'PRIVATE_INSTRUCTIONS' }, 'clef-flash-decisions-2']) {
+    const { state, store, registry } = fixture((_index, conversation, variables) => ({ decisionInstructionsVersion, results: results(conversation, variables) }));
+    assert.equal((await runEvaluationBatch(store, registry, { max: 1 })).status, 'completed');
+    assert.ok(!Object.hasOwn(state.attempts[0], 'decisionInstructionsVersion'));
+    assert.ok(!Object.hasOwn(state.evaluations[0], 'decisionInstructionsVersion'));
+    assert.ok(!Object.hasOwn(state.tasks[0].profileStates['clef-local'], 'decisionInstructionsVersion'));
+    assert.ok(!JSON.stringify(state).includes('PRIVATE_INSTRUCTIONS'));
   }
 });

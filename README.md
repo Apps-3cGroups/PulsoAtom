@@ -192,6 +192,8 @@ La instancia `clef-flash` comprobada en el Gateway utiliza **Chat** (`POST /v1/c
 
 El esquema específico de Clef Flash exige las combinaciones válidas de estado, valor y evidencia, y limita las citas a IDs de mensajes existentes. Cada intento registra el campo utilizado (`responseField`) y la versión del esquema, sin conservar el texto original. Esa versión forma parte de la configuración de Clef: sus ejecuciones iniciadas con una versión anterior deben comenzar una nueva ejecución. Las instrucciones comunes, las huellas de Gemma, la política, la programación y las evaluaciones existentes se preservan.
 
+Clef Flash también recibe una aclaración versionada (`decisionInstructionsVersion: clef-flash-decisions-1`) con ejemplos sintéticos de evento presente, evento ausente y contexto insuficiente. Un evento no observado en texto relevante suficiente corresponde a `evaluado/0`; `no_evaluado/null` exige un impedimento concreto. La versión participa en la huella de configuración y se conserva en los intentos. Pulso no transforma abstenciones en ceros a partir de sus motivos; conserva la decisión recibida. Los otros modelos mantienen sus instrucciones actuales.
+
 ### Clef: decisiones nativas
 
 El adaptador opcional de decisiones utiliza `POST /v1/systemone` y requiere una instancia que el servidor publique como tipo `decision`. En Modelos locales, seleccionar **Decisiones (System One)** únicamente para ese tipo de instancia y su ID exacto. El Gateway debe publicar esa ruta y `GET /api/v1/models`. La instancia de chat `clef-flash` descrita arriba debe usar **Chat**. Gemma conserva su interfaz de chat.
