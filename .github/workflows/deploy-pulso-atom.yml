@@ -152,7 +152,7 @@ jobs:
             'clef-gateway-inspect' { $entryScript = 'scripts/inspect-gateway-administration.js'; $scriptArguments = '' }
             'clef-response-modes' { $entryScript = 'scripts/check-clef-response-modes.js'; $scriptArguments = '' }
             'clef-response-audit' { $entryScript = 'scripts/inspect-clef-response.js'; $scriptArguments = '--capabilities' }
-            'clef-conversation-check' { $entryScript = 'scripts/check-clef-conversation.js'; $scriptArguments = '' }
+            'clef-conversation-check' { $entryScript = 'scripts/check-clef-conversation.js'; $scriptArguments = '--post-deploy' }
             'clef-flash-check' { $entryScript = 'scripts/check-clef-flash.js'; $scriptArguments = '' }
             'clef-error-check' { $entryScript = 'scripts/check-clef-small.js'; $scriptArguments = '--diagnose-error' }
             'clef-short-check' { $entryScript = 'scripts/check-clef-small.js'; $scriptArguments = '' }
@@ -229,6 +229,19 @@ jobs:
             # clef-conversation-check reads one real chat and stores only a private diagnostic artifact; no DB or policy writes.
             # clef-check discovers models and runs at most one synthetic probe.
             # clef-short-check runs up to three fixed synthetic probes, stopping on transport/incomplete failures.
+            $publishedSourceCheck = ''
+            if ($env:GEMMA_OPERATION -ceq 'clef-conversation-check') {
+              # Use the deployed evaluator and dependencies, not an earlier diagnostic copy.
+              # Keep the new diagnostic helpers only in the isolated directory.
+              $publishedSourceCheck = @'
+          actual_sha="$(sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom rev-parse HEAD)"
+          [ "$actual_sha" = "fd4bb7edbbe68ae068f253a7685b87c5b51cf4b2" ] || { echo 'Published revision changed; no inference started.' >&2; exit 2; }
+          sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom diff --quiet HEAD -- api/src
+          sudo -n -u td -H cp -a /var/www/nodeapps/PulsoAtom/api/src/. '__REMOTE_ROOT__/api/src/'
+          echo "Published API revision: $actual_sha"
+          '@
+              $publishedSourceCheck = $publishedSourceCheck.Replace('__REMOTE_ROOT__', $remoteRoot)
+            }
             $remoteCommand = @"
           set -Eeuo pipefail
           cleanup_check() { sudo -n rm -rf -- '$remoteRoot' || true; }
@@ -240,6 +253,7 @@ jobs:
           sudo -n chmod 700 -- '$remoteRoot'
           sudo -n -u td -H test -f '$remoteRoot/api/$entryScript'
           sudo -n -u td -H ln -s -- /var/www/nodeapps/PulsoAtom/api/node_modules '$remoteRoot/api/node_modules'
+          $publishedSourceCheck
           sudo -n -u td -H bash -c 'cd "`$1" && exec node --env-file=/var/www/nodeapps/PulsoAtom/api/.env $entryScript $scriptArguments' _ '$remoteRoot/api'
           "@
             } else {

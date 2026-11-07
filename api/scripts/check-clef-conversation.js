@@ -202,7 +202,8 @@ export async function runClefConversationCheck({ connection, reader, env = proce
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   let connection, reader;
   try {
-    if (process.argv.length !== 2) throw new Error('Unsupported arguments');
+    const postDeploy = process.argv.length === 3 && process.argv[2] === '--post-deploy';
+    if (process.argv.length !== 2 && !postDeploy) throw new Error('Unsupported arguments');
     const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
     const db = databaseConfig(), atom = atomDatabaseConfig();
     if (config.demo || db?.database !== 'dbPulsosAtom' || !atom) fail('INVALID_SETTINGS');
@@ -210,7 +211,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const { AtomReader } = await import('../src/atom.js');
     const { connectionLimit, ...options } = db;
     connection = await mysql.createConnection(options); reader = new AtomReader(atom, config.timezone);
-    const result = await runClefConversationCheck({ connection, reader });
+    const result = await runClefConversationCheck({ connection, reader,
+      ...(postDeploy ? { outputPath: '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics/clef-flash-postdeploy-fd4bb7ed-20261107-one-conversation.json' } : {}) });
     console.log(JSON.stringify(result, null, 2)); process.exitCode = result.success ? 0 : 1;
   } catch (error) {
     console.error(JSON.stringify({ success: false, code: error?.code === 'EEXIST' ? 'CHECK_RESERVED' : errorCode(error),
