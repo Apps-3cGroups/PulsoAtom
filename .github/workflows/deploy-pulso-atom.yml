@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -99,7 +99,7 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -120,8 +120,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-check', 'gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
             if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
@@ -145,6 +145,7 @@ jobs:
           }
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'clef-configure' { $entryScript = 'scripts/update-clef-route.js'; $scriptArguments = '--apply' }
             'clef-check' { $entryScript = 'scripts/check-clef-availability.js'; $scriptArguments = '--mounted-clef' }
             'gemma-preflight' { $entryScript = 'scripts/check-gemma-contract.js'; $scriptArguments = '' }
             'gemma-inspect' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = '--inspect' }
@@ -202,7 +203,8 @@ jobs:
             $remotePrepared = $true
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
             # Isolated source + existing dependencies/env. No pull, npm, PM2,
-            # migrations, reset or database writes. Preflight is synthetic only;
+            # migrations or reset. clef-configure updates only the unused Clef
+            # route under strict policy/maintenance guards. Preflight is synthetic only;
             # inspect reads configuration/totals and does not invoke any model.
             # clef-check discovers models and runs at most one synthetic probe.
             $remoteCommand = @"
