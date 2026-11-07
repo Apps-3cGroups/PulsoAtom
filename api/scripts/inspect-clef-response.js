@@ -1,5 +1,7 @@
 import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { summarizeModelResponse } from '../src/services/modelResponseShape.js';
+import { safeGatewayErrorDetails } from '../src/services/safeGatewayError.js';
 
 const target = 'c8c48c73-e56e-463f-845a-fb27240af4e3';
 // Read an existing execution only. This admin route is documented by the
@@ -37,8 +39,16 @@ export async function inspectClefResponse({ env = process.env, fetchImpl = fetch
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    if (process.argv.length !== 2) throw new Error('Invalid arguments');
+    const saved = process.argv.length === 3 && process.argv[2] === '--saved';
+    if (process.argv.length !== 2 && !saved) throw new Error('Invalid arguments');
     await import('../src/config.js');
-    console.log(JSON.stringify(await inspectClefResponse(), null, 2));
+    if (saved) {
+      const artifact = JSON.parse(await readFile('/var/www/nodeapps/PulsoAtom/api/.data/diagnostics/clef-flash-6135-prompt-json-v1.json', 'utf8'));
+      if (artifact.conversationId !== '6135' || artifact.requestMode !== 'prompt-json' || artifact.model !== 'clef-flash') throw new Error('Wrong artifact');
+      const errors = ['gateway', 'upstream'].flatMap(layer => (artifact.protocol?.errorDetails?.[layer] || []).slice(0, 2)
+        .map(message => ({ layer, ...safeGatewayErrorDetails({ error: message }, process.env) })));
+      console.log(JSON.stringify({ operation: 'inspect-saved-clef-response', inferenceCount: 0,
+        errorCode: artifact.errorCode, errors }, null, 2));
+    } else console.log(JSON.stringify(await inspectClefResponse(), null, 2));
   } catch { console.error(JSON.stringify({ operation: 'inspect-existing-clef-response', inferenceCount: 0, error: 'AUDIT_UNAVAILABLE' })); process.exitCode = 1; }
 }

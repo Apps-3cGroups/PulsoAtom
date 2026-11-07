@@ -146,7 +146,7 @@ jobs:
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
             'clef-response-modes' { $entryScript = 'scripts/check-clef-response-modes.js'; $scriptArguments = '' }
-            'clef-response-audit' { $entryScript = 'scripts/inspect-clef-response.js'; $scriptArguments = '' }
+            'clef-response-audit' { $entryScript = 'scripts/inspect-clef-response.js'; $scriptArguments = '--saved' }
             'clef-conversation-check' { $entryScript = 'scripts/check-clef-conversation.js'; $scriptArguments = '' }
             'clef-flash-check' { $entryScript = 'scripts/check-clef-flash.js'; $scriptArguments = '' }
             'clef-error-check' { $entryScript = 'scripts/check-clef-small.js'; $scriptArguments = '--diagnose-error' }
