@@ -185,3 +185,15 @@ python3 api/scripts/import-catalog.py \
 La rama de doble revisión añade dos respuestas independientes por conversación y un único flag operativo. Desde el flag se consultan razones y citas lado a lado; la revisión humana conserva los originales. Administración configura doble revisión o principal con respaldo en **Evaluaciones → Herramientas internas**.
 
 Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. Instalar una versión no habilita proveedores ni reevalúa el histórico. Para utilizar Clef/Gemma, configurar GatewayAgents en el servidor y completar Modelos locales en el portal; verificar su inferencia mediante el piloto limitado a las cinco conversaciones más recientes. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
+
+### Clef: decisiones nativas
+
+Clef Flash utiliza `POST /v1/systemone`. En Modelos locales, seleccionar **Decisiones (System One)** para Clef y el ID exacto de la instancia cargada. El Gateway debe publicar esa ruta y `GET /api/v1/models`. Pulso verifica que la instancia sea de tipo `decision`; un ID publicado únicamente como modelo de chat no es suficiente. Gemma conserva su interfaz de chat.
+
+El adaptador clasifica eventos como presentes, ausentes o con contexto insuficiente. Una segunda decisión selecciona un mensaje de evidencia sin recibir respuestas de Gemma. Las descripciones visibles son plantillas de Pulso, identificadas como tales; Clef no genera justificaciones libres. Las probabilidades se conservan para trazabilidad, no se presentan como certeza.
+
+Los límites de esta implementación son 12 preguntas por solicitud, 254 mensajes para seleccionar evidencia, un máximo de 22 solicitudes de inferencia por intento y el tiempo total configurado para Clef. No se recorta el contenido para hacerlo caber: si excede el presupuesto conservador del contexto, queda pendiente. La lista abierta `productos_solicitados` queda no evaluada por falta de esa capacidad. Código y métricas mantienen su procesamiento habitual.
+
+El protocolo, las instrucciones del adaptador, las solicitudes y la procedencia de cada resultado se guardan. Los reintentos conservan respuestas válidas y no añaden votos. El despliegue no cambia perfiles guardados, programación ni evaluaciones previas; la activación es explícita. Las comparaciones nativas pertenecen a una misma ejecución con contenido y checklist equivalentes, sin reutilizar automáticamente las 500 evaluaciones anteriores de Gemma.
+
+La prueba sintética de `preflightLocalModels` no modifica la base. No ejecutar el piloto de limpieza o reinicio para activar este adaptador sobre un histórico existente: ese procedimiento tiene un alcance diferente y requiere autorización específica.

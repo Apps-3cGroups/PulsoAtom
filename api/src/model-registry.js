@@ -1,5 +1,6 @@
 import { AppError } from './errors.js';
 import { GatewayEvaluator } from './gateway-evaluator.js';
+import { ClefDecisionEvaluator } from './clef-decision-evaluator.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
 import { digest } from './evaluation-context.js';
 
@@ -21,7 +22,8 @@ export class ModelRegistry {
     const policy = bound.policy(state);
     const profiles = bound.profiles.filter(p => p.provider === 'gateway').map(p => ({
       id: p.id, label: p.label, toolKey: p.evaluator.toolKey || '', model: p.model || '',
-      enabled: !!p.enabled, responseFormat: p.evaluator.responseFormat,
+      enabled: !!p.enabled, responseFormat: p.evaluator.responseFormat || 'json_schema',
+      protocol: p.evaluator.protocol || 'chat', explanationType: p.evaluator.protocol === 'systemone' ? 'typed_decision' : 'model_text',
     }));
     const policyReady = policy.mode === 'dual' && policy.primaryId === 'clef-local' && policy.secondaryId === 'gemma-local' && bound.policyAvailable(state);
     return { version: state?.settings?.localModelConfiguration?.version || 1,
@@ -34,10 +36,18 @@ export class ModelRegistry {
     // Preserve hashes of existing providers; local routes and generation options
     // are part of a gateway profile's identity. Credentials never enter snapshots.
     const settings = [p.provider, p.model, p.evaluator?.baseUrl, p.evaluator?.timeoutMs];
-    if (p.provider === 'gateway') settings.push({ toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey,
-      responseFormat: p.evaluator.responseFormat, maxTokens: p.evaluator.maxTokens, temperature: p.evaluator.temperature });
+    if (p.provider === 'gateway') {
+      // Keep the original chat hash byte-for-byte: existing Gemma evaluations
+      // and paused jobs must not change identity when this adapter is installed.
+      settings.push(p.evaluator.protocol === 'systemone'
+        ? { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, protocol: 'systemone', adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash }
+        : { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, responseFormat: p.evaluator.responseFormat,
+          maxTokens: p.evaluator.maxTokens, temperature: p.evaluator.temperature });
+    }
     const configurationHash = digest(settings); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
-    configurationHash, demo: !!p.demo }; }
+    configurationHash, demo: !!p.demo, ...(p.provider === 'gateway' ? { protocol: p.evaluator.protocol || 'chat',
+      explanationType: p.evaluator.protocol === 'systemone' ? 'typed_decision' : 'model_text',
+      ...(p.evaluator.protocol === 'systemone' ? { adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash } : {}) } : {}) }; }
   resolve(id, expected) {
     const p = this.profiles.find(p => p.id === id);
     if (!p?.enabled || !p.evaluator?.configured) throw new AppError(409, 'El modelo está deshabilitado o pendiente de configuración.', 'AI_CONFIGURATION');
@@ -60,7 +70,7 @@ export class ModelRegistry {
 }
 export function asRegistry(evaluator) {
   if (evaluator instanceof ModelRegistry) return evaluator;
-  const provider = evaluator instanceof GatewayEvaluator ? 'gateway' : 'openai';
+  const provider = evaluator instanceof GatewayEvaluator || evaluator instanceof ClefDecisionEvaluator ? 'gateway' : 'openai';
   return new ModelRegistry([{ id: `${provider}-default`, label: evaluator.model || (provider === 'gateway' ? 'Modelo local' : 'OpenAI'), provider,
     model: evaluator.model || 'configured-model', enabled: true, evaluator }]);
 }
@@ -103,11 +113,14 @@ export function registryFromEnv({ demo = false, env = process.env, fetchImpl = f
       const saved = state?.settings?.localModelConfiguration?.profiles?.find(p => p.id === spec.id);
       const prefix = spec.envPrefix;
       const model = saved?.model ?? spec.model ?? env[`${prefix}_MODEL`] ?? '';
-      const evaluator = new GatewayEvaluator({ baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
+      const protocol = saved ? (saved.protocol ?? 'chat') : (env[`${prefix}_PROTOCOL`] ?? 'chat');
+      const protocolAllowed = protocol === 'chat' || (spec.id === 'clef-local' && protocol === 'systemone');
+      const Evaluator = protocol === 'systemone' && protocolAllowed ? ClefDecisionEvaluator : GatewayEvaluator;
+      const evaluator = new Evaluator({ baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
         portalKey: gateway.portalKey, toolKey: saved?.toolKey ?? env[`${prefix}_TOOL_KEY`], model,
         timeoutMs: Number(env[`${prefix}_TIMEOUT_MS`] || 180000), maxTokens: Number(env[`${prefix}_MAX_TOKENS`] || 16000),
         temperature: Number(env[`${prefix}_TEMPERATURE`] || 0), responseFormat: saved?.responseFormat ?? env[`${prefix}_RESPONSE_FORMAT`] ?? 'json_schema', fetchImpl });
-      return { ...spec, model, enabled: saved ? saved.enabled === true : env[`${prefix}_EVALUATION_ENABLED`] === 'true', evaluator };
+      return { ...spec, model, enabled: protocolAllowed && (saved ? saved.enabled === true : env[`${prefix}_EVALUATION_ENABLED`] === 'true'), evaluator };
   }), { stateFactory: build, gatewayConfigured, localOnly: true });
   return build();
 }

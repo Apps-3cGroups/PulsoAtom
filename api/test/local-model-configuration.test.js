@@ -28,9 +28,12 @@ function fixture({ demo = false, environment = env } = {}) {
     const body = options.body && JSON.parse(options.body);
     const tool = body ? url.includes('/clef-tool/') ? 'clef-tool' : 'gemma-tool' : null;
     const data = !body ? controls.invalidCatalog || { tools: profiles.map(p => ({ key: p.toolKey, status: controls.toolStatus,
-      base_url: 'http://private-provider:1234', token: env.AGENT_SHARED_TOKEN })) }
-      : { ok: true, tool_key: tool, request_uuid: `gateway-request-${controls.calls.length}`, method: 'GET', path: '/v1/models', upstream_status_code: 200,
-        response: { data: [{ id: profiles.find(p => p.toolKey === tool).model, privatePath: '/private/model/files' }] } };
+      base_url: 'http://private-provider:1234', token: env.AGENT_SHARED_TOKEN,
+      ...(controls.nativeCapabilities ? { paths: [{ method: 'GET', path: '/v1/models' }, { method: 'POST', path: '/v1/chat/completions' }, { method: 'POST', path: '/v1/systemone' }, { method: 'GET', path: '/api/v1/models' }] } : {}) })) }
+      : { ok: true, tool_key: tool, request_uuid: `gateway-request-${controls.calls.length}`, method: 'GET', path: body.path, upstream_status_code: 200,
+        response: body.path === '/api/v1/models' ? { models: [{ type: controls.nativeType || 'decision', key: 'cloudflare/clef',
+          loaded_instances: [{ id: profiles.find(p => p.toolKey === tool).model, config: { context_length: 8192 } }] }] }
+          : { data: [{ id: profiles.find(p => p.toolKey === tool).model, privatePath: '/private/model/files' }] } };
     return { ok: true, status: 200, async json() { return data; } };
   };
   const store = {
@@ -114,7 +117,7 @@ test('saving validates both live models then atomically versions configuration/p
   assert.equal(result.body.version, 2);
   assert.equal(result.body.policyReady, true);
   assert.equal(result.body.gatewayConfigured, true);
-  assert.deepEqual(result.body.profiles, profiles.map(p => ({ ...p, label: p.id === 'clef-local' ? 'Clef' : 'Gemma' })));
+  assert.deepEqual(result.body.profiles, profiles.map(p => ({ ...p, label: p.id === 'clef-local' ? 'Clef' : 'Gemma', protocol: 'chat', explanationType: 'model_text' })));
   assert.equal(state.settings.dailyEnabled, false);
   assert.equal(state.settings.version, 8);
   assert.equal(state.settings.aiPolicy.version, 5);
@@ -222,4 +225,33 @@ test('failed persistence is not reported as success and upstream errors never di
   assert.equal(upstream.body.error.code, 'INVALID_GATEWAY_CATALOG');
   assert.ok(!JSON.stringify(upstream.body).includes(env.AGENT_SHARED_TOKEN));
   assert.ok(!JSON.stringify(upstream.body).includes(env.GATEWAY_BASE_URL));
+});
+
+test('native Clef configuration verifies advertised routes and loaded decision identity without inference', async () => {
+  const { call, controls, state, registry } = fixture();
+  controls.nativeCapabilities = true;
+  const body = input(); body.profiles[0].protocol = 'systemone';
+  const saved = (await call('put', '/models/local-configuration', body).expect(200)).body;
+  assert.equal(saved.profiles[0].protocol, 'systemone');
+  assert.equal(saved.profiles[0].explanationType, 'typed_decision');
+  assert.equal(saved.profiles[1].protocol, 'chat');
+  assert.equal(registry.forState(state).resolve('clef-local').evaluator.protocol, 'systemone');
+  assert.equal(state.settings.localModelConfiguration.validation.filter(v => v.protocol === 'systemone').length, 1);
+  assert.ok(controls.calls.filter(([, options]) => options.body).every(([, options]) => JSON.parse(options.body).method === 'GET'));
+  assert.equal(controls.calls.filter(([, options]) => options.body && JSON.parse(options.body).path === '/api/v1/models').length, 1);
+});
+
+test('native Clef cannot be saved against chat-only routes or a chat-loaded model', async () => {
+  for (const nativeCapabilities of [false, true]) {
+    const { call, controls, state } = fixture(); controls.nativeCapabilities = nativeCapabilities; controls.nativeType = 'llm';
+    const body = input(); body.profiles[0].protocol = 'systemone';
+    assert.equal((await call('put', '/models/local-configuration', body).expect(409)).body.error.code, 'AI_CONFIGURATION');
+    assert.equal(controls.writes, 0);
+    assert.equal(state.settings.localModelConfiguration, undefined);
+    assert.equal(state.settings.dailyEnabled, true);
+  }
+  const { call, controls } = fixture();
+  const invalid = input(); invalid.profiles[1].protocol = 'systemone';
+  await call('put', '/models/local-configuration', invalid).expect(422);
+  assert.equal(controls.calls.length, 0);
 });

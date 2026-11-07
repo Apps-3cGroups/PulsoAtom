@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { AppError } from './errors.js';
+import { GatewayApiClient } from './services/gatewayApiClient.js';
+import { getLoadedDecisionInstance } from './services/gatewayDecisionDiscovery.js';
 import { discoverGatewayModels, discoverGatewayTools, gatewayModelIdPattern, gatewayToolKeyPattern } from './services/gatewayDiscovery.js';
 
 const profileIds = ['clef-local', 'gemma-local'];
@@ -8,7 +10,9 @@ const profileSchema = z.object({
   id: z.enum(profileIds), toolKey: z.string().trim().regex(gatewayToolKeyPattern),
   model: z.string().trim().regex(gatewayModelIdPattern).refine(value => !value.includes('://'), 'Selecciona un identificador de modelo.'),
   enabled: z.boolean(), responseFormat: z.enum(['json_schema', 'json_object']),
-}).strict();
+  protocol: z.enum(['chat', 'systemone']).default('chat'),
+}).strict().refine(profile => profile.protocol === 'chat' || profile.id === 'clef-local', 'El protocolo de decisiones está disponible para Clef.')
+  .transform(profile => profile.protocol === 'systemone' ? { ...profile, responseFormat: 'json_schema' } : profile);
 const configurationSchema = z.object({ expectedVersion: z.number().int().positive(), profiles: z.array(profileSchema).length(2) })
   .strict().refine(value => new Set(value.profiles.map(p => p.id)).size === 2, 'Configura Clef y Gemma una sola vez.');
 const emptyQuery = z.object({}).strict();
@@ -21,7 +25,7 @@ function assertMutable(state, expectedVersion) {
 const onlyDisabling = (previous, next) => next.some(p => previous.find(old => old.id === p.id)?.enabled && !p.enabled)
   && next.every(p => {
     const old = previous.find(item => item.id === p.id);
-    return old && old.toolKey === p.toolKey && old.model === p.model && old.responseFormat === p.responseFormat && (!p.enabled || old.enabled);
+    return old && old.toolKey === p.toolKey && old.model === p.model && old.responseFormat === p.responseFormat && (old.protocol || 'chat') === p.protocol && (!p.enabled || old.enabled);
   });
 
 export function mountLocalModelConfigurationRoutes(app, prefix, { store, registry, config, requireAdmin,
@@ -32,7 +36,7 @@ export function mountLocalModelConfigurationRoutes(app, prefix, { store, registr
   const snapshot = state => {
     const value = registry.localConfiguration(state);
     return { version: value.version, gatewayConfigured: !config.demo && value.gatewayConfigured,
-      profiles: value.profiles.map(p => ({ id: p.id, label: names[p.id], toolKey: p.toolKey, model: p.model, enabled: p.enabled, responseFormat: p.responseFormat })),
+      profiles: value.profiles.map(p => ({ id: p.id, label: names[p.id], toolKey: p.toolKey, model: p.model, enabled: p.enabled, responseFormat: p.responseFormat, protocol: p.protocol || 'chat', explanationType: p.explanationType })),
       policyReady: !config.demo && value.policyReady };
   };
   app.get(`${prefix}/models/local-configuration`, requireAdmin, async (req, res) => {
@@ -67,6 +71,16 @@ export function mountLocalModelConfigurationRoutes(app, prefix, { store, registr
           validation.push({ toolKey: profile.toolKey, requestId: discovered.request_uuid });
         }
         if (!modelsByTool.get(profile.toolKey).includes(profile.model)) throw new AppError(409, 'Uno de los modelos seleccionados ya no está disponible en su herramienta. Actualiza el catálogo del Gateway.', 'MODEL_UNAVAILABLE');
+        if (profile.protocol === 'systemone') {
+          const tool = tools.find(item => item.key === profile.toolKey);
+          if (!tool?.protocols?.includes('systemone')) throw new AppError(409,
+            'Esta herramienta no publica las rutas System One y de inventario nativo requeridas para Clef. Habilítalas en el Gateway y vuelve a consultar.', 'AI_CONFIGURATION');
+          const client = new GatewayApiClient({ baseUrl: gatewayEnv.GATEWAY_BASE_URL, token: gatewayEnv.AGENT_SHARED_TOKEN,
+            portalKey: gatewayEnv.GATEWAY_PORTAL_KEY ?? 'portal-pulso', timeoutMs: 15000, fetchImpl: gatewayFetchImpl });
+          const instance = await getLoadedDecisionInstance({ client, toolKey: profile.toolKey, model: profile.model });
+          validation.push({ toolKey: profile.toolKey, protocol: 'systemone', model: instance.model, type: instance.type,
+            modelKey: instance.modelKey, contextLength: instance.contextLength, requestId: instance.requestId });
+        }
       }
     }
     const result = await store.transaction(state => {

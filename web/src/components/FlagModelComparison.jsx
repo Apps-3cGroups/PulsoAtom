@@ -18,12 +18,13 @@ export default function FlagModelComparison({ variable, demo }) {
     <div className="flag-model-columns">{comparison.cells.map(cell => {
       const result = cell.result;
       const pending = ['pending', 'running'].includes(cell.status);
-      const status = !result ? pending ? 'Revisión pendiente' : 'Sin resultado' : result.status !== 'evaluado' ? result.error ? 'Revisión pendiente' : 'Contexto insuficiente' : result.value === 1 ? 'Detecta el evento' : 'No detecta el evento';
+      const status = !result ? pending ? 'Revisión pendiente' : 'Sin resultado' : result.status !== 'evaluado' ? result.error ? 'Revisión pendiente' : 'No evaluada' : result.value === 1 ? 'Detecta el evento' : 'No detecta el evento';
       return <article className="flag-model-column" key={cell.profileId}>
         <header><h3>{cell.label}</h3><Tag color={result?.value === 1 ? classificationOf(variable) === 'positive' ? 'green' : classificationOf(variable) === 'critical' ? 'red' : 'pink' : result?.status === 'evaluado' ? 'default' : 'gold'}>{status}</Tag><small>{cell.model}</small></header>
-        <div className="flag-model-body"><h4>Justificación</h4><p>{result?.reason || cell.error?.message || 'La respuesta de este modelo todavía no está disponible.'}</p>
+        <div className="flag-model-body"><h4>{result?.reasonSource === 'adapter_template' ? 'Decisión del modelo' : 'Justificación'}</h4><p>{result?.reason || cell.error?.message || 'La respuesta de este modelo todavía no está disponible.'}</p>
+          {result?.reasonSource === 'adapter_template' && <p className="muted small">Descripción preparada por Pulso a partir de la decisión. Este modelo no genera una justificación textual.</p>}
           {result?.codeRule && <div className="flag-rule-note"><b>IA + código</b><p>Una regla compartida ajustó el resultado. No cuenta como un voto independiente.</p>{result.aiResult && <p>Respuesta inicial de IA: {result.aiResult.status === 'evaluado' ? result.aiResult.value === 1 ? 'Evento detectado' : 'Evento no detectado' : 'Sin conclusión'}. {result.aiResult.reason}</p>}</div>}
-          <h4>Evidencia citada</h4>{result?.evidence?.length ? result.evidence.map((e, i) => <blockquote key={`${e.messageId}-${i}`}><p>“{e.quote}”</p><small>Mensaje {e.messageId}</small></blockquote>) : <p className="muted">Sin cita registrada.</p>}
+          <h4>{result?.evidenceSource === 'model_choice' ? 'Mensaje seleccionado por el modelo' : 'Evidencia citada'}</h4>{result?.evidence?.length ? result.evidence.map((e, i) => <blockquote key={`${e.messageId}-${i}`}><p>“{e.quote}”</p><small>Mensaje {e.messageId}</small></blockquote>) : <p className="muted">Sin cita registrada.</p>}
           {cell.createdAt && <small className="muted">{dateText(cell.createdAt)} · {timeText(cell.createdAt)}</small>}
         </div>
       </article>;

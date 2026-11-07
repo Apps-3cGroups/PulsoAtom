@@ -2,7 +2,7 @@ import { AppError } from '../errors.js';
 
 // This is a backend-only transport. No provider URL returned by the catalog is
 // ever used as a network destination: requests always go through the Gateway.
-const allowedOperations = new Set(['POST /v1/chat/completions', 'GET /v1/models']);
+const allowedOperations = new Set(['POST /v1/chat/completions', 'GET /v1/models', 'POST /v1/systemone', 'GET /api/v1/models']);
 const keyPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/;
 const requestIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/;
 const safeBaseUrl = value => {
@@ -12,9 +12,10 @@ const safeBaseUrl = value => {
     return parsed.toString().replace(/\/$/, '');
   } catch { return null; }
 };
-const httpError = status => new AppError(502,
+const httpError = (status, operation) => new AppError(502,
   `El Gateway rechazó la solicitud al modelo local (HTTP ${status}).`,
-  [408, 429].includes(status) || status >= 500 ? 'AI_TRANSIENT' : 'AI_CONFIGURATION');
+  status === 501 && operation === 'POST /v1/systemone' ? 'AI_CONFIGURATION'
+    : [408, 429].includes(status) || status >= 500 ? 'AI_TRANSIENT' : 'AI_CONFIGURATION');
 const invalidEnvelope = () => new AppError(502, 'El Gateway devolvió una respuesta inválida.', 'INVALID_AI_RESULT');
 
 export class GatewayApiClient {
@@ -30,7 +31,7 @@ export class GatewayApiClient {
     return !!(this.baseUrl && this.#token && !/[\r\n]/.test(this.#token) && keyPattern.test(this.portalKey || '')
       && Number.isInteger(this.timeoutMs) && this.timeoutMs >= 1000 && this.timeoutMs <= 180000);
   }
-  async #request(path, options = {}) {
+  async #request(path, options = {}, upstreamOperation) {
     if (!this.configured) throw new AppError(503, 'Falta configurar la conexión y la identidad de Pulso en el Gateway.', 'AI_CONFIGURATION');
     let response;
     try {
@@ -44,7 +45,7 @@ export class GatewayApiClient {
       // Never propagate a fetch error: it can contain a URL or headers.
       throw new AppError(502, 'No se pudo contactar el Gateway dentro del tiempo permitido.', 'AI_UNAVAILABLE');
     }
-    if (!response.ok) throw httpError(response.status);
+    if (!response.ok) throw httpError(response.status, upstreamOperation);
     try { return await response.json(); } catch { throw invalidEnvelope(); }
   }
   async listTools() {
@@ -63,12 +64,12 @@ export class GatewayApiClient {
       method: 'POST',
       body: JSON.stringify({ method, path, query, body, timeout_ms: this.timeoutMs,
         portal_key: this.portalKey, caller: { source: this.portalKey, mode: 'portal', operation } }),
-    });
+    }, `${method} ${path}`);
     if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)
       || typeof envelope.ok !== 'boolean' || !Number.isInteger(envelope.upstream_status_code)) throw invalidEnvelope();
     const status = envelope.upstream_status_code;
     if (status < 100 || status > 599) throw invalidEnvelope();
-    if (status < 200 || status >= 300) throw httpError(status);
+    if (status < 200 || status >= 300) throw httpError(status, `${method} ${path}`);
     if (!envelope.ok || envelope.tool_key !== toolKey || envelope.method !== method || envelope.path !== path
       || !requestIdPattern.test(envelope.request_uuid || '') || !Object.hasOwn(envelope, 'response')) throw invalidEnvelope();
     return { response: envelope.response, requestId: envelope.request_uuid,

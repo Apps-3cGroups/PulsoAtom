@@ -111,3 +111,41 @@ test('readiness is provider-neutral and never requires public provider credentia
   assert.equal(pending.ready, false);
   assert.doesNotMatch(JSON.stringify(pending), /OpenAI|Gemini|GPT|token|secret/);
 });
+
+test('native decisions are explicit and do not change Gemma or legacy chat identity', () => {
+  const chat = registry().list();
+  const native = registry({ CLEF_PROTOCOL: 'systemone' });
+  const clef = native.list()[0];
+  assert.equal(clef.protocol, 'systemone');
+  assert.equal(clef.explanationType, 'typed_decision');
+  assert.ok(clef.adapterVersion);
+  assert.notEqual(clef.configurationHash, chat[0].configurationHash);
+  assert.equal(native.list()[1].configurationHash, chat[1].configurationHash);
+  assert.equal(native.list()[1].configurationHash, digest(['gateway', 'gemma-synthetic', 'http://gateway.example:9000', 180000,
+    { toolKey: 'gemma', portalKey: 'pulso-test', responseFormat: 'json_schema', maxTokens: 16000, temperature: 0 }]));
+  assert.equal(registry({ CLEF_PROTOCOL: 'chat' }).list()[0].configurationHash, chat[0].configurationHash);
+  assert.equal(native.resolve('clef-local').evaluator.protocol, 'systemone');
+  assert.equal(asRegistry(native.resolve('clef-local').evaluator).list()[0].provider, 'gateway');
+  assert.throws(() => native.resolve('clef-local', chat[0]), { code: 'MODEL_CHANGED' });
+});
+
+test('invalid native protocol configuration cannot silently call a chat endpoint', () => {
+  assert.equal(registry({ CLEF_PROTOCOL: 'auto' }).list()[0].available, false);
+  assert.equal(registry({ GEMMA_PROTOCOL: 'systemone' }).list()[1].available, false);
+  const state = { settings: { localModelConfiguration: { profiles: [
+    { id: 'clef-local', toolKey: 'saved-tool', model: 'saved-decision', enabled: true, protocol: 'systemone', responseFormat: 'json_schema' },
+  ] } } };
+  const bound = registry().forState(state);
+  assert.equal(bound.resolve('clef-local').evaluator.protocol, 'systemone');
+  assert.equal(bound.localConfiguration(state).profiles[0].explanationType, 'typed_decision');
+});
+
+
+test('an existing saved chat profile is not reinterpreted by a newly added environment protocol', () => {
+  const state = { settings: { localModelConfiguration: { profiles: [
+    { id: 'clef-local', toolKey: 'clef', model: 'clef-synthetic', enabled: true, responseFormat: 'json_schema' },
+  ] } } };
+  const bound = registry({ CLEF_PROTOCOL: 'systemone' }).forState(state);
+  assert.equal(bound.list()[0].protocol, 'chat');
+  assert.equal(bound.list()[0].configurationHash, registry().list()[0].configurationHash);
+});

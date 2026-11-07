@@ -14,6 +14,44 @@ const now = () => new Date().toISOString();
 const safeError = error => ({ code: error instanceof AppError ? error.code : 'EVALUATION_FAILED', message: error instanceof AppError ? error.message : 'No se pudo completar esta evaluación.' });
 const readHistory = (store, conversationIds) => store.readWithConversations
   ? store.readWithConversations({ fresh: true, ...(conversationIds !== undefined ? { conversationIds } : {}) }) : store.read();
+const requestIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/;
+const nativeFailureCodes = new Set(['AI_CONFIGURATION', 'AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT',
+  'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED', 'AI_SAFETY_REFUSAL', 'AI_INCOMPLETE', 'UNSUPPORTED_VARIABLE',
+  'EMPTY_CONVERSATION', 'UNSUPPORTED_INPUT', 'INPUT_CAPACITY_EXCEEDED', 'INVALID_GATEWAY_CATALOG', 'MODEL_UNAVAILABLE']);
+
+// Native decisions use a separate protocol and instruction contract. Keep this
+// metadata outside the shared context so legacy Gemma fingerprints stay intact.
+function nativeMetadata(response, profile, variableIds) {
+  if (profile.evaluator.protocol !== 'systemone') return {};
+  if (response?.protocol !== 'systemone' || response.adapterVersion !== profile.evaluator.adapterVersion
+    || !/^[a-f0-9]{64}$/.test(response.instructionsHash || '')
+    || (profile.evaluator.instructionsHash && response.instructionsHash !== profile.evaluator.instructionsHash)
+    || !Array.isArray(response.requestIds) || response.requestIds.some(id => typeof id !== 'string' || !requestIdPattern.test(id))
+    || !Array.isArray(response.requests)) {
+    throw new AppError(409, 'La procedencia del adaptador no coincide con el perfil solicitado.', 'MODEL_CHANGED');
+  }
+  const requests = response.requests.map(request => {
+    if (!request || !['inventory', 'classification', 'evidence'].includes(request.stage)
+      || (request.requestId != null && (typeof request.requestId !== 'string' || !requestIdPattern.test(request.requestId)))
+      || !Array.isArray(request.variableIds) || request.variableIds.some(id => !variableIds.includes(id))
+      || !Number.isFinite(request.durationMs) || request.durationMs < 0) {
+      throw new AppError(502, 'La procedencia de una solicitud del adaptador es inválida.', 'INVALID_AI_RESULT');
+    }
+    return { requestId: request.requestId ?? null, stage: request.stage, variableIds: [...request.variableIds], durationMs: request.durationMs,
+      ...(Number.isSafeInteger(request.inputBytes) && request.inputBytes >= 0 ? { inputBytes: request.inputBytes } : {}),
+      ...(nativeFailureCodes.has(request.errorCode) ? { errorCode: request.errorCode } : {}) };
+  });
+  return { protocol: 'systemone', adapterVersion: response.adapterVersion, instructionsHash: response.instructionsHash,
+    requestIds: [...new Set(response.requestIds)], requests };
+}
+function accumulatedMetadata(previous, current, attemptId) {
+  if (!current.protocol) return {};
+  if (previous?.protocol && ['protocol', 'adapterVersion', 'instructionsHash'].some(key => previous[key] !== current[key])) {
+    throw new AppError(409, 'Las instrucciones del adaptador cambiaron durante el reintento.', 'PROMPT_CHANGED');
+  }
+  return { ...current, requestIds: [...new Set([...(previous?.requestIds || []), ...current.requestIds])],
+    requests: [...(previous?.requests || []), ...current.requests.map(request => ({ ...request, attemptId }))] };
+}
 
 export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter, includeOpen = state.settings?.includeOpenConversations === true, refreshChanged = state.settings?.refreshChangedConversations === true } = {}) {
   return state.conversations.filter(c => c.messages.length && (includeOpen || c.completed !== false) && (!from || c.date >= from) && (!to || c.date <= to)
@@ -202,6 +240,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         provider: profile.provider, requestedModel: profile.model, variableIds: pending.map(v => v.id), status: 'running', startedAt: now() };
       await store.transaction(s => s.attempts.push(attempt));
       const started = Date.now();
+      let attemptMetadata = {};
       try {
         const response = await profile.evaluator.evaluate(conversation, pending, {
           validationErrors: itemErrors.map(({ variableId, rules }) => ({ variableId, rules })),
@@ -209,29 +248,40 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         if (!Array.isArray(response.results) || response.results.some(r => !pending.some(v => v.id === r.variableId)) || new Set(response.results.map(r => r.variableId)).size !== response.results.length) throw new AppError(502, 'Resultado estructurado incompleto o duplicado.', 'INVALID_AI_RESULT');
         const actualModel = response.model || profile.model;
         if (retained.size && metadata.model !== actualModel) throw new AppError(409, 'El proveedor cambió el modelo efectivo durante el reintento.', 'MODEL_CHANGED');
+        attemptMetadata = nativeMetadata(response, profile, pending.map(v => v.id));
+        const provenance = accumulatedMetadata(metadata, attemptMetadata, attempt.id);
         for (const result of response.results) retained.set(result.variableId, result);
-        metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null };
+        metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null, ...provenance };
         itemErrors = pending.filter(v => !retained.has(v.id)).map(v => {
           const failure = response.validationErrors?.find(e => e.variableId === v.id);
           return { variableId: v.id, code: 'INVALID_AI_RESULT', rules: failure?.rules || ['missing_item'], message: failure?.message || `Falta un resultado válido para ${v.id}.` };
         });
-        lastError = itemErrors.length ? new AppError(502, `${itemErrors.length} variables requieren reintento por formato inválido.`, 'INVALID_AI_RESULT') : null;
+        lastError = itemErrors.length ? new AppError(502,
+          response.failure ? 'No se pudo completar una etapa del adaptador.' : `${itemErrors.length} variables requieren reintento por formato inválido.`,
+          response.failure ? nativeFailureCodes.has(response.failure.code) ? response.failure.code : 'EVALUATION_FAILED' : 'INVALID_AI_RESULT') : null;
         profileStates[profile.id] = { ...metadata, results: [...retained.values()], validationErrors: itemErrors };
         await store.transaction(s => {
           Object.assign(s.attempts.find(a => a.id === attempt.id), { status: lastError ? 'partial' : 'completed', finishedAt: now(), durationMs: Date.now() - started,
-            actualModel, usage: response.usage || null, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
+            actualModel, usage: response.usage || null, ...attemptMetadata, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
           s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
         });
-        if (!lastError) break;
+        if (!lastError || !retryable(lastError)) break;
       } catch (error) {
         lastError = error;
-        itemErrors = pending.map(v => ({ variableId: v.id, ...safeError(error) }));
+        if (error?.evaluationMetadata) {
+          try {
+            attemptMetadata = nativeMetadata(error.evaluationMetadata, profile, pending.map(v => v.id));
+            metadata = { ...metadata, ...accumulatedMetadata(metadata, attemptMetadata, attempt.id) };
+          } catch (provenanceError) { lastError = provenanceError; }
+        }
+        itemErrors = pending.map(v => ({ variableId: v.id, ...safeError(lastError) }));
         profileStates[profile.id] = { ...metadata, results: [...retained.values()], validationErrors: itemErrors };
         await store.transaction(s => {
-          Object.assign(s.attempts.find(a => a.id === attempt.id), { status: 'failed', finishedAt: now(), durationMs: Date.now() - started, error: safeError(error), validationErrors: itemErrors });
+          Object.assign(s.attempts.find(a => a.id === attempt.id), { status: 'failed', finishedAt: now(), durationMs: Date.now() - started,
+            ...attemptMetadata, error: safeError(lastError), validationErrors: itemErrors });
           s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
         });
-        if (!retryable(error)) break;
+        if (!retryable(lastError)) break;
       }
       if (index === 0 && profile.provider !== 'demo') await new Promise(resolve => setTimeout(resolve, 250));
     }
@@ -250,6 +300,8 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     createdAt: now(), demo: job.demo, ...task.context, provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null, profileId: effective.id, provider: effective.provider,
     profileLabel: effective.label, requestedProfileId: task.profile.id, requestedProvider: task.profile.provider, requestedModel: task.profile.model,
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
+    ...(answer.protocol ? { protocol: answer.protocol, adapterVersion: answer.adapterVersion, instructionsHash: answer.instructionsHash,
+      requestIds: answer.requestIds, requests: answer.requests } : {}),
     providerResponseId: answer.responseId || null, usage: answer.usage || null, catalogVersions: job.catalogVersions,
     partial, validationErrors: answer.validationErrors, results: [...answer.results, ...invalidResults, ...codeResults] };
   const fresh = await readHistory(store, [conversation.id]);

@@ -37,13 +37,22 @@ export async function preflightLocalModels(registry, state) {
   for (const profile of profiles) {
     if (typeof profile.evaluator.discovery !== 'function') fail('LOCAL_DISCOVERY_REQUIRED', 'El adaptador local no admite la comprobación del Gateway.');
     const discovery = await profile.evaluator.discovery();
-    const catalog = discovery.catalog;
-    const tools = Array.isArray(catalog) ? catalog : Array.isArray(catalog?.tools) ? catalog.tools : Array.isArray(catalog?.data) ? catalog.data : null;
-    if (!tools) fail('GATEWAY_CATALOG_INVALID', 'El catálogo del Gateway tiene un formato no reconocido.');
-    const tool = tools.find(item => item?.key === profile.evaluator.toolKey);
-    if (!tool || tool.status !== 'active') fail('GATEWAY_TOOL_UNAVAILABLE', 'La herramienta configurada no está activa en el catálogo del Gateway.');
-    if (!Array.isArray(discovery.models?.data) || !discovery.models.data.some(model => model?.id === profile.model)) {
-      fail('LOCAL_MODEL_UNAVAILABLE', 'El modelo exacto configurado no aparece entre los modelos disponibles de la herramienta.');
+    const native = profile.evaluator.protocol === 'systemone';
+    if (native) {
+      // Native discovery already invokes the Gateway's read-only inventory and
+      // verifies the exact loaded instance. It does not return a chat catalog.
+      if (discovery?.type !== 'decision' || discovery.model !== profile.model
+        || !Number.isSafeInteger(discovery.contextLength) || discovery.contextLength <= 0
+        || !discovery.requestId) fail('LOCAL_MODEL_UNAVAILABLE', 'Clef no confirmó una instancia de decisiones cargada con capacidad de contexto conocida.');
+    } else {
+      const catalog = discovery.catalog;
+      const tools = Array.isArray(catalog) ? catalog : Array.isArray(catalog?.tools) ? catalog.tools : Array.isArray(catalog?.data) ? catalog.data : null;
+      if (!tools) fail('GATEWAY_CATALOG_INVALID', 'El catálogo del Gateway tiene un formato no reconocido.');
+      const tool = tools.find(item => item?.key === profile.evaluator.toolKey);
+      if (!tool || tool.status !== 'active') fail('GATEWAY_TOOL_UNAVAILABLE', 'La herramienta configurada no está activa en el catálogo del Gateway.');
+      if (!Array.isArray(discovery.models?.data) || !discovery.models.data.some(model => model?.id === profile.model)) {
+        fail('LOCAL_MODEL_UNAVAILABLE', 'El modelo exacto configurado no aparece entre los modelos disponibles de la herramienta.');
+      }
     }
     const response = await profile.evaluator.evaluate(structuredClone(probeConversation), structuredClone(probeVariables));
     const present = response.results?.find(r => r.variableId === 'local_probe_present');
@@ -54,8 +63,15 @@ export async function preflightLocalModels(registry, state) {
       || absent?.status !== 'evaluado' || absent.value !== 0 || absent.error) {
       fail('LOCAL_PREFLIGHT_FAILED', 'El modelo no superó la prueba sintética de formato, identidad y evidencia; no se modifica la base.');
     }
+    if (native && (response.protocol !== 'systemone' || response.adapterVersion !== profile.evaluator.adapterVersion
+      || !/^[a-f0-9]{64}$/.test(response.instructionsHash || '') || response.instructionsHash !== profile.evaluator.instructionsHash
+      || present.reasonSource !== 'adapter_template' || present.evidenceSource !== 'model_choice'
+      || present.explanationType !== 'typed_decision')) {
+      fail('LOCAL_PREFLIGHT_FAILED', 'Clef no confirmó la procedencia de su decisión y de la evidencia seleccionada; no se modifica la base.');
+    }
     checks.push({ profileId: profile.id, model: profile.model, configurationHash: registry.snapshot(profile).configurationHash,
-      discoveryRequestId: discovery.requestId, probeRequestId: response.responseId });
+      discoveryRequestId: discovery.requestId, probeRequestId: response.responseId,
+      ...(native ? { protocol: 'systemone', adapterVersion: response.adapterVersion, instructionsHash: response.instructionsHash } : {}) });
   }
   return { checkedAt: new Date().toISOString(), synthetic: true, checks };
 }

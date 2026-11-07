@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
+import { ClefDecisionEvaluator } from '../src/clef-decision-evaluator.js';
 import { localPilotProfiles, preflightLocalModels, latestFiveConversations, createLocalPilotPlan, executeLocalPilot } from '../src/local-model-pilot.js';
 import { resumeEvaluationBatch } from '../src/evaluation-service.js';
 
@@ -210,4 +211,76 @@ test('apply evaluates with saved local models and keeps the scheduler paused', a
   assert.equal(state.settings.dailyEnabled, false);
   assert.deepEqual([...new Set(state.evaluations.map(e => e.model))], ['saved-clef-synthetic', 'saved-gemma-synthetic']);
   assert.ok(state.evaluations.every(e => e.modelConfiguration.configurationHash === manifest.profiles.find(p => p.id === e.profileId).configurationHash));
+});
+
+
+function nativeFixture() {
+  const context = fixture();
+  const gatewayCalls = [];
+  const model = 'clef-synthetic';
+  const fetchImpl = async (_url, options) => {
+    const input = JSON.parse(options.body); gatewayCalls.push(input);
+    let response;
+    if (input.path === '/api/v1/models') response = { models: [{ type: 'decision', key: 'cloudflare/clef-synthetic',
+      loaded_instances: [{ id: model, config: { context_length: 65536 } }] }] };
+    else {
+      assert.equal(input.path, '/v1/systemone');
+      const answers = Object.fromEntries(Object.entries(input.body.questions).map(([id, question]) => {
+        const classification = Object.hasOwn(question.criteria, 'present');
+        const choice = classification ? id === 'local_probe_present' ? 'present' : 'absent' : 'probe-message-1';
+        return [id, { type: 'choice', choice, confidence: 1,
+          probabilities: Object.fromEntries(Object.keys(question.criteria).map(key => [key, Number(key === choice)])) }];
+      }));
+      response = { model, answers, usage: { input_tokens: 20, output_tokens: 0 } };
+    }
+    return { ok: true, status: 200, async json() { return { ok: true, tool_key: 'clef', method: input.method,
+      path: input.path, upstream_status_code: 200, request_uuid: `native-probe-${gatewayCalls.length}`, response }; } };
+  };
+  context.registry.profiles[0].evaluator = new ClefDecisionEvaluator({ baseUrl: 'http://synthetic-gateway.test',
+    token: 'synthetic-private-token', portalKey: 'portal-pulso', toolKey: 'clef', model, fetchImpl });
+  return { ...context, gatewayCalls };
+}
+
+test('preflight supports native decisions independently and sends only the synthetic conversation', async () => {
+  const { registry, state, calls, control, gatewayCalls } = nativeFixture();
+  const before = structuredClone(state);
+  const result = await preflightLocalModels(registry);
+  assert.equal(result.synthetic, true);
+  assert.equal(result.checks.length, 2);
+  assert.equal(result.checks[0].protocol, 'systemone');
+  assert.equal(result.checks[0].instructionsHash, registry.snapshot(registry.profiles[0]).instructionsHash);
+  assert.equal(result.checks[1].protocol, undefined);
+  assert.equal(gatewayCalls.filter(call => call.path === '/api/v1/models').length, 2);
+  const inferences = gatewayCalls.filter(call => call.method === 'POST');
+  assert.equal(inferences.length, 2);
+  assert.ok(inferences.every(call => call.path === '/v1/systemone'));
+  assert.ok(inferences.every(call => call.body.state.messages.map(message => message.id).join(',') === 'probe-message-1,probe-message-2'));
+  assert.ok(!JSON.stringify(gatewayCalls).includes('Cliente sintético privado'));
+  assert.ok(!JSON.stringify(gatewayCalls).includes('Estoy molesto.'));
+  assert.deepEqual(calls.map(call => call.id), ['pulso-local-connectivity-synthetic']);
+  assert.deepEqual(state, before);
+  assert.equal(control.mutations, 0);
+  const changedInstructions = 'f'.repeat(64);
+  registry.profiles[0].evaluator.instructionsHash = changedInstructions;
+  assert.throws(() => createLocalPilotPlan(state, registry, result), { code: 'LOCAL_PREFLIGHT_REQUIRED' });
+});
+
+test('native preflight blocks chat metadata and missing provenance instead of approving a real pilot', async () => {
+  for (const discovery of [{ type: 'llm', model: 'clef-synthetic', contextLength: 65536, requestId: 'synthetic' },
+    { type: 'decision', model: 'another-model', contextLength: 65536, requestId: 'synthetic' },
+    { type: 'decision', model: 'clef-synthetic', contextLength: null, requestId: 'synthetic' }]) {
+    const { registry, gatewayCalls, control } = nativeFixture();
+    registry.profiles[0].evaluator.discovery = async () => discovery;
+    await assert.rejects(preflightLocalModels(registry), { code: 'LOCAL_MODEL_UNAVAILABLE' });
+    assert.equal(gatewayCalls.length, 0);
+    assert.equal(control.mutations, 0);
+  }
+  const { registry, state, control } = nativeFixture();
+  const evaluator = registry.profiles[0].evaluator;
+  const evaluate = evaluator.evaluate.bind(evaluator);
+  evaluator.evaluate = async (...args) => { const response = await evaluate(...args); delete response.instructionsHash; return response; };
+  const before = structuredClone(state);
+  await assert.rejects(preflightLocalModels(registry), { code: 'LOCAL_PREFLIGHT_FAILED' });
+  assert.deepEqual(state, before);
+  assert.equal(control.mutations, 0);
 });
