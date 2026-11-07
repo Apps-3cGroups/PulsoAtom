@@ -4,12 +4,14 @@ import { runClefConversationCheck, readProbeState } from './check-clef-conversat
 
 const directory = '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics';
 const strict = process.argv.length === 3 && process.argv[2] === '--strict-contract';
-const capturedPath = `${directory}/clef-flash-6135-${strict ? 'strict-schema-' : ''}response-20261107.json`;
-const outputPath = `${directory}/clef-flash-6135-${strict ? 'strict-schema' : 'adapted'}-20261107-v1.json`;
+const twoFlags = process.argv.length === 3 && process.argv[2] === '--two-flags';
+const selectedIds = ['cliente_molesto', 'asistente_falto_al_respeto'];
+const capturedPath = `${directory}/clef-flash-6135-${twoFlags ? 'two-flags-' : strict ? 'strict-schema-' : ''}response-20261107.json`;
+const outputPath = `${directory}/clef-flash-6135-${twoFlags ? 'two-flags' : strict ? 'strict-schema' : 'adapted'}-20261107-v1.json`;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 let connection, reader, networkRequests = 0, replayedResponses = 0;
 try {
-  if (process.argv.length !== 2 && !strict) throw new Error('Unsupported arguments');
+  if (process.argv.length !== 2 && !strict && !twoFlags) throw new Error('Unsupported arguments');
   const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
   const db = databaseConfig(), atom = atomDatabaseConfig();
   if (config.demo || db?.database !== 'dbPulsosAtom' || !atom) throw new Error('Invalid configuration');
@@ -52,7 +54,13 @@ try {
     }
     return response;
   };
-  const result = await runClefConversationCheck({ connection, reader, readState, fetchImpl: captureFetch, outputPath });
+  const previous = twoFlags ? JSON.parse(await readFile(`${directory}/clef-flash-6135-strict-schema-20261107-v1.json`, 'utf8')) : null;
+  if (twoFlags && (previous.conversationId !== '6135' || !/^[a-f0-9]{64}$/.test(previous.context?.sourceHash))) throw new Error('Missing source baseline');
+  const result = await runClefConversationCheck({ connection, reader, readState, fetchImpl: captureFetch, outputPath,
+    ...(twoFlags ? { variableIds: selectedIds, expectedSourceHash: previous.context.sourceHash } : {}) });
+  // Output only normalized decisions and counts. The complete response and
+  // reasons remain in the private capture rather than the workflow logs.
+  console.log(JSON.stringify({ operation: 'captured-probe-status', ...result }, null, 2));
   const captured = JSON.parse(await readFile(capturedPath, 'utf8'));
   const message = captured.envelope?.response?.choices?.[0]?.message;
   const parsed = JSON.parse(message?.content?.trim() ? message.content : message.reasoning_content);
@@ -65,6 +73,12 @@ try {
     if (typeof item?.reason === 'string') reasonLengths.push(item.reason.length);
   }
   console.log(JSON.stringify({ operation: 'capture-and-validate-clef-flash', networkRequests, replayedResponses,
+    ...(twoFlags ? { assessments: selectedIds.map(variableId => {
+      const item = parsed.results?.[variableId];
+      return { variableId, status: ['evaluado', 'no_evaluado'].includes(item?.status) ? item.status : 'invalid',
+        value: [0, 1, null].includes(item?.value) ? item.value : 'invalid',
+        evidenceCount: Array.isArray(item?.evidence_message_ids) ? item.evidence_message_ids.length : null };
+    }) } : {}),
     capturedStructure: { items: Object.keys(parsed.results || {}).length, combinations,
       reasonMinLength: Math.min(...reasonLengths), reasonMaxLength: Math.max(...reasonLengths) }, ...result }, null, 2));
   process.exitCode = result.success ? 0 : 1;

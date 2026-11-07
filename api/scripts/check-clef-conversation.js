@@ -89,7 +89,7 @@ async function completedArtifact(filename, requestMode) {
 
 // Isolated real-content probe: no store, jobs, evaluation persistence or policy changes.
 export async function runClefConversationCheck({ connection, reader, env = process.env, fetchImpl = fetch,
-  outputPath = defaultOutput, readState = readProbeState, requestMode = 'schema' } = {}) {
+  outputPath = defaultOutput, readState = readProbeState, requestMode = 'schema', variableIds, expectedSourceHash } = {}) {
   if (!['schema', 'prompt-json', 'compact-json'].includes(requestMode)) fail('AI_CONFIGURATION');
   if ((env.GATEWAY_PORTAL_KEY ?? 'portal-pulso') !== 'portal-pulso') fail('AI_CONFIGURATION');
   const existing = await completedArtifact(outputPath, requestMode);
@@ -111,7 +111,10 @@ export async function runClefConversationCheck({ connection, reader, env = proce
       const id = String(before.reference?.conversationId || '');
       if (!/^[1-9]\d*$/.test(id)) fail('INVALID_SOURCE');
       artifact.conversationId = id;
-      const variables = before.catalog.filter(v => v.active && !v.retired && supportsAiVariable(v));
+      const activeVariables = before.catalog.filter(v => v.active && !v.retired && supportsAiVariable(v));
+      if (variableIds && (!Array.isArray(variableIds) || !variableIds.length || new Set(variableIds).size !== variableIds.length
+        || variableIds.some(id => !activeVariables.some(v => v.id === id)))) fail('INVALID_CATALOG');
+      const variables = variableIds ? activeVariables.filter(v => variableIds.includes(v.id)) : activeVariables;
       if (!variables.length || new Set(variables.map(v => v.id)).size !== variables.length
         || variables.some(v => !/^[a-z][a-z0-9_]{0,159}$/.test(v.id))) fail('INVALID_CATALOG');
       artifact.requestedVariableIds = variables.map(v => v.id);
@@ -119,12 +122,13 @@ export async function runClefConversationCheck({ connection, reader, env = proce
       const conversation = source.conversations.find(c => c.id === id);
       if (source.conversations.length !== 1 || !conversation?.messages.length) fail('INVALID_SOURCE');
       const context = evaluationContext(conversation, before.catalog);
+      if (expectedSourceHash && context.sourceHash !== expectedSourceHash) fail('INVALID_SOURCE');
       if (requestMode === 'schema') artifact.context = context;
       else artifact.baselineContext = context;
       artifact.catalogVersions = catalogReferences(before.catalog);
       artifact.messageCount = conversation.messages.length;
       artifact.gemmaReference = { evaluationId: before.reference.id,
-        equivalent: requestMode === 'schema' && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => before.reference[key] === context[key]) };
+        equivalent: !variableIds && requestMode === 'schema' && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => before.reference[key] === context[key]) };
       const tracedFetch = async (...args) => {
         const [url, options] = args, invocation = JSON.parse(options.body);
         const body = invocation.body;
