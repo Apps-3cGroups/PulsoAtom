@@ -3,12 +3,13 @@ import { createHash } from 'node:crypto';
 import { runClefConversationCheck, readProbeState } from './check-clef-conversation.js';
 
 const directory = '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics';
-const capturedPath = `${directory}/clef-flash-6135-response-20261107.json`;
-const outputPath = `${directory}/clef-flash-6135-adapted-20261107-v1.json`;
+const strict = process.argv.length === 3 && process.argv[2] === '--strict-contract';
+const capturedPath = `${directory}/clef-flash-6135-${strict ? 'strict-schema-' : ''}response-20261107.json`;
+const outputPath = `${directory}/clef-flash-6135-${strict ? 'strict-schema' : 'adapted'}-20261107-v1.json`;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 let connection, reader, networkRequests = 0, replayedResponses = 0;
 try {
-  if (process.argv.length !== 2) throw new Error('Unsupported arguments');
+  if (process.argv.length !== 2 && !strict) throw new Error('Unsupported arguments');
   const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
   const db = databaseConfig(), atom = atomDatabaseConfig();
   if (config.demo || db?.database !== 'dbPulsosAtom' || !atom) throw new Error('Invalid configuration');
