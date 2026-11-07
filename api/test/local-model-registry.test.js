@@ -51,6 +51,20 @@ test('local profiles default to the confirmed portal identity when no environmen
   assert.equal(models.resolve('gemma-local').evaluator.portalKey, 'portal-pulso');
 });
 
+test('Clef Flash output contract is versioned without changing the Gemma configuration hash', () => {
+  const models = registry({ CLEF_MODEL: 'clef-flash' });
+  const [clef, gemma] = models.list();
+  assert.equal(clef.outputSchemaVersion, 'clef-flash-schema-1');
+  assert.equal(clef.configurationHash, digest(['gateway', 'clef-flash', 'http://gateway.example:9000', 180000,
+    { toolKey: 'clef', portalKey: 'pulso-test', responseFormat: 'json_schema', maxTokens: 16000, temperature: 0,
+      outputSchemaVersion: 'clef-flash-schema-1' }]));
+  const previous = { ...clef, configurationHash: digest(['gateway', 'clef-flash', 'http://gateway.example:9000', 180000,
+    { toolKey: 'clef', portalKey: 'pulso-test', responseFormat: 'json_schema', maxTokens: 16000, temperature: 0 }]) };
+  assert.throws(() => models.resolve('clef-local', previous), { code: 'MODEL_CHANGED' });
+  assert.equal(gemma.configurationHash, registry().list()[1].configurationHash);
+  assert.ok(!Object.hasOwn(gemma, 'outputSchemaVersion'));
+});
+
 test('existing OpenAI/Gemini configuration hashes stay compatible', () => {
   const models = new ModelRegistry([{ id: 'historical', provider: 'openai', model: 'legacy-exact', enabled: true,
     evaluator: new OpenAIEvaluator({ apiKey: 'synthetic', baseUrl: 'https://api.openai.com/v1', model: 'legacy-exact', timeoutMs: 120000, fetchImpl: offline }) }]);

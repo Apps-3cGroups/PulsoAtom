@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { GatewayApiClient } from '../src/services/gatewayApiClient.js';
 import { GatewayEvaluator } from '../src/gateway-evaluator.js';
 import { evaluationInput, evaluationInstructions, evaluationSchema } from '../src/evaluator.js';
+import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from '../src/services/clefFlashSchema.js';
 
 const base = { baseUrl: 'http://gateway.test:9000', token: 'synthetic-secret-token', portalKey: 'pulsoAtom', toolKey: 'gemma', model: 'synthetic-gemma', timeoutMs: 180000 };
 const requestId = '00000000-1111-4222-8333-444444444444';
@@ -49,6 +50,8 @@ test('Gateway sends the audited envelope only to the configured backend and vali
       temperature: 0, max_tokens: 16000, stream: false,
       response_format: { type: 'json_schema', json_schema: { name: 'pulso_evaluation', strict: true, schema: evaluationSchema(variables) } } } });
   assert.equal(answer.model, base.model);
+  assert.equal(instance.outputSchemaVersion, undefined);
+  assert.equal(answer.outputSchemaVersion, undefined);
   assert.equal(answer.responseId, requestId);
   assert.deepEqual(answer.usage, { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 });
   assert.deepEqual(answer.validationErrors, []);
@@ -237,6 +240,12 @@ test('Clef Flash accepts a complete structured answer in reasoning_content only 
     const { instance, calls } = flashEvaluator(response);
     const answer = await instance.evaluate(conversation, variables);
     assert.equal(calls.length, 1);
+    assert.equal(instance.outputSchemaVersion, CLEF_FLASH_OUTPUT_SCHEMA_VERSION);
+    assert.equal(answer.outputSchemaVersion, CLEF_FLASH_OUTPUT_SCHEMA_VERSION);
+    const request = JSON.parse(calls[0][1].body).body;
+    assert.deepEqual(request.response_format.json_schema.schema, clefFlashEvaluationSchema(variables, conversation));
+    assert.deepEqual(request.messages, [{ role: 'system', content: evaluationInstructions },
+      { role: 'user', content: evaluationInput(conversation, variables) }]);
     assert.equal(answer.responseField, 'reasoning_content');
     assert.equal(answer.model, 'clef-flash');
     assert.equal(answer.responseId, requestId);

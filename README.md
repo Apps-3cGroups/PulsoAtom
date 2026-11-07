@@ -190,7 +190,7 @@ Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la 
 
 La instancia `clef-flash` comprobada en el Gateway utiliza **Chat** (`POST /v1/chat/completions`). Si deja `content` vacío y entrega un objeto JSON completo del checklist en `reasoning_content`, Pulso valida ese objeto con las mismas reglas de valores, motivos y evidencia. Esta compatibilidad se limita al ID exacto `clef-flash`; no extrae JSON de prosa ni sustituye una respuesta final no vacía. Las variables ausentes o inválidas siguen pendientes, nunca se convierten en ceros.
 
-Cada intento registra el campo utilizado (`responseField`) sin conservar el texto original. La respuesta de Gemma, las huellas de equivalencia, la política, la programación y las evaluaciones existentes no cambian al desplegar esta corrección.
+El esquema específico de Clef Flash exige las combinaciones válidas de estado, valor y evidencia, y limita las citas a IDs de mensajes existentes. Cada intento registra el campo utilizado (`responseField`) y la versión del esquema, sin conservar el texto original. Esa versión forma parte de la configuración de Clef: sus ejecuciones iniciadas con una versión anterior deben comenzar una nueva ejecución. Las instrucciones comunes, las huellas de Gemma, la política, la programación y las evaluaciones existentes se preservan.
 
 ### Clef: decisiones nativas
 

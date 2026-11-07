@@ -25,9 +25,11 @@ function fixture(evaluate) {
   const registry = new ModelRegistry(['clef-local', 'gemma-local'].map((id, index) => ({
     id, provider: 'gateway', model: index ? 'synthetic-gemma' : 'clef-flash', label: id, enabled: true,
     evaluator: { configured: true, toolKey: 'gemma', portalKey: 'portal-pulso', responseFormat: 'json_schema',
+      ...(index === 0 ? { outputSchemaVersion: 'clef-flash-schema-1' } : {}),
       maxTokens: 16000, temperature: 0, baseUrl: 'http://gateway.synthetic', timeoutMs: 180000,
       async evaluate(conversation, variables) {
-        return { ...await evaluate(index, conversation, variables), model: index ? 'synthetic-gemma' : 'clef-flash' };
+        return { ...await evaluate(index, conversation, variables), model: index ? 'synthetic-gemma' : 'clef-flash',
+          ...(index === 0 ? { outputSchemaVersion: 'clef-flash-schema-1' } : {}) };
       } },
   })));
   return { state, store, registry };
@@ -53,11 +55,13 @@ test('each retry records its own output field without duplicating results or cha
   assert.deepEqual(calls[0], [state.catalog.map(v => v.id), [state.catalog[1].id]]);
   assert.equal(calls[1].length, 1);
   assert.ok(attempts.every(a => a.actualModel === 'clef-flash'));
+  assert.ok(attempts.every(a => a.outputSchemaVersion === 'clef-flash-schema-1'));
   const evaluation = state.evaluations.find(e => e.profileId === 'clef-local');
   assert.equal(evaluation.model, 'clef-flash');
   assert.equal(evaluation.results.length, 2);
   assert.equal(new Set(evaluation.results.map(r => r.variableId)).size, 2);
   assert.equal(evaluation.modelConfiguration.configurationHash, profile.configurationHash);
+  assert.equal(evaluation.modelConfiguration.outputSchemaVersion, 'clef-flash-schema-1');
   for (const [key, value] of Object.entries(context)) assert.equal(evaluation[key], value);
   assert.ok(!Object.hasOwn(evaluation, 'responseField'));
   assert.ok(!Object.hasOwn(state.tasks.find(t => t.profile.id === 'clef-local').profileStates['clef-local'], 'responseField'));

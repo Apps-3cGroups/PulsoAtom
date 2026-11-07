@@ -1,6 +1,7 @@
 import { AppError } from './errors.js';
 import { evaluationInput, evaluationInstructions, evaluationSchema, supportsAiVariable, validateEvaluation } from './evaluator.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
+import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from './services/clefFlashSchema.js';
 
 const safeUsage = value => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -15,6 +16,7 @@ export class GatewayEvaluator {
     maxTokens = 16000, temperature = 0, responseFormat = 'json_schema', fetchImpl = fetch } = {}) {
     this.#client = new GatewayApiClient({ baseUrl, token, portalKey, timeoutMs, fetchImpl });
     Object.assign(this, { baseUrl: this.#client.baseUrl, portalKey, toolKey, model, timeoutMs, maxTokens, temperature, responseFormat });
+    if (model === 'clef-flash') this.outputSchemaVersion = CLEF_FLASH_OUTPUT_SCHEMA_VERSION;
   }
   get configured() {
     return this.#client.configured && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(this.toolKey || '')
@@ -34,7 +36,7 @@ export class GatewayEvaluator {
     if (!this.configured) throw new AppError(503, 'Falta configurar el modelo local y su herramienta en el Gateway.', 'AI_CONFIGURATION');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
-    const schema = evaluationSchema(variables);
+    const schema = this.model === 'clef-flash' ? clefFlashEvaluationSchema(variables, conversation) : evaluationSchema(variables);
     const messages = [{ role: 'system', content: evaluationInstructions }];
     if (this.responseFormat === 'json_object') {
       messages.push({ role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
@@ -94,6 +96,7 @@ export class GatewayEvaluator {
       }
     }
     return { ...validated, model: payload.model,
-      responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage) };
+      responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage),
+      ...(this.outputSchemaVersion ? { outputSchemaVersion: this.outputSchemaVersion } : {}) };
   }
 }
