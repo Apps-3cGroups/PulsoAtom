@@ -52,7 +52,20 @@ try {
     return response;
   };
   const result = await runClefConversationCheck({ connection, reader, readState, fetchImpl: captureFetch, outputPath });
-  console.log(JSON.stringify({ operation: 'capture-and-validate-clef-flash', networkRequests, replayedResponses, ...result }, null, 2));
+  const captured = JSON.parse(await readFile(capturedPath, 'utf8'));
+  const message = captured.envelope?.response?.choices?.[0]?.message;
+  const parsed = JSON.parse(message?.content?.trim() ? message.content : message.reasoning_content);
+  const combinations = {}, reasonLengths = [];
+  for (const item of Object.values(parsed.results || {})) {
+    const status = ['evaluado', 'no_evaluado'].includes(item?.status) ? item.status : 'invalid';
+    const value = item?.value == null ? String(item?.value) : [0, 1].includes(item.value) ? String(item.value) : Array.isArray(item.value) ? 'list' : typeof item.value;
+    const key = `${status}:${value}`;
+    combinations[key] = (combinations[key] || 0) + 1;
+    if (typeof item?.reason === 'string') reasonLengths.push(item.reason.length);
+  }
+  console.log(JSON.stringify({ operation: 'capture-and-validate-clef-flash', networkRequests, replayedResponses,
+    capturedStructure: { items: Object.keys(parsed.results || {}).length, combinations,
+      reasonMinLength: Math.min(...reasonLengths), reasonMaxLength: Math.max(...reasonLengths) }, ...result }, null, 2));
   process.exitCode = result.success ? 0 : 1;
 } catch {
   console.error(JSON.stringify({ operation: 'capture-and-validate-clef-flash', error: 'CAPTURE_CHECK_FAILED', networkRequests, replayedResponses }));
