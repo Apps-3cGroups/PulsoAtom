@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { GatewayApiClient } from '../src/services/gatewayApiClient.js';
 import { evaluationSchema, validateEvaluation } from '../src/evaluator.js';
+import { safeGatewayErrorDetails } from '../src/services/safeGatewayError.js';
 
 const model = 'cloudflare_clef', toolKey = 'gemma';
 const variable = { id: 'cliente_felicito_al_asistente', type: 'Flag', method: 'IA',
@@ -29,13 +30,13 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const finishReasons = new Set(['stop', 'length', 'content_filter', 'tool_calls', 'function_call']);
 
 // Only fixed, fictitious input. No database, Atom, settings writes, or retries.
-export async function runSmallClefChecks({ env = process.env, fetchImpl = fetch, onStage = () => {} } = {}) {
+export async function runSmallClefChecks({ env = process.env, fetchImpl = fetch, onStage = () => {}, minimalOnly = false } = {}) {
   if ((env.GATEWAY_PORTAL_KEY ?? 'portal-pulso') !== 'portal-pulso') throw new Error('Unexpected portal');
   let hostname;
   try { hostname = new URL(env.GATEWAY_BASE_URL).hostname; } catch {}
   const secrets = [env.AGENT_SHARED_TOKEN, env.GATEWAY_BASE_URL, hostname].filter(Boolean);
   const stages = [];
-  for (const definition of definitions) {
+  for (const definition of minimalOnly ? definitions.slice(0, 1) : definitions) {
     const body = { model, messages: definition.messages, temperature: 0, max_tokens: definition.maxTokens, stream: false,
       ...(definition.format ? { response_format: definition.format } : {}) };
     let protocol = null;
@@ -48,6 +49,7 @@ export async function runSmallClefChecks({ env = process.env, fetchImpl = fetch,
         protocol.upstreamStatus = Number.isInteger(upstream) && upstream >= 100 && upstream <= 599 ? upstream : null;
         protocol.requestUuid = safeId(envelope?.request_uuid, secrets);
         protocol.actualModel = safeId(envelope?.response?.model, secrets);
+        if (!response.ok || (Number.isInteger(upstream) && upstream >= 400) || envelope?.ok === false) protocol.errorDetails = safeGatewayErrorDetails(envelope, env);
       } catch {}
       return response;
     };
@@ -93,16 +95,18 @@ export async function runSmallClefChecks({ env = process.env, fetchImpl = fetch,
     // more requests, retry, or silently substitute another model after failure.
     if (!report.completed) break;
   }
-  return { synthetic: true, model, toolKey, success: stages.length === definitions.length && stages.every(stage => stage.completed && stage.contractValid && stage.expectedResult),
+  return { synthetic: true, model, toolKey, success: stages.length === (minimalOnly ? 1 : definitions.length) && stages.every(stage => stage.completed && stage.contractValid && stage.expectedResult),
     stages, skipped: definitions.slice(stages.length).map(stage => stage.stage),
     note: 'Diagnóstico sintético. No modifica catálogo, perfiles, política ni evaluaciones. Las etapas de una variable comparten mensajes y parámetros salvo response_format.' };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    if (process.argv.length !== 2) throw new Error('No arguments supported');
+    const args = process.argv.slice(2);
+    const minimalOnly = args.length === 1 && args[0] === '--diagnose-error';
+    if (args.length && !minimalOnly) throw new Error('Unsupported arguments');
     await import('../src/config.js');
-    const result = await runSmallClefChecks({ onStage: stage => console.log(JSON.stringify({ completedStage: stage })) });
+    const result = await runSmallClefChecks({ minimalOnly, onStage: stage => console.log(JSON.stringify({ completedStage: stage })) });
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.success ? 0 : 1;
   } catch { console.error('No se pudo completar el diagnóstico sintético corto de Clef; no se modificaron datos.'); process.exitCode = 2; }

@@ -18,7 +18,7 @@ function fixture(change = () => {}) {
         choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(index === 0 ? { ok: true } : result) } }] } };
     return change({ index, envelope, body }) || response(envelope);
   };
-  return { requests, events, run: () => runSmallClefChecks({ env, fetchImpl, onStage: stage => events.push(stage) }) };
+  return { requests, events, run: (options = {}) => runSmallClefChecks({ env, fetchImpl, onStage: stage => events.push(stage), ...options }) };
 }
 
 test('three successful probes preserve identical one-variable prompts and parameters except response_format', async () => {
@@ -96,4 +96,13 @@ test('schema rejection keeps the successful plain JSON result visible', async ()
   assert.equal(report.stages[2].errorCode, 'AI_CONFIGURATION');
   assert.equal(report.stages[2].protocol.upstreamStatus, 400);
   assert.deepEqual(report.skipped, []);
+});
+
+
+test('error diagnostic mode makes only the minimal request even when it succeeds', async () => {
+  const { run, requests } = fixture();
+  const report = await run({ minimalOnly: true });
+  assert.equal(requests.length, 1);
+  assert.equal(report.success, true);
+  assert.deepEqual(report.skipped, ['one-variable-json', 'one-variable-schema']);
 });
