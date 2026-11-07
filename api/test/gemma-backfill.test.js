@@ -117,7 +117,7 @@ test('last twenty weekly cases are deterministic under ties and do not expand wh
 
 test('scope is integrity protected, malformed dates fail closed, and old format-two manifests remain readable', () => {
   const { state, registry } = fixture(1);
-  for (const override of [{ from: '2026-02-30' }, { to: '2026-11-01' }, { limit: 0 }, { limit: 101 },
+  for (const override of [{ from: '2026-02-30' }, { to: '2026-11-01' }, { limit: 0 }, { limit: 501 },
     { timezone: 'UTC' }, { basis: 'source_updated' }]) {
     assert.throws(() => createGemmaBackfillPlan(state, registry, { selection: { ...weeklySelection, ...override } }), { code: 'INVALID_BACKFILL_SELECTION' });
   }

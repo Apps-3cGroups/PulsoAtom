@@ -31,6 +31,7 @@ export function gemmaBackfillProfile(state, registry) {
 const immutable = manifest => ({ format: manifest.format, id: manifest.id, createdAt: manifest.createdAt,
   profile: manifest.profile, policyVersion: manifest.policyVersion, catalogVersions: manifest.catalogVersions,
   ...(manifest.selection && typeof manifest.selection === 'object' ? { selection: manifest.selection } : {}),
+  ...(manifest.revision ? { revision: manifest.revision } : {}),
   conversations: manifest.conversations });
 
 function activityTime(conversation) {
@@ -49,10 +50,10 @@ export function normalizeGemmaSelection(selection) {
   const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
     && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`)) && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
   if (!selection || !validDate(selection.from) || !validDate(selection.to) || selection.from > selection.to
-    || !Number.isInteger(selection.limit) || selection.limit < 1 || selection.limit > 100
+    || !Number.isInteger(selection.limit) || selection.limit < 1 || selection.limit > 500
     || selection.timezone !== 'America/Tegucigalpa' || selection.basis !== 'last_activity'
     || Object.keys(selection).some(key => !['from', 'to', 'timezone', 'basis', 'limit'].includes(key))) {
-    fail('INVALID_BACKFILL_SELECTION', 'Indica un rango de fechas válido y un límite entre 1 y 100, por última actividad en Tegucigalpa.');
+    fail('INVALID_BACKFILL_SELECTION', 'Indica un rango de fechas válido y un límite entre 1 y 500, por última actividad en Tegucigalpa.');
   }
   return { from: selection.from, to: selection.to, timezone: 'America/Tegucigalpa', basis: 'last_activity', limit: selection.limit };
 }
@@ -100,6 +101,42 @@ function validateManifest(manifest) {
     }
     keys.add(batch.idempotencyKey); batch.conversationIds.forEach(id => reserved.add(id));
   }
+}
+
+// An explicit new scope creates an audited successor. Existing tasks, results,
+// contexts and retry limits remain untouched; this function has no side effects.
+export function extendGemmaBackfillPlan(state, registry, manifest, { expectedTotal, selection, extendedAt = new Date().toISOString() }) {
+  assertGemmaBackfillState(state, registry, manifest);
+  if (state.jobs.some(liveJob) || state.tasks.some(t => t.status === 'running') || state.attempts.some(a => a.status === 'running')) fail('EVALUATION_RUNNING', 'Espera a que finalice el trabajador actual antes de ampliar la muestra.');
+  const scope = normalizeGemmaSelection(selection);
+  if (!Number.isInteger(expectedTotal) || expectedTotal < 1 || manifest.conversations.length !== expectedTotal) fail('BACKFILL_TOTAL_CHANGED', 'El total del manifiesto cambió. No se amplió la muestra.');
+  if (scope.limit <= expectedTotal) fail('INVALID_BACKFILL_SELECTION', 'La ampliación debe solicitar más conversaciones que la muestra actual.');
+  if (!manifest.selection || typeof manifest.selection !== 'object' || scope.from > manifest.selection.from || scope.to < manifest.selection.to
+    || ['timezone', 'basis'].some(key => scope[key] !== manifest.selection[key])) fail('BACKFILL_RANGE_CHANGED', 'La ampliación debe incluir el período anterior y conservar el criterio de actividad.');
+  const asOf = Date.parse(extendedAt);
+  if (!Number.isFinite(asOf)) fail('INVALID_BACKFILL_SELECTION', 'La fecha de la ampliación no es válida.');
+  const source = { ...state, conversations: state.conversations.filter(c => activityTime(c) <= asOf) };
+  const planned = createGemmaBackfillPlan(source, registry, { maintenanceId: manifest.id, selection: scope, createdAt: manifest.createdAt });
+  if (planned.conversations.length !== scope.limit) fail('INSUFFICIENT_CONVERSATIONS', 'No hay suficientes conversaciones en el período para completar el total solicitado.');
+  const selected = new Map(planned.conversations.map(c => [c.id, c]));
+  for (const previous of manifest.conversations) {
+    const current = selected.get(previous.id);
+    if (!current) fail('PREVIOUS_CASE_OUTSIDE_SELECTION', 'Una conversación anterior ya no pertenece a las últimas del período. No se sustituyó la muestra.');
+    if (!sameContext(current, previous)) fail('SOURCE_CHANGED', 'Cambió una conversación anterior. Conserva su evaluación y revisa el cambio antes de ampliar.');
+  }
+  const inspection = inspectGemmaBackfill(state, manifest);
+  if (inspection.invalid || inspection.changed || inspection.missing) fail('STORED_RESULT_INVALID', 'La muestra anterior contiene resultados inválidos o contenido cambiado. No se amplió.');
+  const previousCases = new Map(manifest.conversations.map(c => [c.id, c]));
+  const next = { ...structuredClone(manifest), selection: scope,
+    conversations: planned.conversations.map(c => structuredClone(previousCases.get(c.id) || c)),
+    revision: { number: (manifest.revision?.number || 1) + 1, parentIntegrityHash: manifest.integrityHash,
+      extendedAt, activityAsOf: extendedAt, previousTotal: expectedTotal, requestedTotal: scope.limit,
+      reusedCompleted: inspection.completed, retainedPending: inspection.pending },
+    status: 'planned', updatedAt: extendedAt };
+  delete next.summary; delete next.lastError;
+  next.integrityHash = digest(immutable(next));
+  validateManifest(next);
+  return next;
 }
 
 export function assertGemmaBackfillState(state, registry, manifest, { completed = false } = {}) {

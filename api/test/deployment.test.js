@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,4 +49,52 @@ test('login, sesión y logout usan la subruta configurada y la misma ruta de coo
 
 test('la API rechaza montar el portal en la raíz del dominio', () => {
   assert.throws(() => createApp(new UnconfiguredStore(), { ...settings, basePath: '/' }), /subruta/i);
+});
+
+const workflowPath = new URL('../../.github/workflows/deploy-pulso-atom.yml', import.meta.url);
+
+test('ampliar Gemma admite 500 sin ampliar el límite del reinicio inicial ni aceptar argumentos inyectados', async () => {
+  const workflow = await readFile(workflowPath, 'utf8');
+  const guard = operation => {
+    const block = workflow.match(new RegExp(`if \\(\\$env:GEMMA_OPERATION -ceq '${operation}'\\) \\{([\\s\\S]*?)^ {10}\\}`, 'm'))?.[1];
+    assert.ok(block, `Falta la validación específica de ${operation}`);
+    return variable => {
+      const pattern = block.match(new RegExp(`\\$env:${variable} -cnotmatch '([^']+)'`))?.[1];
+      assert.ok(pattern, `Falta validar ${variable} en ${operation}`);
+      return new RegExp(pattern);
+    };
+  };
+  const initialLimit = guard('gemma-start')('CONVERSATION_LIMIT');
+  const extension = guard('gemma-extend');
+  for (const value of ['1', '20', '100']) assert.equal(initialLimit.test(value), true);
+  for (const value of ['101', '500', '501']) assert.equal(initialLimit.test(value), false);
+  for (const variable of ['EXPECTED_EVALUATIONS', 'CONVERSATION_LIMIT']) {
+    const pattern = extension(variable);
+    for (const value of ['1', '20', '100', '499', '500']) assert.equal(pattern.test(value), true);
+    for (const value of ['', '0', '-1', '501', '1000', '01', '20.5', '20; id', '$(id)', '20 --start']) assert.equal(pattern.test(value), false);
+  }
+});
+
+test('gemma-extend es una operación explícita sobre producción validada y nunca invoca el reinicio', async () => {
+  const workflow = await readFile(workflowPath, 'utf8');
+  const mapping = workflow.split('\n').find(line => line.trim().startsWith("'gemma-extend' {"));
+  assert.ok(mapping);
+  assert.match(mapping, /\$entryScript = 'scripts\/extend-gemma-renewal\.js'/);
+  assert.match(mapping, /--extend --maintenance-id \$\(\$env:MAINTENANCE_ID\) --expected-total \$\(\$env:EXPECTED_EVALUATIONS\) --from \$\(\$env:FROM_DATE\) --to \$\(\$env:TO_DATE\) --limit \$\(\$env:CONVERSATION_LIMIT\)/);
+  assert.doesNotMatch(mapping, /--start|--prepare|reset-evaluations/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch' && .*inputs\.operation == 'gemma-extend'/);
+  assert.match(workflow, /\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\('gemma-preflight', 'gemma-inspect'\)/);
+  assert.match(workflow, /if \(\$env:GEMMA_OPERATION -cin @\('gemma-start', 'gemma-extend'\)\) \{\s+if \(\$env:FROM_DATE -cnotmatch/);
+  assert.equal((workflow.match(/\[datetime\]::TryParseExact/g) || []).length, 2);
+  assert.match(workflow, /\$fromDate -gt \$toDate/);
+  const uuidGuard = workflow.match(/\$env:GEMMA_OPERATION -cin @\('gemma-status', 'gemma-extend'\) -and \$env:MAINTENANCE_ID -cnotmatch '([^']+)'/);
+  assert.ok(uuidGuard);
+  const uuid = new RegExp(uuidGuard[1]);
+  assert.equal(uuid.test('77f00000-0000-4000-8000-000000000000'), true);
+  for (const value of ['', '../maintenance', '77f00000-0000-4000-8000-000000000000; id']) assert.equal(uuid.test(value), false);
+  const production = workflow.match(/\$remoteCommand = @'\n([\s\S]*?)\n {10}'@/)?.[1];
+  assert.ok(production);
+  assert.ok(production.indexOf('"$actual_sha" = "__EXPECTED_SHA__"') < production.indexOf('exec node'));
+  assert.ok(production.indexOf('diff --quiet HEAD -- api') < production.indexOf('exec node'));
+  assert.match(production, /node --env-file=\/var\/www\/nodeapps\/PulsoAtom\/api\/\.env __ENTRY_SCRIPT__ __SCRIPT_ARGUMENTS__/);
 });
