@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { config, databaseConfig, atomDatabaseConfig } from '../src/config.js';
 import { MysqlStore, AtomHistoryStore } from '../src/store.js';
 import { AtomReader } from '../src/atom.js';
@@ -23,7 +23,7 @@ const patterns = {
 let store;
 try {
   const mode = process.argv[2];
-  if (!['--inspect','--probe'].includes(mode) || process.argv.length !== 3) throw new Error('INVALID_MODE');
+  if (!['--inspect','--probe','--capture'].includes(mode) || process.argv.length !== 3) throw new Error('INVALID_MODE');
   const db = databaseConfig(), atom = atomDatabaseConfig();
   if (config.demo || db?.database !== 'dbPulsosAtom' || !atom) throw new Error('REAL_CONFIGURATION_REQUIRED');
   store = new AtomHistoryStore(new MysqlStore(db), new AtomReader(atom, config.timezone));
@@ -41,6 +41,36 @@ try {
       code: a.error ? safeCode(a.error.code) : null, httpStatus: httpStatus(a.error?.message),
       requestedVariables: a.variableIds.length, validResults: a.validVariableIds?.length || 0, durationMs: a.durationMs }))
   })) };
+  if (mode === '--capture') {
+    const captures = (await readdir(directory)).filter(name => /^private-error-diagnostic-\d+\.json$/.test(name)).sort();
+    if (!captures.length) throw new Error('NO_PRIVATE_CAPTURE');
+    const captured = JSON.parse(await readFile(`${directory}/${captures.at(-1)}`, 'utf8'));
+    const shape = [];
+    const visit = (value, path, depth = 0) => {
+      if (depth > 8) return;
+      if (typeof value === 'string') {
+        let decoded; try { decoded = JSON.parse(value); } catch {}
+        const text = value.toLowerCase();
+        shape.push({ path, type: 'string', length: value.length, jsonEncoded: !!decoded,
+          signals: Object.entries({ keep_first: /trying\s+to\s+keep\s+the\s+first/i,
+            truncate: /cannot\s+truncate\s+prompt/i, context_exceeded: /context.{0,40}exceed/i,
+            exceeds_context: /exceed.{0,40}context/i, greater_context: /greater.{0,40}context/i,
+            context_overflow: /context\s+overflows/i, context_length: /context\s+length/i,
+            input_too_long: /input.{0,30}too\s+long/i,
+            token_request: /requested.{0,30}tokens|tokens.{0,30}requested/i,
+            error_predicting: /error\s+predicting/i,
+            system_prompt_length: /system.{0,30}prompt|initial.{0,30}prompt/i,
+          }).filter(([,regex]) => regex.test(text)).map(([name]) => name) });
+        if (decoded) visit(decoded, `${path}.json`, depth + 1);
+      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const keys = Object.keys(value), known = ['response','error','message','detail','body','data','content','code','type','text'];
+        shape.push({ path, type: 'object', knownKeys: keys.filter(key => known.includes(key)), otherKeyCount: keys.filter(key => !known.includes(key)).length });
+        for (const key of known) if (Object.hasOwn(value, key)) visit(value[key], `${path}.${key}`, depth + 1);
+      }
+    };
+    visit(captured.body, 'envelope');
+    diagnostic.captureShape = shape;
+  }
   if (mode === '--probe') {
     if (tasks.length !== 1 || tasks[0].error.code !== 'AI_CONFIGURATION') throw new Error('PROBE_SCOPE_CHANGED');
     const task = tasks[0];
