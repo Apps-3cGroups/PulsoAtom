@@ -4,7 +4,6 @@ import { GatewayApiClient } from '../src/services/gatewayApiClient.js';
 import { evaluationSchema, validateEvaluation } from '../src/evaluator.js';
 import { safeGatewayErrorDetails } from '../src/services/safeGatewayError.js';
 
-const model = 'cloudflare_clef', toolKey = 'gemma';
 const variable = { id: 'cliente_felicito_al_asistente', type: 'Flag', method: 'IA',
   name: 'Cliente felicitó al asistente',
   definition: '1 si el cliente felicitó explícitamente al asistente. Un agradecimiento intenso no se considera felicitación.' };
@@ -30,7 +29,9 @@ const hash = value => createHash('sha256').update(JSON.stringify(value)).digest(
 const finishReasons = new Set(['stop', 'length', 'content_filter', 'tool_calls', 'function_call']);
 
 // Only fixed, fictitious input. No database, Atom, settings writes, or retries.
-export async function runSmallClefChecks({ env = process.env, fetchImpl = fetch, onStage = () => {}, minimalOnly = false } = {}) {
+export async function runSmallClefChecks({ env = process.env, fetchImpl = fetch, onStage = () => {}, minimalOnly = false, model = 'cloudflare_clef', toolKey = 'gemma' } = {}) {
+  if (typeof model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,199}$/.test(model) || model.includes('://')
+    || !['gemma', 'qwen', 'clef'].includes(toolKey)) throw new Error('Unsupported diagnostic target');
   if ((env.GATEWAY_PORTAL_KEY ?? 'portal-pulso') !== 'portal-pulso') throw new Error('Unexpected portal');
   let hostname;
   try { hostname = new URL(env.GATEWAY_BASE_URL).hostname; } catch {}
