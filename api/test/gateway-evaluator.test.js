@@ -81,6 +81,17 @@ test('partial replies retain valid answers and identify only missing or invalid 
   assert.deepEqual(missing.validationErrors[0].rules, ['missing_item']);
 });
 
+test('Clef captured status/value contradictions remain pending instead of becoming absent events', async () => {
+  const raw = valid();
+  raw.results.event = { status: 'no_evaluado', value: 0, reason: 'Respuesta sintética contradictoria.', evidence_message_ids: [] };
+  const response = payload(); response.model = 'clef-flash';
+  response.choices[0].message = { content: '', reasoning_content: JSON.stringify(raw) };
+  const answer = await evaluator(envelope(response), { model: 'clef-flash' }).instance.evaluate(conversation, variables);
+  assert.equal(answer.responseField, 'reasoning_content');
+  assert.deepEqual(answer.results.map(r => r.variableId), ['tipo_interaccion']);
+  assert.deepEqual(answer.validationErrors.map(e => [e.variableId, e.rules]), [['event', ['inconsistent_status_value']]]);
+});
+
 test('abstention is a valid result and is never converted to no flag', async () => {
   const raw = { results: { event: { status: 'no_evaluado', value: null, reason: 'Contexto insuficiente.', evidence_message_ids: [] } } };
   const answer = await evaluator(envelope(payload(raw))).instance.evaluate(conversation, [variables[0]]);
@@ -209,4 +220,129 @@ test('evaluator discovery reuses its private Gateway configuration without expos
   assert.equal(requests.length, 2);
   assert.ok(requests.every(([, options]) => options.headers['X-Gateway-Token'] === base.token));
   assert.ok(!JSON.stringify(result).includes(base.token));
+});
+
+const flashPayload = (raw = valid(), content = '') => {
+  const response = payload();
+  response.model = 'clef-flash';
+  response.choices[0].message = { role: 'assistant', content, reasoning_content: JSON.stringify(raw) };
+  return response;
+};
+const flashEvaluator = response => evaluator(envelope(response), { model: 'clef-flash' });
+
+test('Clef Flash accepts a complete structured answer in reasoning_content only when final content is empty', async () => {
+  for (const empty of ['', ' \n ', null, undefined]) {
+    const response = flashPayload(valid(), empty);
+    if (empty === undefined) delete response.choices[0].message.content;
+    const { instance, calls } = flashEvaluator(response);
+    const answer = await instance.evaluate(conversation, variables);
+    assert.equal(calls.length, 1);
+    assert.equal(answer.responseField, 'reasoning_content');
+    assert.equal(answer.model, 'clef-flash');
+    assert.equal(answer.responseId, requestId);
+    assert.deepEqual(answer.validationErrors, []);
+    assert.equal(answer.results.length, 2);
+    assert.deepEqual(answer.results[0].evidence, [{ messageId: 'm2', quote: conversation.messages[1].text }]);
+    assert.equal(answer.results[1].value, 'disponibilidad');
+    assert.ok(!Object.hasOwn(answer, 'reasoning_content'));
+    assert.ok(!Object.hasOwn(answer, 'raw'));
+  }
+});
+
+test('Clef alternate-channel answers preserve partial validation and abstentions without inventing results', async () => {
+  const raw = valid();
+  raw.results.event = { status: 'no_evaluado', value: null, reason: 'Contexto insuficiente.', evidence_message_ids: [] };
+  raw.results.tipo_interaccion.evidence_message_ids = ['invented'];
+  const answer = await flashEvaluator(flashPayload(raw)).instance.evaluate(conversation, variables);
+  assert.equal(answer.responseField, 'reasoning_content');
+  assert.deepEqual(answer.results.map(r => [r.variableId, r.status, r.value]), [['event', 'no_evaluado', null]]);
+  assert.deepEqual(answer.validationErrors.map(r => [r.variableId, r.rules]), [['tipo_interaccion', ['unknown_evidence_message']]]);
+  delete raw.results.tipo_interaccion;
+  const missing = await flashEvaluator(flashPayload(raw)).instance.evaluate(conversation, variables);
+  assert.deepEqual(missing.validationErrors[0].rules, ['missing_item']);
+  raw.results.event = { status: 'evaluado', value: 1, reason: '', evidence_message_ids: [] };
+  const invalid = await flashEvaluator(flashPayload(raw)).instance.evaluate(conversation, variables);
+  assert.equal(invalid.results.length, 0);
+  assert.deepEqual(invalid.validationErrors[0].rules, ['invalid_reason', 'missing_evidence']);
+});
+
+test('a final content answer takes precedence and an invalid nonempty answer is never replaced', async () => {
+  const raw = valid(); raw.results.event.value = 0; raw.results.event.evidence_message_ids = [];
+  const response = flashPayload(valid(), JSON.stringify(raw));
+  response.choices[0].message.reasoning_content = 'PRIVATE_REASONING_MUST_NOT_ESCAPE';
+  const answer = await flashEvaluator(response).instance.evaluate(conversation, variables);
+  assert.equal(answer.responseField, 'content');
+  assert.equal(answer.results[0].value, 0);
+  assert.ok(!JSON.stringify(answer).includes('PRIVATE_REASONING_MUST_NOT_ESCAPE'));
+  for (const content of ['not JSON', '```json\n{}\n```', '{}', [], {}, 0, false]) {
+    await assert.rejects(flashEvaluator(flashPayload(valid(), content)).instance.evaluate(conversation, variables), code('INVALID_AI_RESULT'));
+  }
+});
+
+test('alternate-channel compatibility is limited to the exact verified Clef Flash identity', async () => {
+  const response = flashPayload(); response.model = base.model;
+  await assert.rejects(evaluator(envelope(response)).instance.evaluate(conversation, variables), code('INVALID_AI_RESULT'));
+  for (const [model, error] of [['cloudflare_clef', 'MODEL_CHANGED'], [undefined, 'MODEL_IDENTITY_UNVERIFIED']]) {
+    const mismatch = flashPayload(); mismatch.model = model;
+    await assert.rejects(flashEvaluator(mismatch).instance.evaluate(conversation, variables), code(error));
+  }
+});
+
+test('reasoning prose, JSON fragments, unrelated objects and unexpected checklist variables remain invalid', async () => {
+  const secret = 'PRIVATE_REASONING_MUST_NOT_ESCAPE';
+  for (const text of [secret, `${secret}\n${JSON.stringify(valid())}`, '```json\n' + JSON.stringify(valid()) + '\n```',
+    JSON.stringify({ ...valid(), reasoning: secret }), JSON.stringify({ reasoning: secret }),
+    JSON.stringify({ results: { other_variable: valid().results.event } }), '{"results":[]}', 'null', '[]']) {
+    const response = flashPayload(); response.choices[0].message.reasoning_content = text;
+    await assert.rejects(flashEvaluator(response).instance.evaluate(conversation, variables), error => {
+      assert.equal(error.code, 'INVALID_AI_RESULT');
+      assert.ok(!error.message.includes(secret));
+      assert.ok(!JSON.stringify(error).includes(secret));
+      return true;
+    });
+  }
+});
+
+test('unexpected alternate-channel item fields reject only that variable and feed a scoped retry', async () => {
+  const raw = valid(), secret = 'PRIVATE_REASONING_MUST_NOT_ESCAPE';
+  raw.results.tipo_interaccion.analysis = secret;
+  const first = await flashEvaluator(flashPayload(raw)).instance.evaluate(conversation, variables);
+  assert.deepEqual(first.results.map(result => result.variableId), ['event']);
+  assert.deepEqual(first.validationErrors, [{ variableId: 'tipo_interaccion', code: 'INVALID_AI_RESULT',
+    rules: ['unexpected_fields'], message: 'Respuesta inválida para tipo_interaccion: unexpected_fields.' }]);
+  assert.ok(!JSON.stringify(first).includes(secret));
+
+  const pending = variables.filter(variable => first.validationErrors.some(error => error.variableId === variable.id));
+  const retry = flashEvaluator(flashPayload({ results: { tipo_interaccion: valid().results.tipo_interaccion } }));
+  const corrected = await retry.instance.evaluate(conversation, pending, { validationErrors: first.validationErrors });
+  assert.deepEqual(corrected.results.map(result => result.variableId), ['tipo_interaccion']);
+  assert.deepEqual(corrected.validationErrors, []);
+  const request = JSON.parse(retry.calls[0][1].body).body;
+  const input = JSON.parse(request.messages.at(-1).content);
+  assert.deepEqual(input.variables.map(variable => variable.id), ['tipo_interaccion']);
+  assert.deepEqual(input.correccionesFormato, [{ variableId: 'tipo_interaccion', rules: ['unexpected_fields'] }]);
+  assert.ok(!JSON.stringify(request).includes(secret));
+
+  raw.results.tipo_interaccion.reason = '';
+  const mixed = await flashEvaluator(flashPayload(raw)).instance.evaluate(conversation, variables);
+  assert.deepEqual(mixed.results.map(result => result.variableId), ['event']);
+  assert.deepEqual(mixed.validationErrors[0].rules, ['invalid_reason', 'unexpected_fields']);
+});
+
+test('alternate structured answers cannot bypass refusals, truncation, or tool calls', async () => {
+  for (const [change, expected] of [
+    [{ refusal: 'Rejected' }, 'AI_SAFETY_REFUSAL'],
+    [{ finish_reason: 'content_filter' }, 'AI_SAFETY_REFUSAL'],
+    [{ finish_reason: 'length' }, 'AI_INCOMPLETE'],
+    [{ tool_calls: [{ id: 'tool-1', function: { name: 'other' } }] }, 'INVALID_AI_RESULT'],
+    [{ tool_calls: {} }, 'INVALID_AI_RESULT'],
+    [{ function_call: { name: 'other' } }, 'INVALID_AI_RESULT'],
+  ]) {
+    const response = flashPayload();
+    if (change.finish_reason) response.choices[0].finish_reason = change.finish_reason;
+    else Object.assign(response.choices[0].message, change);
+    await assert.rejects(flashEvaluator(response).instance.evaluate(conversation, variables), code(expected));
+  }
+  const response = flashPayload(); response.choices[0].message.tool_calls = [];
+  assert.equal((await flashEvaluator(response).instance.evaluate(conversation, variables)).results.length, 2);
 });

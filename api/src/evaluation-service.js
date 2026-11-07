@@ -246,6 +246,9 @@ async function processTask(store, registry, job, task, conversation, catalog) {
           validationErrors: itemErrors.map(({ variableId, rules }) => ({ variableId, rules })),
         });
         if (!Array.isArray(response.results) || response.results.some(r => !pending.some(v => v.id === r.variableId)) || new Set(response.results.map(r => r.variableId)).size !== response.results.length) throw new AppError(502, 'Resultado estructurado incompleto o duplicado.', 'INVALID_AI_RESULT');
+        // Audit only the output channel used by this attempt. Never retain raw
+        // model output or mix channel metadata into equivalence/protocol hashes.
+        const responseField = ['content', 'reasoning_content'].includes(response.responseField) ? response.responseField : null;
         const actualModel = response.model || profile.model;
         if (retained.size && metadata.model !== actualModel) throw new AppError(409, 'El proveedor cambió el modelo efectivo durante el reintento.', 'MODEL_CHANGED');
         attemptMetadata = nativeMetadata(response, profile, pending.map(v => v.id));
@@ -262,6 +265,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         profileStates[profile.id] = { ...metadata, results: [...retained.values()], validationErrors: itemErrors };
         await store.transaction(s => {
           Object.assign(s.attempts.find(a => a.id === attempt.id), { status: lastError ? 'partial' : 'completed', finishedAt: now(), durationMs: Date.now() - started,
+            ...(responseField ? { responseField } : {}),
             actualModel, usage: response.usage || null, ...attemptMetadata, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
           s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
         });
