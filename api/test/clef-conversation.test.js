@@ -48,6 +48,9 @@ test('one real-content-shaped probe is isolated, strips quotes and is idempotent
   assert.equal(summary.success, true);
   assert.equal(summary.status, 'completed');
   assert.equal(summary.gemmaComparable, true);
+  assert.equal(summary.protocol.responseShape.content.type, 'string');
+  assert.equal(summary.protocol.responseShape.contentHasResults, true);
+  assert.equal(summary.protocol.responseShape.reasoningContent.type, 'missing');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.model, 'clef-flash');
   assert.equal(calls[0].body.max_tokens, 16000);
@@ -79,9 +82,30 @@ test('invalid output remains a failed single attempt with protocol metadata and 
   assert.equal(summary.protocol.finishReason, 'stop');
   assert.equal(summary.protocol.outputCharacters, 19);
   assert.equal(summary.protocol.usage.total_tokens, 15);
+  assert.equal(summary.protocol.responseShape.content.type, 'string');
+  assert.equal(summary.protocol.responseShape.contentIsJsonObject, false);
   assert.equal(summary.pendingVariables, 2);
   assert.equal(calls.length, 1);
   assert.ok(!(await readFile(outputPath, 'utf8')).includes('UNSAFE_RAW_RESPONSE'));
+});
+
+test('reasoning-only replies retain structural diagnostics without exposing reasoning or treating it as results', async t => {
+  const { args, calls, outputPath } = await fixture(t, ({ envelope }) => {
+    envelope.response.choices[0].message.content = null;
+    envelope.response.choices[0].message.reasoning_content = '{"results":{"PRIVATE_REASONING":"SECRET_DIAGNOSTIC_TEXT"}}';
+  });
+  const summary = await runClefConversationCheck(args);
+  assert.equal(summary.success, false);
+  assert.equal(summary.validVariables, 0);
+  assert.equal(summary.errorCode, 'INVALID_AI_RESULT');
+  assert.equal(summary.protocol.responseShape.content.type, 'null');
+  assert.equal(summary.protocol.responseShape.reasoningContent.type, 'string');
+  assert.equal(summary.protocol.responseShape.reasoningHasResults, true);
+  assert.equal(calls.length, 1);
+  for (const text of [JSON.stringify(summary), await readFile(outputPath, 'utf8')]) {
+    assert.ok(!text.includes('PRIVATE_REASONING'));
+    assert.ok(!text.includes('SECRET_DIAGNOSTIC_TEXT'));
+  }
 });
 
 test('partial output retains per-variable validation errors; changed source prevents a successful check', async t => {
@@ -135,4 +159,37 @@ test('database selection uses only read-only transaction and SELECT for the exac
   assert.equal(selected.reference.conversationId, '123');
   assert.equal(statements[0], 'START TRANSACTION READ ONLY');
   assert.ok(statements.every(sql => /^(START TRANSACTION READ ONLY|SELECT)/.test(sql)));
+});
+
+test('prompt-json is an explicit diagnostic variant with hashed effective body and no Gemma equivalence', async t => {
+  const { args, calls, outputPath } = await fixture(t);
+  const summary = await runClefConversationCheck({ ...args, requestMode: 'prompt-json' });
+  assert.equal(summary.success, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.response_format, undefined);
+  assert.equal(calls[0].body.messages[1].role, 'system');
+  assert.match(calls[0].body.messages[1].content, /^Devuelve únicamente un objeto JSON/);
+  assert.match(calls[0].body.messages[1].content, /"cliente_felicito_al_asistente"/);
+  assert.equal(calls[0].body.messages.at(-1).role, 'user');
+  assert.equal(summary.requestMode, 'prompt-json');
+  assert.equal(summary.gemmaComparable, false);
+  assert.match(summary.requestHash, /^[a-f0-9]{64}$/);
+  const artifact = JSON.parse(await readFile(outputPath, 'utf8'));
+  assert.equal(artifact.requestHash, summary.requestHash);
+  assert.equal(artifact.requestMode, 'prompt-json');
+  assert.equal(artifact.gemmaReference.equivalent, false);
+  assert.equal(artifact.context, undefined);
+  assert.ok(artifact.baselineContext.promptHash);
+});
+
+test('invalid variants fail before work and completed artifacts cannot be reused under another variant', async t => {
+  const { args, calls, reads, snapshots } = await fixture(t);
+  await assert.rejects(runClefConversationCheck({ ...args, requestMode: 'unsupported' }), error => error.code === 'AI_CONFIGURATION');
+  assert.equal(calls.length, 0);
+  assert.equal(reads.length, 0);
+  assert.equal(snapshots.length, 0);
+  const first = await runClefConversationCheck(args);
+  assert.equal(first.requestMode, 'schema');
+  await assert.rejects(runClefConversationCheck({ ...args, requestMode: 'prompt-json' }), error => error.code === 'INVALID_SETTINGS');
+  assert.equal(calls.length, 1);
 });

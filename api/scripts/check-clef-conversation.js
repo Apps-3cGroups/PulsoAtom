@@ -6,6 +6,7 @@ import { GatewayEvaluator } from '../src/gateway-evaluator.js';
 import { catalogReferences, digest, evaluationContext } from '../src/evaluation-context.js';
 import { supportsAiVariable } from '../src/evaluator.js';
 import { safeGatewayErrorDetails } from '../src/services/safeGatewayError.js';
+import { summarizeModelResponse } from '../src/services/modelResponseShape.js';
 
 const maintenanceId = '77f134e8-fdf8-4154-b1f6-485c159b9194';
 const defaultOutput = '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics/clef-flash-real-2026-11-07.json';
@@ -77,29 +78,31 @@ async function writeArtifact(filename, artifact) {
   const directory = await open(path.dirname(filename), 'r');
   try { await directory.sync(); } finally { await directory.close(); }
 }
-async function completedArtifact(filename) {
+async function completedArtifact(filename, requestMode) {
   try {
     const existing = JSON.parse(await readFile(filename, 'utf8'));
-    if (existing.format !== 1 || existing.model !== model || existing.toolKey !== toolKey || !existing.finishedAt || !existing.summary) fail('INVALID_SETTINGS');
-    return { ...existing.summary, reused: true };
+    if (existing.format !== 1 || existing.model !== model || existing.toolKey !== toolKey || !existing.finishedAt || !existing.summary
+      || (existing.requestMode || 'schema') !== requestMode) fail('INVALID_SETTINGS');
+    return { ...existing.summary, requestMode, reused: true };
   } catch (error) { if (error.code !== 'ENOENT') throw error; return null; }
 }
 
 // Isolated real-content probe: no store, jobs, evaluation persistence or policy changes.
 export async function runClefConversationCheck({ connection, reader, env = process.env, fetchImpl = fetch,
-  outputPath = defaultOutput, readState = readProbeState } = {}) {
+  outputPath = defaultOutput, readState = readProbeState, requestMode = 'schema' } = {}) {
+  if (!['schema', 'prompt-json'].includes(requestMode)) fail('AI_CONFIGURATION');
   if ((env.GATEWAY_PORTAL_KEY ?? 'portal-pulso') !== 'portal-pulso') fail('AI_CONFIGURATION');
-  const existing = await completedArtifact(outputPath);
+  const existing = await completedArtifact(outputPath, requestMode);
   if (existing) return existing;
   await mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
   const lock = await open(`${outputPath}.lock`, 'wx', 0o600);
   let saved = false, inferenceStarted = false;
-  const artifact = { format: 1, purpose: 'isolated-real-content-probe', model, toolKey,
+  const artifact = { format: 1, purpose: 'isolated-real-content-probe', model, toolKey, requestMode, requestHash: null,
     startedAt: new Date().toISOString(), conversationId: null, results: [], validationErrors: [], protocol: null };
   try {
     // Another process may have finished between the first read and this lock.
     // Recheck while owning the reservation before any source read or inference.
-    const completed = await completedArtifact(outputPath);
+    const completed = await completedArtifact(outputPath, requestMode);
     if (completed) return completed;
     await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: artifact.startedAt })); await lock.sync();
     try {
@@ -116,17 +119,31 @@ export async function runClefConversationCheck({ connection, reader, env = proce
       const conversation = source.conversations.find(c => c.id === id);
       if (source.conversations.length !== 1 || !conversation?.messages.length) fail('INVALID_SOURCE');
       const context = evaluationContext(conversation, before.catalog);
-      artifact.context = context;
+      if (requestMode === 'schema') artifact.context = context;
+      else artifact.baselineContext = context;
       artifact.catalogVersions = catalogReferences(before.catalog);
       artifact.messageCount = conversation.messages.length;
       artifact.gemmaReference = { evaluationId: before.reference.id,
-        equivalent: ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => before.reference[key] === context[key]) };
+        equivalent: requestMode === 'schema' && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => before.reference[key] === context[key]) };
       const tracedFetch = async (...args) => {
+        const [url, options] = args, invocation = JSON.parse(options.body);
+        const body = invocation.body;
+        if (invocation.method !== 'POST' || invocation.path !== '/v1/chat/completions' || body?.model !== model) fail('AI_CONFIGURATION');
+        if (requestMode === 'prompt-json') {
+          const schema = body.response_format?.json_schema?.schema;
+          if (body.response_format?.type !== 'json_schema' || !schema || typeof schema !== 'object' || Array.isArray(schema)
+            || !Array.isArray(body.messages)) fail('AI_CONFIGURATION');
+          body.messages.splice(1, 0, { role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
+          delete body.response_format;
+        }
+        artifact.requestHash = digest(body);
+        args = [url, { ...options, body: JSON.stringify(invocation) }];
         const response = await fetchImpl(...args);
         const protocol = artifact.protocol = { gatewayHttpStatus: response.status, upstreamStatus: null, requestUuid: null,
           actualModel: null, finishReason: null, outputCharacters: 0, usage: {} };
         try {
           const envelope = await response.clone().json(), payload = envelope?.response, choice = payload?.choices?.length === 1 ? payload.choices[0] : null;
+          protocol.responseShape = summarizeModelResponse(payload);
           protocol.upstreamStatus = Number.isInteger(envelope?.upstream_status_code) ? envelope.upstream_status_code : null;
           protocol.requestUuid = safeId(envelope?.request_uuid, env);
           protocol.actualModel = safeId(payload?.model, env);
@@ -163,7 +180,7 @@ export async function runClefConversationCheck({ connection, reader, env = proce
     const safeProtocol = artifact.protocol ? (({ errorDetails, ...rest }) => rest)(artifact.protocol) : null;
     artifact.finishedAt = new Date().toISOString();
     artifact.summary = { success: complete && stable, status, reused: false, conversationId: artifact.conversationId,
-      model, toolKey, inferenceCount: inferenceStarted ? 1 : 0, requestedVariables: requested, validVariables: valid,
+      model, toolKey, requestMode, requestHash: artifact.requestHash, inferenceCount: inferenceStarted ? 1 : 0, requestedVariables: requested, validVariables: valid,
       abstentions: artifact.results.filter(r => preliminary(r).status === 'no_evaluado').length,
       pendingVariables: Math.max(0, requested - valid), preliminaryFlagIds: artifact.results.filter(r => r.type === 'Flag' && preliminary(r).status === 'evaluado' && preliminary(r).value === 1).map(r => r.variableId),
       validationErrors: artifact.validationErrors, errorCode: artifact.errorCode || null, protocol: safeProtocol,
