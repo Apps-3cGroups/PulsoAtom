@@ -3,6 +3,7 @@ import { MysqlStore } from '../src/store.js';
 import { registryFromEnv } from '../src/model-registry.js';
 import { AppError } from '../src/errors.js';
 import { inspectGemmaRenewal, prepareGemmaRenewal } from '../src/gemma-renewal-preparation.js';
+import { gemmaDetectionSummary } from '../src/gemma-detection-summary.js';
 
 function parse(args) {
   let mode = 'inspect', chosen = false, expectedPolicyVersion;
@@ -27,9 +28,12 @@ try {
   if (config.demo || !database) throw new AppError(409, 'Configura la base real de Pulso antes de preparar la renovación.', 'REAL_MODE_REQUIRED');
   store = new MysqlStore(database);
   const registry = registryFromEnv();
-  const result = options.mode === 'prepare'
-    ? await prepareGemmaRenewal(store, registry, options)
-    : inspectGemmaRenewal(await store.read(), registry);
+  let result;
+  if (options.mode === 'prepare') result = await prepareGemmaRenewal(store, registry, options);
+  else {
+    const state = await store.read();
+    result = { ...inspectGemmaRenewal(state, registry), gemmaDetections: gemmaDetectionSummary(state) };
+  }
   console.log(JSON.stringify({ event: options.mode, ...result,
     note: 'No se borraron evaluaciones ni se ejecutó IA. Atom no se consulta ni modifica.' }, null, 2));
 } catch (error) {
