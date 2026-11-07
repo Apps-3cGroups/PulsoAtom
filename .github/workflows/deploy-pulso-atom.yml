@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, clef-gateway-host, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-gateway-host' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: ${{ inputs.operation == 'clef-short-check' && 12 || 10 }}
@@ -120,7 +120,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          if ($env:GEMMA_OPERATION -cnotin @('clef-gateway-host', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
           $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
@@ -145,6 +145,7 @@ jobs:
           }
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'clef-gateway-host' { $entryScript = ''; $scriptArguments = '' }
             'clef-gateway-inspect' { $entryScript = 'scripts/inspect-gateway-administration.js'; $scriptArguments = '' }
             'clef-response-modes' { $entryScript = 'scripts/check-clef-response-modes.js'; $scriptArguments = '' }
             'clef-response-audit' { $entryScript = 'scripts/inspect-clef-response.js'; $scriptArguments = '--capabilities' }
@@ -178,7 +179,7 @@ jobs:
           $knownHosts = Join-Path $workDir 'known_hosts'
           $sourceRoot = Join-Path $env:GITHUB_WORKSPACE 'api'
           $remoteRoot = "/tmp/pulso-gemma-check-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
-          $sshTarget = 'ubuntu@10.252.1.214'
+          $sshTarget = if ($env:GEMMA_OPERATION -ceq 'clef-gateway-host') { 'ubuntu@10.252.1.248' } else { 'ubuntu@10.252.1.214' }
           $sshOptions = @()
           $remotePrepared = $false
           $checkExit = 2
@@ -205,7 +206,10 @@ jobs:
             Invoke-Checked -FilePath 'icacls' -Arguments @($keyPath, '/grant:r', "${identity}:R")
             $sshOptions = @('-i', $keyPath, '-p', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
             $scpOptions = @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
-            if ($useCheckoutSource) {
+            if ($env:GEMMA_OPERATION -ceq 'clef-gateway-host') {
+              # Existing deployment key, documented Gateway host/user. Read-only.
+              $remoteCommand = 'hostname; systemctl show agent-gateway.service --property=WorkingDirectory --property=FragmentPath --property=User; test -d /opt/agent-platform && ls /opt/agent-platform'
+            } elseif ($useCheckoutSource) {
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
