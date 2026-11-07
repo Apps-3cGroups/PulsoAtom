@@ -212,9 +212,11 @@ jobs:
               # Existing deployment key, documented Gateway host/user. Read-only.
               $remoteCommand = 'sudo -n sed -n "1,260p" /opt/agent-platform/gateway/current/api/app/services/gateway_tools.py'
             } elseif ($env:GEMMA_OPERATION -ceq 'clef-gateway-enable') {
-              $program = [System.IO.File]::ReadAllText((Join-Path $sourceRoot $entryScript))
-              $encodedProgram = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($program))
-              $remoteCommand = "sudo -n python3 -c 'import base64; exec(base64.b64decode(`"$encodedProgram`"))'"
+              Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
+              $remotePrepared = $true
+              $programPath = Join-Path $sourceRoot $entryScript
+              Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @($programPath, "${sshTarget}:$remoteRoot/gateway-decisions.py"))
+              $remoteCommand = "sudo -n python3 '$remoteRoot/gateway-decisions.py'"
             } elseif ($useCheckoutSource) {
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
