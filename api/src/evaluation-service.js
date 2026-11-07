@@ -342,15 +342,24 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     Object.assign(current, { status: partial ? 'partial' : 'completed', evaluationId: evaluation.id, error: failure ? safeError(failure) : null });
   });
 }
-export async function resumeEvaluationBatch(store, evaluator, jobId, { conversationIds } = {}) {
+export async function resumeEvaluationBatch(store, evaluator, jobId, { conversationIds, profileIds } = {}) {
   const storedState = await store.read();
   const storedJob = storedState.jobs?.find(j => j.id === jobId);
   if (!storedJob?.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
   const scoped = conversationIds !== undefined;
+  const profileScoped = profileIds !== undefined;
   if (scoped && (!Array.isArray(conversationIds) || !conversationIds.length || new Set(conversationIds).size !== conversationIds.length
     || conversationIds.some(id => !storedJob.conversationIds.includes(id)))) throw new AppError(422, 'La selección no pertenece a esta ejecución.', 'INVALID_RECHECK');
-  if (scoped && (!storedJob.maintenanceId || storedState.settings.evaluationMaintenance !== storedJob.maintenanceId)) throw new AppError(409, 'La reanudación parcial requiere el mismo mantenimiento activo.', 'EVALUATION_MAINTENANCE');
-  const state = ensureEvaluationState(await readHistory(store, scoped ? conversationIds : storedJob.conversationIds));
+  if (profileScoped && (!Array.isArray(profileIds) || !profileIds.length || new Set(profileIds).size !== profileIds.length
+    || profileIds.some(id => typeof id !== 'string' || !storedJob.modelProfiles.some(profile => profile.id === id)))) throw new AppError(422, 'Los modelos seleccionados no pertenecen a esta ejecución.', 'INVALID_RECHECK');
+  if ((scoped || profileScoped) && (!storedJob.maintenanceId || storedState.settings.evaluationMaintenance !== storedJob.maintenanceId)) throw new AppError(409, 'La reanudación parcial requiere el mismo mantenimiento activo.', 'EVALUATION_MAINTENANCE');
+  let readIds = scoped ? conversationIds : storedJob.conversationIds;
+  if (profileScoped) {
+    readIds = [...new Set((storedState.tasks || []).filter(task => task.jobId === jobId && task.status !== 'completed'
+      && profileIds.includes(task.profile.id) && readIds.includes(task.conversationId)).map(task => task.conversationId))];
+    if (!readIds.length) throw new AppError(409, 'La selección ya está completa.', 'ALREADY_COMPLETED');
+  }
+  const state = ensureEvaluationState(await readHistory(store, readIds));
   const registry = asRegistry(evaluator).forState(state);
   const job = state.jobs.find(j => j.id === jobId);
   if (!job || !job.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
@@ -361,9 +370,11 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
   if (digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
   if (state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.some(id => job.conversationIds.includes(id)))) throw new AppError(409, 'Existe una ejecución operativa posterior. Consulta el resultado vigente.', 'SUPERSEDED_JOB');
   const candidates = job.conversationIds.map(id => state.conversations.find(c => c.id === id)).filter(Boolean);
-  const pending = state.tasks.filter(t => t.jobId === jobId && t.status !== 'completed' && (!scoped || conversationIds.includes(t.conversationId)));
+  const pending = state.tasks.filter(t => t.jobId === jobId && t.status !== 'completed'
+    && (!scoped || conversationIds.includes(t.conversationId)) && (!profileScoped || profileIds.includes(t.profile.id)));
   if (!pending.length) throw new AppError(409, 'La ejecución ya está completa.', 'ALREADY_COMPLETED');
   for (const task of pending) {
+    if (profileScoped && task.fallback && !profileIds.includes(task.fallback.id)) throw new AppError(422, 'El respaldo está fuera de los modelos seleccionados.', 'INVALID_RECHECK');
     const c = candidates.find(c => c.id === task.conversationId);
     if (!c || sourceFingerprint(c) !== task.context.sourceHash) throw new AppError(409, 'Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
     const context = evaluationContext(c, catalog);
@@ -373,7 +384,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
   await store.transaction(s => {
     recoverInterrupted(s);
     if (s.settings.evaluationMaintenance && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
-    if (scoped && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'El mantenimiento de la reanudación parcial cambió.', 'EVALUATION_MAINTENANCE');
+    if ((scoped || profileScoped) && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'El mantenimiento de la reanudación parcial cambió.', 'EVALUATION_MAINTENANCE');
     if (s.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
     const currentRegistry = registry.forState(s);
     for (const task of pending) {
@@ -385,7 +396,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
     for (const t of s.tasks.filter(t => selectedIds.has(t.id) && t.status !== 'completed')) { t.status = 'pending'; t.round++; t.error = null; }
   });
   const resumedJob = (await store.read()).jobs.find(j => j.id === jobId);
-  return { job: resumedJob, completion: launch(store, registry, resumedJob, catalog, undefined, scoped ? pending.map(t => t.id) : undefined) };
+  return { job: resumedJob, completion: launch(store, registry, resumedJob, catalog, undefined, scoped || profileScoped ? pending.map(t => t.id) : undefined) };
 }
 export async function runEvaluationBatch(store, evaluator, options) { return (await startEvaluationBatch(store, evaluator, options)).completion; }
 export async function evaluateConversation(store, evaluator, conversation, catalog, { replace = false } = {}) {
