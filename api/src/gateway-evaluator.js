@@ -78,12 +78,22 @@ export class GatewayEvaluator {
       || Object.keys(raw).length !== 1 || !Object.hasOwn(raw, 'results'))) {
       throw new AppError(502, 'El modelo local no devolvió el objeto de evaluación requerido.', 'INVALID_AI_RESULT');
     }
-    if (responseField === 'reasoning_content' && raw.results && typeof raw.results === 'object'
-      && Object.values(raw.results).some(item => item && typeof item === 'object' && !Array.isArray(item)
-        && Object.keys(item).some(key => !['status', 'value', 'reason', 'evidence_message_ids'].includes(key)))) {
-      throw new AppError(502, 'El modelo local añadió campos ajenos al contrato de evaluación.', 'INVALID_AI_RESULT');
+    const validated = validateEvaluation(raw, variables, conversation, { partial: true });
+    if (responseField === 'reasoning_content') {
+      for (const variable of variables) {
+        const item = raw.results[variable.id];
+        if (!item || typeof item !== 'object' || Array.isArray(item)
+          || !Object.keys(item).some(key => !['status', 'value', 'reason', 'evidence_message_ids'].includes(key))) continue;
+        // Reject this item without discarding valid answers for other variables.
+        // Only the controlled rule enters retry feedback, never unexpected data.
+        validated.results = validated.results.filter(result => result.variableId !== variable.id);
+        const existing = validated.validationErrors.find(error => error.variableId === variable.id);
+        if (existing) existing.rules.push('unexpected_fields');
+        else validated.validationErrors.push({ variableId: variable.id, code: 'INVALID_AI_RESULT',
+          rules: ['unexpected_fields'], message: `Respuesta inválida para ${variable.id}: unexpected_fields.` });
+      }
     }
-    return { ...validateEvaluation(raw, variables, conversation, { partial: true }), model: payload.model,
+    return { ...validated, model: payload.model,
       responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage) };
   }
 }

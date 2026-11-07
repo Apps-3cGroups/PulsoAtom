@@ -18,7 +18,7 @@ const codes = new Set(['AI_CONFIGURATION', 'AI_UNAVAILABLE', 'AI_TRANSIENT', 'IN
   'EVALUATION_RUNNING', 'DAILY_NOT_PAUSED', 'GEMMA_REFERENCE_MISSING', 'INVALID_SETTINGS']);
 const errorCode = error => error instanceof AppError && codes.has(error.code) ? error.code : 'CLEF_CONVERSATION_CHECK_FAILED';
 const rules = new Set(['missing_item', 'invalid_status', 'invalid_value_type', 'invalid_reason', 'invalid_evidence_count',
-  'unknown_evidence_message', 'missing_evidence', 'unexpected_evidence', 'inconsistent_status_value']);
+  'unknown_evidence_message', 'missing_evidence', 'unexpected_evidence', 'inconsistent_status_value', 'unexpected_fields']);
 
 export async function readProbeState(connection, { chooseReference = false } = {}) {
   await connection.query('START TRANSACTION READ ONLY');
