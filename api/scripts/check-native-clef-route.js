@@ -33,7 +33,11 @@ async function main() {
   if (!Array.isArray(models)) { console.log(JSON.stringify(report)); return; }
   const id = value => typeof value === 'string' && /^[a-zA-Z0-9._:/@-]{1,200}$/.test(value) && !value.includes('://') ? value : null;
   report.models = models.slice(0, 30).map(m => ({ key: id(m.key), type: id(m.type),
+    metadata: Object.fromEntries(['display_name', 'format', 'architecture', 'params_string', 'quantization', 'publisher', 'max_context_length'].filter(k => Object.hasOwn(m, k)).map(k => [k,
+      typeof m[k] === 'number' ? m[k] : typeof m[k] === 'string' && m[k].length <= 200 && !m[k].includes(env.AGENT_SHARED_TOKEN) ? m[k] : '[structured]'])),
+    fields: Object.keys(m).slice(0, 40),
     instances: (m.loaded_instances || []).map(i => ({ id: id(i.id), contextLength: Number.isSafeInteger(i.config?.context_length) ? i.config.context_length : null })) }));
+  if (process.argv.includes('--inventory-only')) { console.log(JSON.stringify(report, null, 2)); return; }
   const candidate = models.find(m => m.type === 'decision' && m.loaded_instances?.some(i => i.id === MODEL));
   report.clefDecisionLoaded = !!candidate;
   if (!models.some(m => m.key === MODEL && m.type === 'decision')) { console.log(JSON.stringify(report, null, 2)); return; }

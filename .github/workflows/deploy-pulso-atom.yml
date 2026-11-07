@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, clef-native-probe, clef-gateway-enable, clef-gateway-host, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, clef-native-inventory, clef-native-probe, clef-gateway-enable, clef-gateway-host, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-gateway-host' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-gateway-host' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: ${{ inputs.operation == 'clef-short-check' && 12 || 10 }}
@@ -99,7 +99,7 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -120,8 +120,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('clef-native-probe', 'clef-gateway-enable', 'clef-gateway-host', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-native-probe', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('clef-native-inventory', 'clef-native-probe', 'clef-gateway-enable', 'clef-gateway-host', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-native-inventory', 'clef-native-probe', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
             if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
@@ -147,6 +147,7 @@ jobs:
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
             'clef-gateway-enable' { $entryScript = 'scripts/enable-gateway-decisions.py'; $scriptArguments = '' }
             'clef-gateway-host' { $entryScript = ''; $scriptArguments = '' }
+            'clef-native-inventory' { $entryScript = 'scripts/check-native-clef-route.js'; $scriptArguments = '--inventory-only' }
             'clef-native-probe' { $entryScript = 'scripts/check-native-clef-route.js'; $scriptArguments = '' }
             'clef-gateway-inspect' { $entryScript = 'scripts/inspect-gateway-administration.js'; $scriptArguments = '' }
             'clef-response-modes' { $entryScript = 'scripts/check-clef-response-modes.js'; $scriptArguments = '' }
