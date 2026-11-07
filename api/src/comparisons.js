@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
 import { latestVerdict, sourceFingerprint, wasExposed, ensureEvaluationState } from './evaluation-context.js';
+import { evaluationMatchesProfile } from './operational-evaluation.js';
 
 export function findComparison(state, id) {
   const sample = (state.comparisons || []).find(c => c.id === id);
@@ -23,10 +24,14 @@ export function sampleSummary(state, sample, userId) {
 }
 export function comparisonRows(state, sample) {
   const variables = sampleVariables(state, sample).filter(isFlag);
+  const nativeCohort = sample.modelProfiles.some(profile => profile.protocol === 'systemone');
   return sample.cases.flatMap(c => variables.map(variable => {
     const cells = sample.modelProfiles.map(profile => {
       const task = state.tasks.find(t => t.jobId === sample.jobId && t.conversationId === c.conversationId && t.profile.id === profile.id);
-      const evaluation = state.evaluations.find(e => e.id === task?.evaluationId && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => e[key] && e[key] === c[key]));
+      const evaluation = state.evaluations.find(e => e.id === task?.evaluationId
+        && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => e[key] && e[key] === c[key])
+        && evaluationMatchesProfile(e, profile)
+        && (!nativeCohort || (e.jobId === sample.jobId && e.taskId === task.id && e.conversationId === c.conversationId)));
       const result = evaluation?.results.find(r => r.variableId === variable.id);
       // A duplicate effective model never becomes an independent vote.
       return { profileId: profile.id, status: result?.error ? 'failed' : result ? 'completed' : task?.status || 'pending', taskStatus: task?.status, error: result?.error || (!result ? task?.error || null : null), model: evaluation?.model,

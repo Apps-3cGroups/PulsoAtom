@@ -69,3 +69,11 @@ test('unconfirmed writes never return success for old, different or malformed co
     mock.mock.restore();
   }
 });
+
+test('changing the protocol is a model edit and must be confirmed in the saved snapshot', () => {
+  const native = profiles.map(p => ({ ...p, protocol: p.id === 'clef-local' ? 'systemone' : 'chat' }));
+  assert.equal(onlyDisablingLocalProfiles(profiles, native.map(p => ({ ...p, enabled: false }))), false);
+  assert.equal(localConfigurationMatches(saved, native, 1), false);
+  assert.equal(localConfigurationMatches({ ...saved, profiles: native }, native, 1), true);
+  assert.equal(localConfigurationMatches({ ...saved, profiles: profiles.map(p => ({ ...p, protocol: 'chat' })) }, profiles, 1), true);
+});

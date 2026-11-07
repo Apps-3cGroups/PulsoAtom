@@ -1,6 +1,24 @@
 // Derive one operational result without modifying either provider's stored answer.
 const equivalent = (a, b) => a.conversationId === b.conversationId && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => a[key] && a[key] === b[key]);
 const conclusive = r => r?.status === 'evaluado' && [0, 1].includes(r.value);
+// Shared business hashes describe source/checklist semantics, not the native
+// adapter's actual instructions. Each result must also match its own frozen
+// profile contract; native decisions cannot enter a historical chat cohort.
+export function evaluationMatchesProfile(evaluation, profile) {
+  if (!evaluation || !profile) return false;
+  const configuration = evaluation.modelConfiguration;
+  const native = profile.protocol === 'systemone' || evaluation.protocol === 'systemone'
+    || configuration?.protocol === 'systemone' || evaluation.adapterVersion || evaluation.instructionsHash;
+  if (!native) return !profile.configurationHash || configuration?.configurationHash === profile.configurationHash;
+  return profile.protocol === 'systemone' && evaluation.protocol === 'systemone' && configuration?.protocol === 'systemone'
+    && typeof profile.configurationHash === 'string' && /^[a-f0-9]{64}$/.test(profile.configurationHash)
+    && configuration.configurationHash === profile.configurationHash
+    && typeof profile.adapterVersion === 'string' && !!profile.adapterVersion
+    && evaluation.adapterVersion === profile.adapterVersion && configuration.adapterVersion === profile.adapterVersion
+    && /^[a-f0-9]{64}$/.test(profile.instructionsHash || '')
+    && evaluation.instructionsHash === profile.instructionsHash && configuration.instructionsHash === profile.instructionsHash
+    && evaluation.profileId === profile.id && evaluation.provider === profile.provider && evaluation.model === profile.model;
+}
 // Runtime-only provenance: stored summaries or labels cannot establish consensus.
 const consensusByEvaluation = new WeakMap();
 export const operationalConsensus = (evaluation, variableId) => evaluation && consensusByEvaluation.get(evaluation)?.get(variableId);
@@ -13,7 +31,7 @@ export function operationalEvaluation(state, anchor) {
   const evaluations = job.modelProfiles.map(profile => {
     const task = tasks.find(t => t.profile.id === profile.id);
     const evaluation = state.evaluations.find(e => e.id === task?.evaluationId && e.jobId === job.id
-      && e.taskId === task?.id && e.profileId === profile.id && equivalent(e, anchor));
+      && e.taskId === task?.id && e.profileId === profile.id && equivalent(e, anchor) && evaluationMatchesProfile(e, profile));
     return { profile, task, evaluation };
   });
   const ids = [...new Set(evaluations.flatMap(({ evaluation }) => (evaluation?.results || []).map(r => r.variableId)))];

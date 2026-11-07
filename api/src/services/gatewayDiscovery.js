@@ -36,7 +36,18 @@ function toolsFromCatalog(raw) {
   const tools = catalogItems(raw, 'tools').map(item => {
     if (!object(item) || typeof item.key !== 'string' || !keyPattern.test(item.key)
       || typeof item.status !== 'string' || !/^[a-z][a-z0-9_-]{0,39}$/.test(item.status)) throw malformed();
-    return { key: item.key, status: item.status };
+    // Only expose supported protocol names, never provider URLs or the raw
+    // allowlist. Older catalogs without capability fields remain readable.
+    let protocols;
+    if (Object.hasOwn(item, 'paths')) {
+      if (!Array.isArray(item.paths) || item.paths.some(route => !object(route)
+        || typeof route.method !== 'string' || typeof route.path !== 'string')) throw malformed();
+      const has = (method, path) => item.paths.some(route => route.method === method && route.path === path);
+      protocols = [];
+      if (has('POST', '/v1/chat/completions')) protocols.push('chat');
+      if (has('POST', '/v1/systemone') && has('GET', '/api/v1/models')) protocols.push('systemone');
+    }
+    return { key: item.key, status: item.status, ...(protocols ? { protocols } : {}) };
   });
   if (new Set(tools.map(t => t.key)).size !== tools.length) throw malformed();
   return tools;

@@ -4,14 +4,14 @@ export const localProfileIds = ['clef-local', 'gemma-local'];
 export const editableLocalProfiles = profiles => localProfileIds.map(id => {
   const profile = profiles.find(p => p.id === id) || {};
   return { id, toolKey: profile.toolKey || '', model: profile.model || '', enabled: !!profile.enabled,
-    responseFormat: profile.responseFormat || 'json_schema' };
+    responseFormat: profile.protocol === 'systemone' ? 'json_schema' : profile.responseFormat || 'json_schema', protocol: profile.protocol || 'chat' };
 });
 export const executableProfiles = (profiles, demo = false) => profiles.filter(p => !p.historical
   && (demo || (p.provider === 'gateway' && localProfileIds.includes(p.id))));
 export const onlyDisablingLocalProfiles = (previous, next) => next.some(profile => previous.find(old => old.id === profile.id)?.enabled && !profile.enabled)
   && next.every(profile => {
     const old = previous.find(item => item.id === profile.id);
-    return old && ['toolKey', 'model', 'responseFormat'].every(key => old[key] === profile[key]) && (!profile.enabled || old.enabled);
+    return old && ['toolKey', 'model', 'responseFormat'].every(key => old[key] === profile[key]) && (old.protocol || 'chat') === (profile.protocol || 'chat') && (!profile.enabled || old.enabled);
   });
 
 export function policySelection(policy, profiles) {
@@ -28,7 +28,7 @@ export function localConfigurationMatches(saved, requested, expectedVersion) {
     || saved.profiles.length !== 2 || typeof saved.gatewayConfigured !== 'boolean' || typeof saved.policyReady !== 'boolean') return false;
   return localProfileIds.every(id => {
     const actual = saved.profiles.find(p => p.id === id), wanted = requested.find(p => p.id === id);
-    return actual && wanted && ['toolKey', 'model', 'enabled', 'responseFormat'].every(key => actual[key] === wanted[key]);
+    return actual && wanted && ['toolKey', 'model', 'enabled', 'responseFormat'].every(key => actual[key] === wanted[key]) && (actual.protocol || 'chat') === (wanted.protocol || 'chat');
   });
 }
 

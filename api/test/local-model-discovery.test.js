@@ -108,3 +108,21 @@ test('CLI validates arguments before dotenv loading and prints sanitized errors'
   assert.equal(JSON.parse(invalid.stderr).error.code, 'INVALID_ARGUMENTS');
   assert.ok(!invalid.stderr.includes(env.AGENT_SHARED_TOKEN));
 });
+
+test('discovery exposes supported protocol names only from explicit Gateway routes', async () => {
+  const capable = { key: 'clef', status: 'active', paths: [
+    { method: 'GET', path: '/v1/models' }, { method: 'POST', path: '/v1/chat/completions' },
+    { method: 'POST', path: '/v1/systemone' }, { method: 'GET', path: '/api/v1/models' },
+  ], base_url: 'http://private-provider.test:1234', token: env.AGENT_SHARED_TOKEN };
+  const result = await discoverLocalModels({ env, fetchImpl: async () => response({ tools: [capable] }) });
+  assert.deepEqual(result, { tools: [{ key: 'clef', status: 'active', protocols: ['chat', 'systemone'] }] });
+  const chatOnly = { ...capable, paths: capable.paths.slice(0, 2) };
+  assert.deepEqual((await discoverLocalModels({ env, fetchImpl: async () => response([chatOnly]) })).tools[0].protocols, ['chat']);
+  const withoutInventory = { ...capable, paths: capable.paths.slice(0, 3) };
+  assert.deepEqual((await discoverLocalModels({ env, fetchImpl: async () => response([withoutInventory]) })).tools[0].protocols, ['chat']);
+  const wrongMethods = { ...capable, paths: [{ method: 'GET', path: '/v1/systemone' }, { method: 'POST', path: '/api/v1/models' }] };
+  assert.deepEqual((await discoverLocalModels({ env, fetchImpl: async () => response([wrongMethods]) })).tools[0].protocols, []);
+  for (const paths of ['*', null, [{ method: 'POST' }], ['/v1/systemone']]) {
+    await assert.rejects(discoverLocalModels({ env, fetchImpl: async () => response([{ ...capable, paths }]) }), { code: 'INVALID_GATEWAY_CATALOG' });
+  }
+});

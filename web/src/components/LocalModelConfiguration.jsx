@@ -54,7 +54,7 @@ function ConfigurationForm({ data, isAdmin, running, onReload, onSaved }) {
   const locked = !isAdmin || busy || saved || running || needsReload;
   return <>
     <div className="gateway-discovery-bar"><div><Tag color={tools ? 'green' : 'default'}>{discovering ? 'Consultando catálogo' : tools ? 'Catálogo consultado' : 'Catálogo por consultar'}</Tag><span>{data.gatewayConfigured ? 'Las herramientas y sus modelos se cargan automáticamente. Puedes actualizar el catálogo cuando lo necesites.' : 'Falta configurar la conexión al Gateway en el servidor.'}</span></div><Button icon={<ReloadOutlined />} onClick={() => discovery.refresh()} loading={discovering} disabled={locked || !data.gatewayConfigured}>Consultar Gateway</Button></div>
-    {!data.gatewayConfigured && <Alert type="warning" showIcon message="Falta configurar el Gateway" description="DevOps debe completar la conexión y credencial en el backend. No se solicitan claves en esta pantalla." />}
+    {!data.gatewayConfigured && <Alert type="warning" showIcon message="Falta configurar el Gateway" description="Completa la conexión y credencial en el backend. No se solicitan claves en esta pantalla." />}
     {discoveryError && <Alert type="error" showIcon message="No pudimos consultar el Gateway" description={discoveryError.message} />}
     {discovering && <LoadingState />}
     {tools?.length === 0 && <Alert type="info" showIcon message="El Gateway no publicó herramientas disponibles" />}
@@ -64,6 +64,8 @@ function ConfigurationForm({ data, isAdmin, running, onReload, onSaved }) {
       <div className="local-profile-list">{profiles.map((profile, index) => {
         const value = draft[index] || profile;
         const label = profile.id === 'clef-local' ? 'Clef' : 'Gemma';
+        const decisions = value.protocol === 'systemone';
+        const decisionRoutesReady = tools?.find(tool => tool.key === value.toolKey)?.protocols?.includes('systemone');
         const choices = tools?.map(tool => ({ value: tool.key, label: `${tool.key}${tool.status === 'active' ? '' : ' · No activa'}`, disabled: tool.status !== 'active' })) || [];
         if (value.toolKey && !choices.some(choice => choice.value === value.toolKey)) choices.push({ value: value.toolKey, label: `${value.toolKey} · Guardada`, disabled: true });
         const modelRequest = catalog.models[value.toolKey];
@@ -78,8 +80,13 @@ function ConfigurationForm({ data, isAdmin, running, onReload, onSaved }) {
           <div className="local-profile-fields">
             <Form.Item name={['profiles', index, 'toolKey']} label={`Herramienta de ${label}`} rules={[{ required: true, message: 'Consulta el Gateway y selecciona una herramienta.' }]}><Select aria-label={`Herramienta de ${label}`} placeholder={discovering ? 'Cargando herramientas…' : 'Selecciona una herramienta'} options={choices} disabled={locked || !tools || discovering} onChange={() => { form.setFieldValue(['profiles', index, 'model'], undefined); }} /></Form.Item>
             <div><Form.Item name={['profiles', index, 'model']} label={`Modelo de ${label}`} rules={[{ required: true, message: 'Selecciona un modelo publicado por esta herramienta.' }]}><Select aria-label={`Modelo de ${label}`} showSearch optionFilterProp="label" placeholder={!value.toolKey ? 'Selecciona primero una herramienta' : discovering || loadingModels ? 'Cargando modelos…' : modelError ? 'No se pudo cargar la lista' : availableModels?.length === 0 ? 'Sin modelos publicados' : 'Selecciona un modelo publicado'} options={modelOptions} loading={loadingModels || (discovering && !!value.toolKey)} disabled={locked || !canDiscover || !availableModels?.length || discovering || loadingModels} /></Form.Item>{!value.toolKey && <span className="small muted">Selecciona primero una herramienta para ver sus modelos.</span>}</div>
-            <Form.Item name={['profiles', index, 'responseFormat']} label="Formato de respuesta" rules={[{ required: true }]}><Select aria-label={`Formato de respuesta de ${label}`} options={[{ value: 'json_schema', label: 'JSON Schema · estructura estricta' }, { value: 'json_object', label: 'JSON · estructura validada por Pulso' }]} /></Form.Item>
+            {profile.id === 'clef-local'
+              ? <Form.Item name={['profiles', index, 'protocol']} label="Interfaz del modelo" rules={[{ required: true }]}><Select aria-label="Interfaz de Clef" onChange={protocol => { if (protocol === 'systemone') form.setFieldValue(['profiles', index, 'responseFormat'], 'json_schema'); }} options={[{ value: 'chat', label: 'Chat · respuesta JSON' }, { value: 'systemone', label: 'Decisiones · System One' }]} /></Form.Item>
+              : <Form.Item name={['profiles', index, 'protocol']} hidden><input /></Form.Item>}
+            <Form.Item name={['profiles', index, 'responseFormat']} hidden={decisions} label="Formato de respuesta" rules={[{ required: !decisions }]}><Select aria-label={`Formato de respuesta de ${label}`} options={[{ value: 'json_schema', label: 'JSON Schema · estructura estricta' }, { value: 'json_object', label: 'JSON · estructura validada por Pulso' }]} /></Form.Item>
           </div>
+          {decisions && <Alert type="info" showIcon message="Clef entrega decisiones y selecciona evidencia" description="Clasifica cada evento y selecciona un mensaje de la conversación. No genera explicaciones de texto ni extrae listas abiertas de productos. Al guardar se verificará que el Gateway publique System One y que esta instancia esté cargada como modelo de decisiones." />}
+          {decisions && tools && value.toolKey && !decisionRoutesReady && <Alert type="warning" showIcon message="El Gateway aún no publica la interfaz de decisiones" description="Habilita las rutas System One e inventario nativo en la herramienta seleccionada y vuelve a consultar. No se enviará esta evaluación al endpoint de chat." />}
           {loadingModels && <LoadingState />}
           {modelError && <Alert type="error" showIcon message={`No pudimos consultar los modelos de ${label}`} description={modelError.message} action={<Button onClick={() => discovery.retry(value.toolKey)} disabled={locked || !canDiscover}>Reintentar modelos de {label}</Button>} />}
           {availableModels?.length === 0 && <Alert type="info" showIcon message="Esta herramienta no publicó modelos" description="Actualiza la lista o selecciona otra herramienta." action={<Button onClick={() => discovery.retry(value.toolKey)} disabled={locked || !canDiscover}>Actualizar modelos de {label}</Button>} />}
