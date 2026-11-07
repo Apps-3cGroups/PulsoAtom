@@ -70,8 +70,9 @@ export function qualityMetrics(rows, profiles) {
     const cells = rows.map(row => row.cells.find(c => c.profileId === profile.id));
     return { profileId: profile.id, tp, fp, fn, tn, n: cohort.length, referenceCount: reference.length,
       precision: tp + fp ? tp / (tp + fp) : null, recall: tp + fn ? tp / (tp + fn) : null,
-      answered: cells.filter(c => c.result?.status === 'evaluado' && !c.result.error).length, abstained: cells.filter(c => c.result?.status === 'no_evaluado' && !c.result.error).length,
-      missing: cells.filter(c => !c.result || c.result.error).length, total: cells.length };
+      answered: cells.filter(c => c.result?.status === 'evaluado' && !c.result.error && !c.result.unavailabilityCode).length,
+      abstained: cells.filter(c => c.result?.status === 'no_evaluado' && !c.result.error && !c.result.unavailabilityCode).length,
+      missing: cells.filter(c => !c.result || c.result.error || c.result.unavailabilityCode).length, total: cells.length };
   });
 }
 export function validationView(state, sample, conversationId, user) {

@@ -5,10 +5,27 @@ import { AppError } from '../src/errors.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { runEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { evaluationContext, digest } from '../src/evaluation-context.js';
-import { comparisonRows } from '../src/comparisons.js';
+import { comparisonRows, qualityMetrics } from '../src/comparisons.js';
 import { operationalEvaluation } from '../src/operational-evaluation.js';
 
 const instructionsHash = 'a'.repeat(64), adapterVersion = 'pulso-clef-decisions-v1';
+
+test('adapter capacity limits count as missing while genuine model abstentions remain abstentions', () => {
+  const unavailable = unavailabilityCode => ({ status: 'no_evaluado', value: null, unavailabilityCode });
+  const results = [unavailable('evidence_capacity_exceeded'), unavailable('unsupported_descriptor'),
+    { status: 'no_evaluado', value: null, reasonSource: 'adapter_template', decision: { classification: { choice: 'insufficient' } } },
+    { status: 'evaluado', value: 1 }, { status: 'no_evaluado', value: null, error: { code: 'AI_UNAVAILABLE' } }, null];
+  const rows = results.map(result => ({ sourceChanged: false, verdict: { mode: 'blind', outcome: 'present' },
+    votes: result?.status === 'evaluado' ? 1 : 0, cells: [{ profileId: 'clef-local', status: 'completed', result }] }));
+  const [metrics] = qualityMetrics(rows, [{ id: 'clef-local' }]);
+  assert.equal(metrics.answered, 1);
+  assert.equal(metrics.abstained, 1);
+  assert.equal(metrics.missing, 4);
+  assert.equal(metrics.answered + metrics.abstained + metrics.missing, metrics.total);
+  assert.equal(metrics.n, 1);
+  assert.equal(metrics.tp, 1);
+});
+
 function nativeMetadata(number, variables, errorCode) {
   const requestId = `synthetic-native-${number}`;
   return { protocol: 'systemone', adapterVersion, instructionsHash, requestIds: [requestId],
