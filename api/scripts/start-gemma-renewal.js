@@ -45,7 +45,7 @@ export function parseGemmaRenewalArguments(args) {
     fail('INVALID_ARGUMENTS', 'Indica --start con el rango, límite, conteo, versión de política y las tres huellas validadas.');
   }
   const { from, to, limit, ...expected } = values;
-  if (!/^\d+$/.test(limit || '')) fail('INVALID_ARGUMENTS', 'El límite debe ser un entero entre 1 y 100.');
+  if (!/^\d+$/.test(limit || '') || Number(limit) < 1 || Number(limit) > 100) fail('INVALID_ARGUMENTS', 'El límite debe ser un entero entre 1 y 100.');
   const selection = normalizeGemmaSelection({ from, to, limit: Number(limit), timezone: 'America/Tegucigalpa', basis: 'last_activity' });
   return { mode, selection, expected: { ...expected, evaluations: Number(values.evaluations), policyVersion: Number(values.policyVersion) } };
 }
@@ -112,6 +112,7 @@ async function launchBackfill({ apiDirectory, maintenanceId, logFile, env }) {
 export async function startGemmaRenewal({ store, registry, expected, selection, apiDirectory, databaseName,
   env = process.env, reset = resetEvaluations, launch = launchBackfill }) {
   const scope = normalizeGemmaSelection(selection);
+  if (scope.limit > 100) fail('INVALID_BACKFILL_SELECTION', 'El reinicio inicial permite hasta 100 conversaciones. Usa una ampliación explícita sin borrar para muestras mayores.');
   const directory = path.join(apiDirectory, '.data/backfills');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const operationId = randomUUID(), release = await acquireBackfillLock(path.join(directory, 'renewal-start.lock'), operationId);

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación o estado'
+        description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-status]
+        options: [deploy, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -17,7 +17,7 @@ on:
         type: string
         required: false
       expected_evaluations:
-        description: 'Evaluaciones existentes esperadas antes del respaldo y renovación (gemma-start)'
+        description: 'Evaluaciones existentes antes del respaldo (gemma-start); total actual esperado del mantenimiento, 1 a 500 (gemma-extend)'
         type: string
         required: false
       expected_configuration_hash:
@@ -33,19 +33,19 @@ on:
         type: string
         required: false
       maintenance_id:
-        description: 'UUID del mantenimiento para consultar su avance (gemma-status)'
+        description: 'UUID del mantenimiento para consultar su avance o ampliarlo (gemma-status/gemma-extend)'
         type: string
         required: false
       from_date:
-        description: 'Inicio inclusivo por última actividad en Tegucigalpa (gemma-start, YYYY-MM-DD)'
+        description: 'Inicio inclusivo por última actividad en Tegucigalpa (gemma-start/gemma-extend, YYYY-MM-DD)'
         type: string
         required: false
       to_date:
-        description: 'Fin inclusivo por última actividad en Tegucigalpa (gemma-start, YYYY-MM-DD)'
+        description: 'Fin inclusivo por última actividad en Tegucigalpa (gemma-start/gemma-extend, YYYY-MM-DD)'
         type: string
         required: false
       conversation_limit:
-        description: 'Máximo de conversaciones más recientes del período (gemma-start, 1 a 100)'
+        description: 'Total objetivo de conversaciones más recientes del período (gemma-start: 1 a 100; gemma-extend: 1 a 500, conservando las existentes)'
         type: string
         default: '20'
         required: false
@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit Gemma operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -120,7 +120,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          if ($env:GEMMA_OPERATION -cnotin @('gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
           $useCheckoutSource = $env:GEMMA_OPERATION -cin @('gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
@@ -131,18 +131,25 @@ jobs:
             foreach ($hash in @($env:EXPECTED_CONFIGURATION_HASH, $env:EXPECTED_CATALOG_HASH, $env:EXPECTED_PROMPT_HASH)) {
               if ($hash -cnotmatch '^[a-f0-9]{64}$') { throw 'Expected hashes must contain exactly 64 lowercase hexadecimal characters.' }
             }
+            if ($env:CONVERSATION_LIMIT -cnotmatch '^([1-9]|[1-9][0-9]|100)$') { throw 'Conversation limit must be an integer between 1 and 100.' }
+          }
+          if ($env:GEMMA_OPERATION -ceq 'gemma-extend') {
+            if ($env:EXPECTED_EVALUATIONS -cnotmatch '^([1-9]|[1-9][0-9]|[1-4][0-9]{2}|500)$') { throw 'Expected maintenance total must be an integer between 1 and 500.' }
+            if ($env:CONVERSATION_LIMIT -cnotmatch '^([1-9]|[1-9][0-9]|[1-4][0-9]{2}|500)$') { throw 'Extended conversation limit must be an integer between 1 and 500.' }
+          }
+          if ($env:GEMMA_OPERATION -cin @('gemma-start', 'gemma-extend')) {
             if ($env:FROM_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' -or $env:TO_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { throw 'Selection dates must use YYYY-MM-DD.' }
             $fromDate = [datetime]::MinValue
             $toDate = [datetime]::MinValue
             if (-not [datetime]::TryParseExact($env:FROM_DATE, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$fromDate) -or -not [datetime]::TryParseExact($env:TO_DATE, 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::None, [ref]$toDate) -or $fromDate -gt $toDate) { throw 'Selection dates must be real dates in ascending order.' }
-            if ($env:CONVERSATION_LIMIT -cnotmatch '^([1-9]|[1-9][0-9]|100)$') { throw 'Conversation limit must be an integer between 1 and 100.' }
           }
-          if ($env:GEMMA_OPERATION -ceq 'gemma-status' -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
+          if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
             'gemma-preflight' { $entryScript = 'scripts/check-gemma-contract.js'; $scriptArguments = '' }
             'gemma-inspect' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = '--inspect' }
             'gemma-prepare' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = "--prepare --expected-policy-version $($env:EXPECTED_POLICY_VERSION)" }
             'gemma-start' { $entryScript = 'scripts/start-gemma-renewal.js'; $scriptArguments = "--start --expected-evaluations $($env:EXPECTED_EVALUATIONS) --expected-policy-version $($env:EXPECTED_POLICY_VERSION) --expected-configuration-hash $($env:EXPECTED_CONFIGURATION_HASH) --expected-catalog-hash $($env:EXPECTED_CATALOG_HASH) --expected-prompt-hash $($env:EXPECTED_PROMPT_HASH) --from $($env:FROM_DATE) --to $($env:TO_DATE) --limit $($env:CONVERSATION_LIMIT)" }
+            'gemma-extend' { $entryScript = 'scripts/extend-gemma-renewal.js'; $scriptArguments = "--extend --maintenance-id $($env:MAINTENANCE_ID) --expected-total $($env:EXPECTED_EVALUATIONS) --from $($env:FROM_DATE) --to $($env:TO_DATE) --limit $($env:CONVERSATION_LIMIT)" }
             'gemma-status' { $entryScript = 'scripts/start-gemma-renewal.js'; $scriptArguments = "--status --maintenance-id $($env:MAINTENANCE_ID)" }
             default { throw 'Unsupported Gemma operation.' }
           }
