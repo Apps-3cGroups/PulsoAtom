@@ -165,6 +165,7 @@ export async function runClefConversationCheck({ connection, reader, env = proce
       const started = Date.now();
       try {
         const result = await evaluator.evaluate(conversation, variables);
+        if (['content', 'reasoning_content'].includes(result.responseField)) artifact.responseField = result.responseField;
         artifact.results = result.results.map(projectedResult);
         artifact.validationErrors = result.validationErrors.map(error => ({ variableId: error.variableId,
           rules: error.rules.filter(rule => rules.has(rule)), code: 'INVALID_AI_RESULT' }));
@@ -187,6 +188,7 @@ export async function runClefConversationCheck({ connection, reader, env = proce
       abstentions: artifact.results.filter(r => preliminary(r).status === 'no_evaluado').length,
       pendingVariables: Math.max(0, requested - valid), preliminaryFlagIds: artifact.results.filter(r => r.type === 'Flag' && preliminary(r).status === 'evaluado' && preliminary(r).value === 1).map(r => r.variableId),
       validationErrors: artifact.validationErrors, errorCode: artifact.errorCode || null, protocol: safeProtocol,
+      ...(artifact.responseField ? { responseField: artifact.responseField } : {}),
       durationMs: artifact.durationMs || 0, sourceUnchanged: artifact.sourceUnchanged === true,
       configurationUnchanged: artifact.configurationUnchanged === true, gemmaComparable: artifact.gemmaReference?.equivalent === true && stable,
       note: 'Prueba aislada. Detecciones preliminares; no cambió la política ni se guardaron evaluaciones en Pulso.' };

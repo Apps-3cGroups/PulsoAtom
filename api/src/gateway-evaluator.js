@@ -55,11 +55,35 @@ export class GatewayEvaluator {
     const choice = payload.choices[0];
     if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new AppError(422, 'El modelo no puede evaluar este contenido.', 'AI_SAFETY_REFUSAL');
     if (choice?.finish_reason !== 'stop') throw new AppError(502, 'El modelo local no completó la evaluación.', 'AI_INCOMPLETE');
-    if (typeof choice.message?.content !== 'string' || !choice.message.content.trim()) throw new AppError(502, 'El modelo local no devolvió una evaluación estructurada.', 'INVALID_AI_RESULT');
+    const message = choice.message;
+    if (message?.function_call != null || (message?.tool_calls != null
+      && (!Array.isArray(message.tool_calls) || message.tool_calls.length))) {
+      throw new AppError(502, 'El modelo local devolvió una llamada de herramienta en lugar de una evaluación.', 'INVALID_AI_RESULT');
+    }
+    let text = message?.content, responseField = 'content';
+    // Clef Flash's current chat runtime can place its complete structured answer
+    // in reasoning_content while leaving content empty. Only this exact model
+    // may use that channel; never extract JSON fragments from reasoning prose
+    // or replace a nonempty final answer, even when that answer is invalid.
+    const emptyContent = text == null || (typeof text === 'string' && !text.trim());
+    if (payload.model === 'clef-flash' && emptyContent) {
+      text = message?.reasoning_content;
+      responseField = 'reasoning_content';
+    }
+    if (typeof text !== 'string' || !text.trim()) throw new AppError(502, 'El modelo local no devolvió una evaluación estructurada.', 'INVALID_AI_RESULT');
     let raw;
-    try { raw = JSON.parse(choice.message.content); }
+    try { raw = JSON.parse(text); }
     catch { throw new AppError(502, 'El modelo local no devolvió el JSON requerido.', 'INVALID_AI_RESULT'); }
+    if (responseField === 'reasoning_content' && (!raw || typeof raw !== 'object' || Array.isArray(raw)
+      || Object.keys(raw).length !== 1 || !Object.hasOwn(raw, 'results'))) {
+      throw new AppError(502, 'El modelo local no devolvió el objeto de evaluación requerido.', 'INVALID_AI_RESULT');
+    }
+    if (responseField === 'reasoning_content' && raw.results && typeof raw.results === 'object'
+      && Object.values(raw.results).some(item => item && typeof item === 'object' && !Array.isArray(item)
+        && Object.keys(item).some(key => !['status', 'value', 'reason', 'evidence_message_ids'].includes(key)))) {
+      throw new AppError(502, 'El modelo local añadió campos ajenos al contrato de evaluación.', 'INVALID_AI_RESULT');
+    }
     return { ...validateEvaluation(raw, variables, conversation, { partial: true }), model: payload.model,
-      responseId: envelope.requestId, usage: safeUsage(payload.usage) };
+      responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage) };
   }
 }
