@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, clef-cohort-inspect, clef-cohort-configure, clef-cohort-start, clef-cohort-status, clef-quality, clef-two-flags-decisions, clef-two-flags-import, clef-two-flags, clef-strict-check, clef-capture-retry, clef-capture-check, clef-native-inventory, clef-native-probe, clef-gateway-enable, clef-gateway-host, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -59,10 +59,10 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
-    name: Explicit Gemma operation
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-cohort-inspect' || inputs.operation == 'clef-cohort-configure' || inputs.operation == 'clef-cohort-start' || inputs.operation == 'clef-cohort-status' || inputs.operation == 'clef-quality' || inputs.operation == 'clef-two-flags-decisions' || inputs.operation == 'clef-two-flags-import' || inputs.operation == 'clef-two-flags' || inputs.operation == 'clef-strict-check' || inputs.operation == 'clef-capture-retry' || inputs.operation == 'clef-capture-check' || inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-gateway-host' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.operation == 'clef-short-check' && 12 || 10 }}
     defaults:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
@@ -99,12 +99,12 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'clef-cohort-inspect' || inputs.operation == 'clef-cohort-configure' || inputs.operation == 'clef-cohort-start' || inputs.operation == 'clef-cohort-status' || inputs.operation == 'clef-quality' || inputs.operation == 'clef-two-flags-decisions' || inputs.operation == 'clef-two-flags-import' || inputs.operation == 'clef-two-flags' || inputs.operation == 'clef-strict-check' || inputs.operation == 'clef-capture-retry' || inputs.operation == 'clef-capture-check' || inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: Run the selected Gemma operation
+      - name: Run the selected model operation
         env:
           TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
           GEMMA_OPERATION: ${{ inputs.operation }}
@@ -120,8 +120,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('clef-cohort-inspect', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-quality', 'clef-two-flags-decisions', 'clef-two-flags-import', 'clef-two-flags', 'clef-strict-check', 'clef-capture-retry', 'clef-capture-check', 'clef-native-inventory', 'clef-native-probe', 'clef-gateway-enable', 'clef-gateway-host', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-cohort-inspect', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-quality', 'clef-two-flags-decisions', 'clef-two-flags-import', 'clef-two-flags', 'clef-strict-check', 'clef-capture-retry', 'clef-capture-check', 'clef-native-inventory', 'clef-native-probe', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
             if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
@@ -145,6 +145,30 @@ jobs:
           }
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'clef-cohort-inspect' { $entryScript = 'scripts/inspect-clef-cohort.js'; $scriptArguments = '' }
+            'clef-cohort-configure' { $entryScript = 'scripts/configure-clef-flash.js'; $scriptArguments = '--apply' }
+            'clef-cohort-start' { $entryScript = 'scripts/start-clef-cohort.js'; $scriptArguments = '--start' }
+            'clef-cohort-status' { $entryScript = 'scripts/start-clef-cohort.js'; $scriptArguments = '--status' }
+            'clef-quality' { $entryScript = 'scripts/check-clef-quality.js'; $scriptArguments = '' }
+            'clef-two-flags-decisions' { $entryScript = 'scripts/capture-clef-flash-response.js'; $scriptArguments = '--two-flags-decisions' }
+            'clef-two-flags-import' { $entryScript = 'scripts/import-clef-two-flags.js'; $scriptArguments = '' }
+            'clef-two-flags' { $entryScript = 'scripts/capture-clef-flash-response.js'; $scriptArguments = '--two-flags' }
+            'clef-strict-check' { $entryScript = 'scripts/capture-clef-flash-response.js'; $scriptArguments = '--strict-contract' }
+            'clef-capture-retry' { $entryScript = 'scripts/retry-clef-captured.js'; $scriptArguments = '' }
+            'clef-capture-check' { $entryScript = 'scripts/capture-clef-flash-response.js'; $scriptArguments = '' }
+            'clef-gateway-enable' { $entryScript = 'scripts/enable-gateway-decisions.py'; $scriptArguments = '' }
+            'clef-gateway-host' { $entryScript = ''; $scriptArguments = '' }
+            'clef-native-inventory' { $entryScript = 'scripts/check-native-clef-route.js'; $scriptArguments = '--inventory-only' }
+            'clef-native-probe' { $entryScript = 'scripts/check-native-clef-route.js'; $scriptArguments = '' }
+            'clef-gateway-inspect' { $entryScript = 'scripts/inspect-gateway-administration.js'; $scriptArguments = '' }
+            'clef-response-modes' { $entryScript = 'scripts/check-clef-response-modes.js'; $scriptArguments = '' }
+            'clef-response-audit' { $entryScript = 'scripts/inspect-clef-response.js'; $scriptArguments = '--capabilities' }
+            'clef-conversation-check' { $entryScript = 'scripts/check-clef-conversation.js'; $scriptArguments = '--post-deploy' }
+            'clef-flash-check' { $entryScript = 'scripts/check-clef-flash.js'; $scriptArguments = '' }
+            'clef-error-check' { $entryScript = 'scripts/check-clef-small.js'; $scriptArguments = '--diagnose-error' }
+            'clef-short-check' { $entryScript = 'scripts/check-clef-small.js'; $scriptArguments = '' }
+            'clef-configure' { $entryScript = 'scripts/update-clef-route.js'; $scriptArguments = '--apply' }
+            'clef-check' { $entryScript = 'scripts/check-clef-availability.js'; $scriptArguments = '--mounted-clef' }
             'gemma-preflight' { $entryScript = 'scripts/check-gemma-contract.js'; $scriptArguments = '' }
             'gemma-inspect' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = '--inspect' }
             'gemma-prepare' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = "--prepare --expected-policy-version $($env:EXPECTED_POLICY_VERSION)" }
@@ -169,7 +193,7 @@ jobs:
           $knownHosts = Join-Path $workDir 'known_hosts'
           $sourceRoot = Join-Path $env:GITHUB_WORKSPACE 'api'
           $remoteRoot = "/tmp/pulso-gemma-check-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
-          $sshTarget = 'ubuntu@10.252.1.214'
+          $sshTarget = if ($env:GEMMA_OPERATION -cin @('clef-gateway-host', 'clef-gateway-enable')) { 'ubuntu@10.252.1.248' } else { 'ubuntu@10.252.1.214' }
           $sshOptions = @()
           $remotePrepared = $false
           $checkExit = 2
@@ -196,13 +220,60 @@ jobs:
             Invoke-Checked -FilePath 'icacls' -Arguments @($keyPath, '/grant:r', "${identity}:R")
             $sshOptions = @('-i', $keyPath, '-p', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
             $scpOptions = @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
-            if ($useCheckoutSource) {
+            if ($env:GEMMA_OPERATION -ceq 'clef-gateway-host') {
+              # Existing deployment key, documented Gateway host/user. Read-only.
+              $remoteCommand = 'sudo -n sed -n "1,260p" /opt/agent-platform/gateway/current/api/app/services/gateway_tools.py'
+            } elseif ($env:GEMMA_OPERATION -ceq 'clef-gateway-enable') {
+              Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
+              $remotePrepared = $true
+              $programPath = Join-Path $sourceRoot $entryScript
+              Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @($programPath, "${sshTarget}:$remoteRoot/gateway-decisions.py"))
+              $remoteCommand = "sudo -n python3 '$remoteRoot/gateway-decisions.py'"
+            } elseif ($useCheckoutSource) {
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
             # Isolated source + existing dependencies/env. No pull, npm, PM2,
-            # migrations, reset or database writes. Preflight is synthetic only;
+            # migrations or reset. clef-configure updates only the unused Clef
+            # route under strict policy/maintenance guards. Preflight is synthetic only;
             # inspect reads configuration/totals and does not invoke any model.
+            # clef-conversation-check reads one real chat and stores only a private diagnostic artifact; no DB or policy writes.
+            # clef-check discovers models and runs at most one synthetic probe.
+            # clef-short-check runs up to three fixed synthetic probes, stopping on transport/incomplete failures.
+            $publishedSourceCheck = ''
+            if ($env:GEMMA_OPERATION -ceq 'clef-conversation-check') {
+              # Use the deployed evaluator and dependencies, not an earlier diagnostic copy.
+              # Keep the new diagnostic helpers only in the isolated directory.
+              $publishedSourceCheck = @'
+          actual_sha="$(sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom rev-parse HEAD)"
+          [ "$actual_sha" = "fd4bb7edbbe68ae068f253a7685b87c5b51cf4b2" ] || { echo 'Published revision changed; no inference started.' >&2; exit 2; }
+          sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom diff --quiet HEAD -- api/src
+          sudo -n -u td -H cp -a /var/www/nodeapps/PulsoAtom/api/src/. '__REMOTE_ROOT__/api/src/'
+          echo "Published API revision: $actual_sha"
+          '@
+              $publishedSourceCheck = $publishedSourceCheck.Replace('__REMOTE_ROOT__', $remoteRoot)
+            }
+            if ($env:GEMMA_OPERATION -ceq 'clef-quality') {
+              # Synthetic inference with the exact deployed evaluator. Read-only
+              # catalog/settings; no operational evaluations or policy mutation.
+              $publishedSourceCheck = @'
+          actual_sha="$(sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom rev-parse HEAD)"
+          [ "$actual_sha" = "636c4b0a375680afba9ffe3624c2c48a0a24306b" ] || { echo 'Published revision changed; no quality check started.' >&2; exit 2; }
+          sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom diff --quiet HEAD -- api/src
+          sudo -n -u td -H cp -a /var/www/nodeapps/PulsoAtom/api/src/. '__REMOTE_ROOT__/api/src/'
+          echo "Published API revision: $actual_sha"
+          '@
+              $publishedSourceCheck = $publishedSourceCheck.Replace('__REMOTE_ROOT__', $remoteRoot)
+            }
+            if ($env:GEMMA_OPERATION -cin @('clef-cohort-inspect', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status')) {
+              # An isolated worker extends the current production engine; never deploys.
+              $publishedSourceCheck = @'
+          actual_sha="$(sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom rev-parse HEAD)"
+          [ "$actual_sha" = "636c4b0a375680afba9ffe3624c2c48a0a24306b" ] || { echo 'Published revision changed; no cohort operation started.' >&2; exit 2; }
+          sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom diff --quiet HEAD -- api/src
+          echo "Published API revision: $actual_sha"
+          '@
+            }
             $remoteCommand = @"
           set -Eeuo pipefail
           cleanup_check() { sudo -n rm -rf -- '$remoteRoot' || true; }
@@ -214,6 +285,7 @@ jobs:
           sudo -n chmod 700 -- '$remoteRoot'
           sudo -n -u td -H test -f '$remoteRoot/api/$entryScript'
           sudo -n -u td -H ln -s -- /var/www/nodeapps/PulsoAtom/api/node_modules '$remoteRoot/api/node_modules'
+          $publishedSourceCheck
           sudo -n -u td -H bash -c 'cd "`$1" && exec node --env-file=/var/www/nodeapps/PulsoAtom/api/.env $entryScript $scriptArguments' _ '$remoteRoot/api'
           "@
             } else {
