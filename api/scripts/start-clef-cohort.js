@@ -37,12 +37,20 @@ export function cohortStatus(state, manifest) {
   const jobIds = new Set(jobs.map(job => job.id));
   const tasks = state.tasks.filter(task => jobIds.has(task.jobId) && task.profile.id === 'clef-local');
   const counts = status => tasks.filter(task => task.status === status).length;
+  const knownErrorCodes = new Set(['AI_CONFIGURATION', 'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED',
+    'AI_SAFETY_REFUSAL', 'UNSUPPORTED_VARIABLE', 'AI_INVALID_RESPONSE', 'AI_TIMEOUT', 'AI_UNAVAILABLE']);
+  const taskErrorCounts = {};
+  for (const task of tasks) {
+    if (!task.error) continue;
+    const code = knownErrorCodes.has(task.error.code) ? task.error.code : 'OTHER_ERROR';
+    taskErrorCounts[code] = (taskErrorCounts[code] || 0) + 1;
+  }
   let workerAlive = false;
   if (Number.isInteger(manifest.pid)) { try { process.kill(manifest.pid, 0); workerAlive = true; } catch {} }
   return { cohortId, total: 500, status: manifest.status, workerAlive, startedAt: manifest.startedAt || null,
     updatedAt: manifest.updatedAt, model: manifest.profile.model, completed: counts('completed'), partial: counts('partial'),
     failed: counts('failed'), running: counts('running'), pending: 500 - counts('completed') - counts('partial') - counts('failed') - counts('running'),
-    batchesCreated: jobs.length, comparisonIds: jobs.map(job => job.id),
+    batchesCreated: jobs.length, comparisonIds: jobs.map(job => job.id), taskErrorCounts,
     originalRecordsPreserved: originalsPreserved(state, manifest.baseline), dailyPaused: state.settings.dailyEnabled === false,
     ...(manifest.errorCode ? { errorCode: manifest.errorCode } : {}) };
 }

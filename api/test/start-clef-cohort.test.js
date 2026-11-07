@@ -102,3 +102,15 @@ test('status surfaces blocked worker, resumed daily schedule and changed origina
   assert.equal(status.originalRecordsPreserved, false);
   assert.equal(status.pending, 500);
 });
+
+test('status reports only allowlisted aggregate error codes without provider text', () => {
+  const { state, manifest } = fixture();
+  state.jobs.push({ id: 'clef-job', cohortId });
+  state.tasks.push(...['AI_SAFETY_REFUSAL', 'AI_SAFETY_REFUSAL', privateText].map((code, i) => ({
+    id: `clef-${i}`, jobId: 'clef-job', profile: { id: 'clef-local' }, status: 'partial',
+    error: { code, message: privateText, details: privateText },
+  })));
+  const status = cohortStatus(state, manifest);
+  assert.deepEqual(status.taskErrorCounts, { AI_SAFETY_REFUSAL: 2, OTHER_ERROR: 1 });
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(privateText));
+});
