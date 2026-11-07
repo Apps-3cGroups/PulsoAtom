@@ -89,7 +89,8 @@ async function completedArtifact(filename, requestMode) {
 
 // Isolated real-content probe: no store, jobs, evaluation persistence or policy changes.
 export async function runClefConversationCheck({ connection, reader, env = process.env, fetchImpl = fetch,
-  outputPath = defaultOutput, readState = readProbeState, requestMode = 'schema', variableIds, expectedSourceHash } = {}) {
+  outputPath = defaultOutput, readState = readProbeState, requestMode = 'schema', variableIds, expectedSourceHash,
+  expectedDecisionInstructionsVersion } = {}) {
   if (!['schema', 'prompt-json', 'compact-json'].includes(requestMode)) fail('AI_CONFIGURATION');
   if ((env.GATEWAY_PORTAL_KEY ?? 'portal-pulso') !== 'portal-pulso') fail('AI_CONFIGURATION');
   const existing = await completedArtifact(outputPath, requestMode);
@@ -165,6 +166,8 @@ export async function runClefConversationCheck({ connection, reader, env = proce
         portalKey: env.GATEWAY_PORTAL_KEY ?? 'portal-pulso', toolKey, model, timeoutMs: 180000,
         maxTokens: 16000, temperature: 0, responseFormat: 'json_schema', fetchImpl: tracedFetch });
       if (!evaluator.configured) fail('AI_CONFIGURATION');
+      if (expectedDecisionInstructionsVersion && evaluator.decisionInstructionsVersion !== expectedDecisionInstructionsVersion) fail('AI_CONFIGURATION');
+      if (evaluator.decisionInstructionsVersion === 'clef-flash-decisions-1') artifact.decisionInstructionsVersion = evaluator.decisionInstructionsVersion;
       inferenceStarted = true;
       const started = Date.now();
       try {
@@ -193,6 +196,7 @@ export async function runClefConversationCheck({ connection, reader, env = proce
       pendingVariables: Math.max(0, requested - valid), preliminaryFlagIds: artifact.results.filter(r => r.type === 'Flag' && preliminary(r).status === 'evaluado' && preliminary(r).value === 1).map(r => r.variableId),
       validationErrors: artifact.validationErrors, errorCode: artifact.errorCode || null, protocol: safeProtocol,
       ...(artifact.responseField ? { responseField: artifact.responseField } : {}),
+      ...(artifact.decisionInstructionsVersion ? { decisionInstructionsVersion: artifact.decisionInstructionsVersion } : {}),
       durationMs: artifact.durationMs || 0, sourceUnchanged: artifact.sourceUnchanged === true,
       configurationUnchanged: artifact.configurationUnchanged === true, gemmaComparable: artifact.gemmaReference?.equivalent === true && stable,
       note: 'Prueba aislada. Detecciones preliminares; no cambió la política ni se guardaron evaluaciones en Pulso.' };

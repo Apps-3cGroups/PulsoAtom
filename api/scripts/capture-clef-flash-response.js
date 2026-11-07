@@ -1,13 +1,15 @@
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { runClefConversationCheck, readProbeState } from './check-clef-conversation.js';
+import { persistClefTwoFlagsDecisions } from './persist-clef-two-flags-decisions.js';
 
 const directory = '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics';
 const strict = process.argv.length === 3 && process.argv[2] === '--strict-contract';
-const twoFlags = process.argv.length === 3 && process.argv[2] === '--two-flags';
+const decisions = process.argv.length === 3 && process.argv[2] === '--two-flags-decisions';
+const twoFlags = decisions || (process.argv.length === 3 && process.argv[2] === '--two-flags');
 const selectedIds = ['cliente_molesto', 'asistente_falto_al_respeto'];
-const capturedPath = `${directory}/clef-flash-6135-${twoFlags ? 'two-flags-' : strict ? 'strict-schema-' : ''}response-20261107.json`;
-const outputPath = `${directory}/clef-flash-6135-${twoFlags ? 'two-flags' : strict ? 'strict-schema' : 'adapted'}-20261107-v1.json`;
+const capturedPath = `${directory}/clef-flash-6135-${decisions ? 'two-flags-decisions-1-' : twoFlags ? 'two-flags-' : strict ? 'strict-schema-' : ''}response-20261107.json`;
+const outputPath = `${directory}/clef-flash-6135-${decisions ? 'two-flags-decisions-1' : twoFlags ? 'two-flags' : strict ? 'strict-schema' : 'adapted'}-20261107-v1.json`;
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 let connection, reader, networkRequests = 0, replayedResponses = 0;
 try {
@@ -57,11 +59,17 @@ try {
   const previous = twoFlags ? JSON.parse(await readFile(`${directory}/clef-flash-6135-strict-schema-20261107-v1.json`, 'utf8')) : null;
   if (twoFlags && (previous.conversationId !== '6135' || !/^[a-f0-9]{64}$/.test(previous.context?.sourceHash))) throw new Error('Missing source baseline');
   const result = await runClefConversationCheck({ connection, reader, readState, fetchImpl: captureFetch, outputPath,
-    ...(twoFlags ? { variableIds: selectedIds, expectedSourceHash: previous.context.sourceHash } : {}) });
+    ...(twoFlags ? { variableIds: selectedIds, expectedSourceHash: previous.context.sourceHash } : {}),
+    ...(decisions ? { expectedDecisionInstructionsVersion: 'clef-flash-decisions-1' } : {}) });
   // Output only normalized decisions and counts. The complete response and
   // reasons remain in the private capture rather than the workflow logs.
   console.log(JSON.stringify({ operation: 'captured-probe-status', ...result }, null, 2));
   const captured = JSON.parse(await readFile(capturedPath, 'utf8'));
+  if (decisions && result.success) {
+    const artifact = JSON.parse(await readFile(outputPath, 'utf8'));
+    const imported = await persistClefTwoFlagsDecisions(connection, artifact, captured, previous.context.sourceHash);
+    console.log(JSON.stringify({ operation: 'private-decision-capture-import', ...imported }));
+  }
   const message = captured.envelope?.response?.choices?.[0]?.message;
   const parsed = JSON.parse(message?.content?.trim() ? message.content : message.reasoning_content);
   const combinations = {}, reasonLengths = [];

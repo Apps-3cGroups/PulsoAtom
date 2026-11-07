@@ -6,6 +6,7 @@ import path from 'node:path';
 import { runClefConversationCheck, readProbeState } from '../scripts/check-clef-conversation.js';
 import { evaluationContext } from '../src/evaluation-context.js';
 import { evaluationInstructions } from '../src/evaluator.js';
+import { clefFlashDecisionInstructions } from '../src/services/clefFlashInstructions.js';
 
 const env = { GATEWAY_BASE_URL: 'http://gateway.synthetic', AGENT_SHARED_TOKEN: 'private-synthetic-token' };
 const requestUuid = '00000000-1111-4222-8333-444444444444';
@@ -205,7 +206,7 @@ test('compact mode keeps every variable and the same validation without embeddin
   assert.equal(body.response_format, undefined);
   assert.equal(body.messages.length, 2);
   assert.ok(body.messages[0].content.startsWith(evaluationInstructions));
-  assert.ok(body.messages[0].content.length - evaluationInstructions.length < 700);
+  assert.ok(body.messages[0].content.length - evaluationInstructions.length - clefFlashDecisionInstructions.length < 700);
   assert.equal(JSON.parse(body.messages[1].content).variables.length, 2);
   const malformed = await fixture(t, ({ envelope, raw }) => {
     raw.results.cliente_felicito_al_asistente.reason = '';
