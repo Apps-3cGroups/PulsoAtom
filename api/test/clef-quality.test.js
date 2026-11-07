@@ -32,6 +32,7 @@ test('Expected answers are excluded from input and failures stop without retry',
       calls++;
       assert.deepEqual(Object.keys(conversation).sort(), ['completed', 'id', 'messages']);
       assert.equal(JSON.stringify(conversation).includes('expected'), false);
+      assert.ok(conversation.messages.every(message => /^m[1-9][0-9]*$/.test(message.id)));
       throw Object.assign(new Error('private error'), { code: 'AI_TRANSIENT' });
     },
   } });

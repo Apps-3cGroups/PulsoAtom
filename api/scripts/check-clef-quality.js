@@ -7,7 +7,7 @@ import { readProbeState } from './check-clef-conversation.js';
 import { qualityCases, fullChecklistCase, selectedVariableIds } from './fixtures/clef-quality-cases.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const outputPath = '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics/clef-flash-quality-20261107-v1.json';
+const outputPath = '/var/www/nodeapps/PulsoAtom/api/.data/diagnostics/clef-flash-quality-20261107-v2.json';
 const safeCodes = new Set(['AI_CONFIGURATION', 'AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT',
   'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED', 'AI_SAFETY_REFUSAL', 'AI_INCOMPLETE']);
 
