@@ -57,7 +57,7 @@ test('native decisions use full context, independent evidence and honest templat
   assert.equal(byId.productos_solicitados.status, 'no_evaluado');
   assert.equal(byId.productos_solicitados.unavailabilityCode, 'unsupported_descriptor');
   for (const call of inferenceCalls(calls)) {
-    assert.deepEqual(call.invocation.body.state.messages, conversation.messages);
+    assert.deepEqual(call.invocation.body.state.messages, conversation.messages.map(({ id, actor, text }) => ({ id, actor, text })));
     assert.equal(call.invocation.body.model, 'clef-flash');
     assert.deepEqual(Object.keys(call.invocation.body).sort(), ['model', 'questions', 'state']);
     assert.ok(!JSON.stringify(call.invocation.body).includes('DO_NOT_SEND_OTHER_MODEL_RESULTS'));
