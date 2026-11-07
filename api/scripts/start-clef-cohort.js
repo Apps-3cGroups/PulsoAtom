@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
-import { cp, mkdir, open, readFile, symlink, rename } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { cp, mkdir, open, readFile, symlink, rename, readdir, lstat, realpath } from 'node:fs/promises';
+import { randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { apiRoot, config, databaseConfig, atomDatabaseConfig } from '../src/config.js';
@@ -23,6 +23,114 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const fingerprint = value => digest(canonical(value));
 const baselineFields = ['evaluations', 'tasks', 'attempts', 'jobs', 'comparisons', 'operationalRefs', 'reviews', 'verdicts'];
+const codeRoots = new Set(['src', 'scripts']);
+const codeRootFiles = new Set(['server.js', 'package.json', 'package-lock.json']);
+const skippedDirectories = new Set(['node_modules', '.data', '.git']);
+const safeCodeExtension = /\.(?:js|mjs|cjs|json|py)$/;
+const processAlive = pid => {
+  if (!Number.isSafeInteger(pid) || pid < 1) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+};
+
+// Hash/copy only executable source, its catalogs and package metadata. Runtime
+// output, credentials and dependencies never enter the reviewed snapshot.
+async function codeInventory(root) {
+  const entries = [];
+  async function visit(relative = '') {
+    const names = (await readdir(path.join(root, relative))).sort();
+    for (const name of names) {
+      if (name.startsWith('.env') || skippedDirectories.has(name)) continue;
+      if (!relative && !codeRoots.has(name) && !codeRootFiles.has(name)) continue;
+      const file = path.join(relative, name), absolute = path.join(root, file);
+      const info = await lstat(absolute);
+      if (info.isSymbolicLink()) fail('WORKER_CODE_SYMLINK');
+      if (info.isDirectory()) { if (relative || codeRoots.has(name)) await visit(file); continue; }
+      if (!info.isFile() || !safeCodeExtension.test(name)) continue;
+      entries.push({ file, hash: createHash('sha256').update(await readFile(absolute)).digest('hex') });
+    }
+  }
+  await visit();
+  if (!entries.some(entry => entry.file === path.join('scripts', 'start-clef-cohort.js'))
+    || !entries.some(entry => entry.file === path.join('src', 'evaluation-service.js'))
+    || !entries.some(entry => entry.file === 'package.json')) fail('INCOMPLETE_WORKER_CODE');
+  return { entries, hash: fingerprint(entries) };
+}
+async function syncDirectory(filename) {
+  const handle = await open(filename, 'r');
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+// The caller owns both launch.lock and worker.lock. The guard is rechecked
+// after staging and immediately before swapping, including the dead PID and
+// immutable cohort/configuration checks. Backups and journals are retained.
+export async function refreshWorkerSnapshot({ sourceApi, cohortDirectory, dependenciesPath, verifyStopped,
+  expectedPreviousHash, renamePath = rename, now = new Date().toISOString() }) {
+  if (typeof verifyStopped !== 'function' || !Number.isFinite(Date.parse(now))) fail('INVALID_WORKER_UPDATE');
+  await verifyStopped();
+  const source = await realpath(sourceApi), workerApi = path.join(cohortDirectory, 'worker-api');
+  const worker = await realpath(workerApi);
+  if (source === worker || source.startsWith(`${worker}${path.sep}`)) fail('WORKER_SOURCE_NOT_REVIEWED');
+  const sourceCode = await codeInventory(source), previousCode = await codeInventory(worker);
+  if (expectedPreviousHash && previousCode.hash !== expectedPreviousHash) fail('WORKER_CODE_CHANGED');
+  const updateId = randomUUID(), stagingApi = path.join(cohortDirectory, `worker-api-${updateId}.tmp`);
+  const backupApi = path.join(cohortDirectory, `worker-api-backup-${updateId}`);
+  const journalFile = path.join(cohortDirectory, `worker-update-${updateId}.json`);
+  await mkdir(stagingApi, { mode: 0o700 });
+  for (const entry of sourceCode.entries) {
+    const target = path.join(stagingApi, entry.file);
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await cp(path.join(source, entry.file), target, { force: false, errorOnExist: true });
+    const copied = await open(target, 'r');
+    try { await copied.sync(); } finally { await copied.close(); }
+  }
+  const stagedCode = await codeInventory(stagingApi), sourceAfter = await codeInventory(source);
+  if (stagedCode.hash !== sourceCode.hash || sourceAfter.hash !== sourceCode.hash) fail('WORKER_SOURCE_CHANGED');
+  await symlink(dependenciesPath, path.join(stagingApi, 'node_modules'));
+  const stagedDirectories = [...new Set(stagedCode.entries.map(entry => path.dirname(path.join(stagingApi, entry.file))))];
+  for (const stagedDirectory of stagedDirectories.sort((a, b) => b.length - a.length)) await syncDirectory(stagedDirectory);
+  await syncDirectory(stagingApi);
+  const journal = { format: 1, updateId, status: 'staged', createdAt: now,
+    previousCodeHash: previousCode.hash, codeHash: stagedCode.hash,
+    backupDirectory: path.basename(backupApi), stagedDirectory: path.basename(stagingApi), files: stagedCode.entries.length };
+  await persistBackfillManifest(journalFile, journal);
+  await verifyStopped();
+  if ((await codeInventory(workerApi)).hash !== previousCode.hash) fail('WORKER_CODE_CHANGED');
+  let backedUp = false, installed = false;
+  try {
+    await renamePath(workerApi, backupApi); backedUp = true;
+    await renamePath(stagingApi, workerApi); installed = true;
+    await syncDirectory(cohortDirectory);
+    if ((await codeInventory(workerApi)).hash !== stagedCode.hash) fail('WORKER_INSTALL_MISMATCH');
+    journal.status = 'installed'; journal.installedAt = new Date().toISOString();
+    await persistBackfillManifest(journalFile, journal);
+    return { ...journal, journalFile: path.basename(journalFile) };
+  } catch (error) {
+    // Preserve the new staging copy for diagnosis and restore the old runnable
+    // directory if the second rename fails. Never remove outputs or backups.
+    if (backedUp && !installed) {
+      try { await renamePath(backupApi, workerApi); await syncDirectory(cohortDirectory); journal.status = 'rolled-back'; }
+      catch { journal.status = 'recovery-required'; }
+    } else journal.status = installed ? 'installed-unconfirmed' : 'failed';
+    await persistBackfillManifest(journalFile, journal).catch(() => {});
+    throw error;
+  }
+}
+
+export function workerRunManifest(manifest, { resume = false, pid = process.pid, now = new Date().toISOString() } = {}) {
+  if (resume ? !['blocked', 'partial', 'running'].includes(manifest.status) : manifest.status !== 'prepared') fail('WORKER_ALREADY_STARTED');
+  if (!Number.isFinite(Date.parse(now)) || !Number.isSafeInteger(pid) || pid < 1
+    || (manifest.startedAt && !Number.isFinite(Date.parse(manifest.startedAt)))) fail('INVALID_WORKER_START');
+  const next = structuredClone(manifest);
+  next.workerRuns ||= [];
+  next.workerRuns.push({ pid, startedAt: now, resume, previousStatus: manifest.status,
+    ...(manifest.errorCode ? { previousErrorCode: manifest.errorCode } : {}),
+    ...(manifest.finishedAt ? { previousFinishedAt: manifest.finishedAt } : {}) });
+  next.status = 'running'; next.pid = pid; next.startedAt ||= now;
+  next.lastStartedAt = now; next.updatedAt = now;
+  delete next.errorCode; delete next.finishedAt;
+  return next;
+}
 export function preservationBaseline(state) {
   return Object.fromEntries(baselineFields.map(field => [field, (state[field] || []).map(record => ({ id: record.id, hash: fingerprint(record) }))]));
 }
@@ -38,22 +146,27 @@ export function cohortStatus(state, manifest) {
   const tasks = state.tasks.filter(task => jobIds.has(task.jobId) && task.profile.id === 'clef-local');
   const counts = status => tasks.filter(task => task.status === status).length;
   const knownErrorCodes = new Set(['AI_CONFIGURATION', 'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED',
-    'AI_SAFETY_REFUSAL', 'UNSUPPORTED_VARIABLE', 'AI_INVALID_RESPONSE', 'AI_TIMEOUT', 'AI_UNAVAILABLE']);
+    'AI_SAFETY_REFUSAL', 'UNSUPPORTED_VARIABLE', 'INVALID_AI_RESULT', 'AI_INCOMPLETE', 'AI_TRANSIENT', 'AI_UNAVAILABLE', 'AI_CONTEXT_LIMIT']);
   const taskErrorCounts = {};
   for (const task of tasks) {
     if (!task.error) continue;
     const code = knownErrorCodes.has(task.error.code) ? task.error.code : 'OTHER_ERROR';
     taskErrorCounts[code] = (taskErrorCounts[code] || 0) + 1;
   }
-  let workerAlive = false;
-  if (Number.isInteger(manifest.pid)) { try { process.kill(manifest.pid, 0); workerAlive = true; } catch {} }
+  const workerAlive = processAlive(manifest.pid);
   return { cohortId, total: 500, status: manifest.status, workerAlive, startedAt: manifest.startedAt || null,
+    lastStartedAt: manifest.lastStartedAt || manifest.startedAt || null,
+    resumeCount: (manifest.workerRuns || []).filter(run => run.resume).length, workerCodeHash: manifest.workerCodeHash || null,
     updatedAt: manifest.updatedAt, model: manifest.profile.model, completed: counts('completed'), partial: counts('partial'),
     failed: counts('failed'), running: counts('running'), pending: 500 - counts('completed') - counts('partial') - counts('failed') - counts('running'),
     batchesCreated: jobs.length, comparisonIds: jobs.map(job => job.id), taskErrorCounts,
     originalRecordsPreserved: originalsPreserved(state, manifest.baseline), dailyPaused: state.settings.dailyEnabled === false,
     ...(manifest.errorCode ? { errorCode: manifest.errorCode } : {}) };
 }
+export const requiresModelIntervention = task => ['AI_CONFIGURATION', 'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED',
+  'AI_SAFETY_REFUSAL', 'UNSUPPORTED_VARIABLE'].includes(task.error?.code);
+export const eligibleForCohortResume = task => task.profile.id === 'clef-local' && task.status !== 'completed'
+  && task.round < 3 && !['AI_CONTEXT_LIMIT', 'AI_SAFETY_REFUSAL'].includes(task.error?.code);
 function assertStable(state, manifest, registry) {
   if (state.settings.dailyEnabled !== false || state.settings.evaluationMaintenance !== maintenanceId) fail('MAINTENANCE_CHANGED');
   if (!originalsPreserved(state, manifest.baseline)) fail('ORIGINAL_RECORD_CHANGED');
@@ -78,10 +191,13 @@ async function runWorker(store, registry, resume = false) {
   let manifest;
   try {
     const read = await readManifest(); manifest = read.manifest;
-    if (resume ? !['blocked', 'partial', 'running'].includes(manifest.status) : manifest.status !== 'prepared') fail('WORKER_ALREADY_STARTED');
+    const nextRun = workerRunManifest(manifest, { resume });
+    const beforeRecovery = await store.read();
+    assertStable(beforeRecovery, manifest, registry);
+    if (beforeRecovery.jobs.some(job => ['running', 'pending', 'queued'].includes(job.status)
+      && job.cohortId !== cohortId)) fail('EVALUATION_RUNNING');
     if (resume) await recoverEvaluationJobs(store);
-    manifest.status = 'running'; manifest.pid = process.pid; manifest.startedAt = new Date().toISOString();
-    manifest.updatedAt = manifest.startedAt;
+    manifest = nextRun;
     await persistBackfillManifest(manifestFile, manifest);
     for (let index = 0; index < 25; index++) {
       const ids = manifest.conversationIds.slice(index * 20, (index + 1) * 20);
@@ -101,8 +217,8 @@ async function runWorker(store, registry, resume = false) {
         if (draft.jobs.some(job => job.idempotencyKey === prepared.job.idempotencyKey)) fail('DUPLICATE_BATCH');
         draft.jobs.push(prepared.job); draft.tasks.push(...prepared.tasks); draft.comparisons.push(prepared.sample);
       });
-      const eligibleIds = existing ? state.tasks.filter(task => task.jobId === existing.id && task.profile.id === 'clef-local'
-        && task.status !== 'completed' && task.round < 3).map(task => task.conversationId) : ids;
+      const eligibleIds = existing ? state.tasks.filter(task => task.jobId === existing.id
+        && eligibleForCohortResume(task)).map(task => task.conversationId) : ids;
       if (!eligibleIds.length) continue;
       console.log(JSON.stringify({ event: 'clef-cohort-batch-start', batch: index + 1, jobId: prepared.job.id, conversations: ids.length }));
       const launched = await resumeEvaluationBatch(store, registry, prepared.job.id, { profileIds: ['clef-local'], conversationIds: eligibleIds });
@@ -115,7 +231,7 @@ async function runWorker(store, registry, resume = false) {
       // A configuration/refusal failure requires intervention. Do not consume
       // the remaining 480 requests after a systematic non-transient failure.
       const currentTasks = after.tasks.filter(task => task.jobId === prepared.job.id && task.profile.id === 'clef-local');
-      if (currentTasks.some(task => ['AI_CONFIGURATION','MODEL_CHANGED','MODEL_IDENTITY_UNVERIFIED','AI_SAFETY_REFUSAL','UNSUPPORTED_VARIABLE'].includes(task.error?.code))) fail('MODEL_REQUIRES_INTERVENTION');
+      if (currentTasks.some(requiresModelIntervention)) fail('MODEL_REQUIRES_INTERVENTION');
     }
     const state = await store.read(); assertStable(state, manifest, registry);
     const status = cohortStatus(state, manifest);
@@ -151,13 +267,40 @@ async function start(store, registry, resume = false) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const release = await acquireBackfillLock(`${directory}/launch.lock`, maintenanceId);
   try {
+    let prepared;
     try {
-      const { manifest } = await readManifest();
+      prepared = await readManifest();
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (prepared) {
+      const { manifest } = prepared;
       const state = await store.read(), status = cohortStatus(state, manifest);
       if (!resume || status.workerAlive || manifest.status === 'completed') return { alreadyPrepared: true, ...status };
       assertStable(state, manifest, registry);
-      return launchWorker(store, true);
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!['blocked', 'partial', 'running'].includes(manifest.status)) fail('WORKER_ALREADY_STARTED');
+      const releaseWorker = await acquireBackfillLock(`${directory}/worker.lock`, maintenanceId);
+      try {
+        const expectedManifest = fingerprint(manifest);
+        const verifyStopped = async () => {
+          const current = (await readManifest()).manifest;
+          if (fingerprint(current) !== expectedManifest) fail('COHORT_MANIFEST_CHANGED');
+          if (processAlive(current.pid)) fail('WORKER_STILL_RUNNING');
+          const latest = await store.read(); assertStable(latest, manifest, registry);
+          // A stale job from this stopped worker may be recovered by the new
+          // worker. All other live work prevents installing another runtime.
+          if (latest.jobs.some(job => ['running', 'pending', 'queued'].includes(job.status)
+            && !(job.cohortId === cohortId && job.status === 'running'
+              && Date.parse(job.updatedAt || job.createdAt) < Date.now() - 10 * 60_000))) fail('EVALUATION_RUNNING');
+        };
+        const update = await refreshWorkerSnapshot({ sourceApi: apiRoot, cohortDirectory: directory,
+          dependenciesPath: `${productionApi}/node_modules`, verifyStopped, expectedPreviousHash: manifest.workerCodeHash });
+        await verifyStopped();
+        manifest.workerCodeUpdates ||= [];
+        manifest.workerCodeUpdates.push(update);
+        manifest.workerCodeHash = update.codeHash;
+        await persistBackfillManifest(manifestFile, manifest);
+      } finally { await releaseWorker(); }
+      return await launchWorker(store, true);
+    }
     if (resume) fail('COHORT_NOT_PREPARED');
     const original = await readRequiredBackfillManifest(ORIGINAL_GEMMA_MANIFEST);
     const state = await store.readWithConversations({ fresh: true, conversationIds: original.conversations.map(item => item.id) });
@@ -186,7 +329,7 @@ async function start(store, registry, resume = false) {
       baseline: preservationBaseline(updated), status: 'prepared', createdAt, updatedAt: createdAt, finishedBatches: 0 };
     await persistBackfillManifest(manifestFile, manifest);
     // Worker owns the manifest after spawn; never overwrite its checkpoint.
-    return launchWorker(store);
+    return await launchWorker(store);
   } finally { await release(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -9,7 +9,7 @@ import { restoreClefCohortCatalog, ORIGINAL_GEMMA_MANIFEST, ORIGINAL_GEMMA_MAINT
 const directory = `/var/www/nodeapps/PulsoAtom/api/.data/clef-cohort-${ORIGINAL_GEMMA_MAINTENANCE_ID}`;
 const cohortId = `clef-complement-${ORIGINAL_GEMMA_MAINTENANCE_ID}`;
 const httpStatus = message => Number(/^El Gateway rechazó la solicitud al modelo local \(HTTP (\d{3})\)\.$/.exec(message || '')?.[1]) || null;
-const safeCode = value => ['AI_CONFIGURATION','AI_UNAVAILABLE','AI_TRANSIENT','INVALID_AI_RESULT','AI_INCOMPLETE','AI_SAFETY_REFUSAL','MODEL_CHANGED','MODEL_IDENTITY_UNVERIFIED'].includes(value) ? value : 'OTHER_ERROR';
+const safeCode = value => ['AI_CONFIGURATION','AI_UNAVAILABLE','AI_TRANSIENT','INVALID_AI_RESULT','AI_INCOMPLETE','AI_SAFETY_REFUSAL','MODEL_CHANGED','MODEL_IDENTITY_UNVERIFIED','AI_CONTEXT_LIMIT'].includes(value) ? value : 'OTHER_ERROR';
 const patterns = {
   context_limit: /context.{0,40}(?:length|window|limit|exceed)|(?:token|prompt).{0,40}(?:exceed|too long)|maximum context/i,
   invalid_schema: /(?:schema|grammar).{0,70}(?:invalid|error|fail|unsupported)|(?:invalid|fail|unsupported).{0,50}(?:schema|grammar)/i,
