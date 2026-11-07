@@ -100,7 +100,7 @@ export async function main({ args = [], env = process.env, fetchImpl = fetch, re
   };
   const evaluator = new GatewayEvaluator({ baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
     portalKey: env.GATEWAY_PORTAL_KEY ?? 'portal-pulso', toolKey: candidate.toolKey, model: candidate.model,
-    timeoutMs: 60000, maxTokens: 2048, temperature: 0, responseFormat, fetchImpl: tracedFetch });
+    timeoutMs: 180000, maxTokens: 2048, temperature: 0, responseFormat, fetchImpl: tracedFetch });
   if (!evaluator.configured) return { ...report, error: { code: 'AI_CONFIGURATION', message: 'La configuración no admite la prueba sintética.' } };
   const started = Date.now(); report.inferenceCount = 1;
   try {

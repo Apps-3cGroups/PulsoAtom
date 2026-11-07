@@ -37,7 +37,7 @@ test('Clef check discovers only allowed tools and makes one bounded synthetic in
   assert.equal(calls.length, 4);
   assert.equal(inferenceCalls(calls).length, 1);
   const invocation = JSON.parse(inferenceCalls(calls)[0].options.body);
-  assert.equal(invocation.timeout_ms, 60000);
+  assert.equal(invocation.timeout_ms, 180000);
   assert.equal(invocation.body.max_tokens, 2048);
   assert.equal(invocation.portal_key, 'portal-pulso');
   assert.equal(invocation.body.response_format.type, 'json_schema');
