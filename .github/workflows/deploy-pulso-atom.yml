@@ -208,7 +208,7 @@ jobs:
             $scpOptions = @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
             if ($env:GEMMA_OPERATION -ceq 'clef-gateway-host') {
               # Existing deployment key, documented Gateway host/user. Read-only.
-              $remoteCommand = 'hostname; systemctl show agent-gateway.service --property=WorkingDirectory --property=FragmentPath --property=User; test -d /opt/agent-platform && ls /opt/agent-platform'
+              $remoteCommand = 'sudo -n find /opt/agent-platform/gateway/current/api -maxdepth 3 -type f -name "*.py"'
             } elseif ($useCheckoutSource) {
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
