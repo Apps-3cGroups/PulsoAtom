@@ -2,6 +2,9 @@ import { pathToFileURL } from 'node:url';
 import { AppError } from '../src/errors.js';
 import { catalogReferences, digest, evaluationContext } from '../src/evaluation-context.js';
 import { readRequiredBackfillManifest } from '../src/gemma-backfill.js';
+import { comparisonRows } from '../src/comparisons.js';
+import { conversationView, viewContext } from '../src/domain.js';
+import { classificationOf } from '../src/catalog-presentation.js';
 
 export const ORIGINAL_GEMMA_MAINTENANCE_ID = '77f134e8-fdf8-4154-b1f6-485c159b9194';
 export const ORIGINAL_GEMMA_MANIFEST = `/var/www/nodeapps/PulsoAtom/api/.data/backfills/${ORIGINAL_GEMMA_MAINTENANCE_ID}.json`;
@@ -11,6 +14,67 @@ const fail = code => { throw new AppError(409, 'No se pudo verificar la selecciÃ
 const key = value => String(value);
 const active = row => ['running', 'queued', 'pending'].includes(row.status);
 const recordHash = rows => digest([...rows].sort((a, b) => key(a.id).localeCompare(key(b.id))));
+
+// Read-only visibility audit. Emit counts and catalog identifiers only; never
+// return messages, clients, evidence, model responses or free-form reasons.
+export function cohortVisibilityAudit(state, manifest) {
+  const cohortId = `clef-complement-${manifest.id}`;
+  const ids = new Set(manifest.conversations.map(c => key(c.id)));
+  const samples = (state.comparisons || []).filter(s => s.cohortId === cohortId);
+  const rows = samples.flatMap(sample => comparisonRows(state, sample));
+  const uniqueRows = new Map(rows.map(row => [row.id, row]));
+  const cases = new Set(), attentionCases = new Set(), positiveCases = new Set();
+  const agreementsByVariable = new Map();
+  const comparison = { samples: samples.length, cases: new Set(samples.flatMap(s => s.cases.map(c => c.conversationId))).size,
+    variablePairs: uniqueRows.size, duplicateRows: rows.length - uniqueRows.size,
+    bothDetected: 0, bothAbsent: 0, disagreement: 0, incomplete: 0,
+    changedSourcePairs: 0, conversationsWithBothDetected: 0, conversationsWithAttentionAgreement: 0,
+    conversationsWithPositiveAgreement: 0 };
+  for (const row of uniqueRows.values()) {
+    if (row.sourceChanged) { comparison.changedSourcePairs++; continue; }
+    if (row.agreement === 'incomplete') comparison.incomplete++;
+    else if (row.agreement === 'disagreement') comparison.disagreement++;
+    else if (row.detections === 0) comparison.bothAbsent++;
+    else if (row.detections === 2 && row.votes === 2 && row.expected === 2) {
+      comparison.bothDetected++; cases.add(row.conversationId);
+      const definition = state.catalogVersions.find(v => v.itemId === row.variable.id && v.version === row.variable.version)?.snapshot;
+      const classification = classificationOf(definition || {});
+      if (classification === 'positive') positiveCases.add(row.conversationId);
+      else if (classification) attentionCases.add(row.conversationId);
+      const entry = agreementsByVariable.get(row.variable.id) || { variableId: row.variable.id, classification, count: 0 };
+      entry.count++; agreementsByVariable.set(row.variable.id, entry);
+    }
+  }
+  comparison.conversationsWithBothDetected = cases.size;
+  comparison.conversationsWithAttentionAgreement = attentionCases.size;
+  comparison.conversationsWithPositiveAgreement = positiveCases.size;
+  const context = viewContext(state), pendingByVariable = new Map();
+  const operational = { conversations: 0, withResults: 0, incomplete: 0, consensusPending: 0,
+    withAttentionFlags: 0, withPositiveFlags: 0, withErrors: 0, changedSource: 0 };
+  for (const conversation of state.conversations.filter(c => ids.has(key(c.id)))) {
+    const view = conversationView(state, conversation, context, true);
+    operational.conversations++; operational.withResults += Number(view.evaluated);
+    operational.incomplete += Number(view.evaluationIncomplete);
+    operational.consensusPending += Number(view.consensusPendingFlags > 0);
+    operational.withAttentionFlags += Number(view.critical + view.normal > 0);
+    operational.withPositiveFlags += Number(view.positive > 0);
+    operational.withErrors += Number(view.evaluationErrors > 0);
+    operational.changedSource += Number(view.sourceChanged);
+    for (const variable of view.variables) {
+      if (!variable.enabledInEvaluation || !variable.classification || variable.review) continue;
+      if (variable.result.status === 'evaluado' && !variable.result.error) continue;
+      const entry = pendingByVariable.get(variable.id) || { variableId: variable.id, method: variable.method,
+        unavailableInAdapter: variable.availability.status === 'pending', noResult: 0, errors: 0 };
+      entry.noResult += Number(variable.result.status !== 'evaluado'); entry.errors += Number(!!variable.result.error);
+      pendingByVariable.set(variable.id, entry);
+    }
+  }
+  const activityDates = {};
+  for (const c of manifest.conversations) activityDates[c.activityDate] = (activityDates[c.activityDate] || 0) + 1;
+  return { readOnly: true, comparison, operational, activityDates,
+    agreementsByVariable: [...agreementsByVariable.values()].sort((a, b) => b.count - a.count),
+    pendingByVariable: [...pendingByVariable.values()].sort((a, b) => b.noResult - a.noResult) };
+}
 
 // Restore historical definitions in the manifest's original order. Current
 // catalog activation never silently changes the checklist sent to Clef.
@@ -146,7 +210,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       || new Set(manifest.conversations.map(c => key(c.id))).size !== 500) fail('INVALID_CLEF_COHORT');
     store = new AtomHistoryStore(new MysqlStore(db), new AtomReader(atom, config.timezone));
     const state = await store.readWithConversations({ fresh: true, conversationIds: manifest.conversations.map(c => c.id) });
-    console.log(JSON.stringify(inspectClefCohort(state, manifest, registryFromEnv()), null, 2));
+    console.log(JSON.stringify({ ...inspectClefCohort(state, manifest, registryFromEnv()),
+      visibility: cohortVisibilityAudit(state, manifest) }, null, 2));
   } catch (error) {
     console.error(JSON.stringify({ readOnly: true, inferenceStarted: false, success: false,
       code: error instanceof AppError ? error.code : 'CLEF_COHORT_INSPECTION_FAILED',
