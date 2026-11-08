@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, clef-cohort-inspect, clef-cohort-diagnose, clef-cohort-resume, clef-cohort-configure, clef-cohort-start, clef-cohort-status, clef-quality, clef-two-flags-decisions, clef-two-flags-import, clef-two-flags, clef-strict-check, clef-capture-retry, clef-capture-check, clef-native-inventory, clef-native-probe, clef-gateway-enable, clef-gateway-host, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, clef-cohort-inspect, clef-cohort-diagnose, clef-cohort-resume, clef-cohort-configure, clef-cohort-start, clef-cohort-status, clef-cohort-monitor, clef-quality, clef-two-flags-decisions, clef-two-flags-import, clef-two-flags, clef-strict-check, clef-capture-retry, clef-capture-check, clef-native-inventory, clef-native-probe, clef-gateway-enable, clef-gateway-host, clef-gateway-inspect, clef-response-modes, clef-response-audit, clef-conversation-check, clef-flash-check, clef-error-check, clef-short-check, clef-configure, clef-check, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-cohort-inspect' || inputs.operation == 'clef-cohort-diagnose' || inputs.operation == 'clef-cohort-resume' || inputs.operation == 'clef-cohort-configure' || inputs.operation == 'clef-cohort-start' || inputs.operation == 'clef-cohort-status' || inputs.operation == 'clef-quality' || inputs.operation == 'clef-two-flags-decisions' || inputs.operation == 'clef-two-flags-import' || inputs.operation == 'clef-two-flags' || inputs.operation == 'clef-strict-check' || inputs.operation == 'clef-capture-retry' || inputs.operation == 'clef-capture-check' || inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-gateway-host' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'clef-cohort-inspect' || inputs.operation == 'clef-cohort-diagnose' || inputs.operation == 'clef-cohort-resume' || inputs.operation == 'clef-cohort-configure' || inputs.operation == 'clef-cohort-start' || inputs.operation == 'clef-cohort-status' || inputs.operation == 'clef-cohort-monitor' || inputs.operation == 'clef-quality' || inputs.operation == 'clef-two-flags-decisions' || inputs.operation == 'clef-two-flags-import' || inputs.operation == 'clef-two-flags' || inputs.operation == 'clef-strict-check' || inputs.operation == 'clef-capture-retry' || inputs.operation == 'clef-capture-check' || inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-gateway-host' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: ${{ inputs.operation == 'clef-short-check' && 12 || 10 }}
@@ -99,7 +99,7 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'clef-cohort-inspect' || inputs.operation == 'clef-cohort-diagnose' || inputs.operation == 'clef-cohort-resume' || inputs.operation == 'clef-cohort-configure' || inputs.operation == 'clef-cohort-start' || inputs.operation == 'clef-cohort-status' || inputs.operation == 'clef-quality' || inputs.operation == 'clef-two-flags-decisions' || inputs.operation == 'clef-two-flags-import' || inputs.operation == 'clef-two-flags' || inputs.operation == 'clef-strict-check' || inputs.operation == 'clef-capture-retry' || inputs.operation == 'clef-capture-check' || inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'clef-cohort-inspect' || inputs.operation == 'clef-cohort-diagnose' || inputs.operation == 'clef-cohort-resume' || inputs.operation == 'clef-cohort-configure' || inputs.operation == 'clef-cohort-start' || inputs.operation == 'clef-cohort-status' || inputs.operation == 'clef-cohort-monitor' || inputs.operation == 'clef-quality' || inputs.operation == 'clef-two-flags-decisions' || inputs.operation == 'clef-two-flags-import' || inputs.operation == 'clef-two-flags' || inputs.operation == 'clef-strict-check' || inputs.operation == 'clef-capture-retry' || inputs.operation == 'clef-capture-check' || inputs.operation == 'clef-gateway-enable' || inputs.operation == 'clef-native-inventory' || inputs.operation == 'clef-native-probe' || inputs.operation == 'clef-gateway-inspect' || inputs.operation == 'clef-response-modes' || inputs.operation == 'clef-response-audit' || inputs.operation == 'clef-conversation-check' || inputs.operation == 'clef-flash-check' || inputs.operation == 'clef-error-check' || inputs.operation == 'clef-short-check' || inputs.operation == 'clef-configure' || inputs.operation == 'clef-check' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -120,8 +120,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('clef-cohort-inspect', 'clef-cohort-diagnose', 'clef-cohort-resume', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-quality', 'clef-two-flags-decisions', 'clef-two-flags-import', 'clef-two-flags', 'clef-strict-check', 'clef-capture-retry', 'clef-capture-check', 'clef-native-inventory', 'clef-native-probe', 'clef-gateway-enable', 'clef-gateway-host', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-cohort-inspect', 'clef-cohort-diagnose', 'clef-cohort-resume', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-quality', 'clef-two-flags-decisions', 'clef-two-flags-import', 'clef-two-flags', 'clef-strict-check', 'clef-capture-retry', 'clef-capture-check', 'clef-native-inventory', 'clef-native-probe', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('clef-cohort-inspect', 'clef-cohort-diagnose', 'clef-cohort-resume', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-cohort-monitor', 'clef-quality', 'clef-two-flags-decisions', 'clef-two-flags-import', 'clef-two-flags', 'clef-strict-check', 'clef-capture-retry', 'clef-capture-check', 'clef-native-inventory', 'clef-native-probe', 'clef-gateway-enable', 'clef-gateway-host', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('clef-cohort-inspect', 'clef-cohort-diagnose', 'clef-cohort-resume', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-cohort-monitor', 'clef-quality', 'clef-two-flags-decisions', 'clef-two-flags-import', 'clef-two-flags', 'clef-strict-check', 'clef-capture-retry', 'clef-capture-check', 'clef-native-inventory', 'clef-native-probe', 'clef-gateway-inspect', 'clef-response-modes', 'clef-response-audit', 'clef-conversation-check', 'clef-flash-check', 'clef-error-check', 'clef-short-check', 'clef-configure', 'clef-check', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
             if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
@@ -150,6 +150,7 @@ jobs:
             'clef-cohort-inspect' { $entryScript = 'scripts/inspect-clef-cohort.js'; $scriptArguments = '' }
             'clef-cohort-configure' { $entryScript = 'scripts/configure-clef-flash.js'; $scriptArguments = '--apply' }
             'clef-cohort-start' { $entryScript = 'scripts/start-clef-cohort.js'; $scriptArguments = '--start' }
+            'clef-cohort-monitor' { $entryScript = 'scripts/install-clef-monitor.js'; $scriptArguments = '' }
             'clef-cohort-status' { $entryScript = 'scripts/start-clef-cohort.js'; $scriptArguments = '--status' }
             'clef-quality' { $entryScript = 'scripts/check-clef-quality.js'; $scriptArguments = '' }
             'clef-two-flags-decisions' { $entryScript = 'scripts/capture-clef-flash-response.js'; $scriptArguments = '--two-flags-decisions' }
@@ -235,6 +236,13 @@ jobs:
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
+            if ($env:GEMMA_OPERATION -ceq 'clef-cohort-monitor') {
+              $monitorSource = Join-Path $env:GITHUB_WORKSPACE 'web/temporary-clef'
+              if (-not (Test-Path -LiteralPath $monitorSource -PathType Container)) { throw 'Missing compiled temporary monitor.' }
+              $monitorEntries = @((Get-Item -LiteralPath $monitorSource -Force)) + @(Get-ChildItem -LiteralPath $monitorSource -Force -Recurse)
+              if ($monitorEntries | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }) { throw 'Refusing monitor links.' }
+              Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $monitorSource, "${sshTarget}:$remoteRoot/static-monitor"))
+            }
             # Isolated source + existing dependencies/env. No pull, npm, PM2,
             # migrations or reset. clef-configure updates only the unused Clef
             # route under strict policy/maintenance guards. Preflight is synthetic only;
@@ -267,7 +275,7 @@ jobs:
           '@
               $publishedSourceCheck = $publishedSourceCheck.Replace('__REMOTE_ROOT__', $remoteRoot)
             }
-            if ($env:GEMMA_OPERATION -cin @('clef-cohort-inspect', 'clef-cohort-diagnose', 'clef-cohort-resume', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status')) {
+            if ($env:GEMMA_OPERATION -cin @('clef-cohort-inspect', 'clef-cohort-diagnose', 'clef-cohort-resume', 'clef-cohort-configure', 'clef-cohort-start', 'clef-cohort-status', 'clef-cohort-monitor')) {
               # An isolated worker extends the current production engine; never deploys.
               $publishedSourceCheck = @'
           actual_sha="$(sudo -n -u td -H git -C /var/www/nodeapps/PulsoAtom rev-parse HEAD)"

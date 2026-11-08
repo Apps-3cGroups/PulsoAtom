@@ -1,0 +1,29 @@
+{
+  "format": "pulso-clef-monitor-v1",
+  "files": [
+    {
+      "path": "assets/bricolage-grotesque-latin-600-normal-nxTgbNFE.woff2",
+      "sha256": "b34fc8c1ef0ac8798455ac2979eae4b4f90f0d327e3584d1032fa77a8a9a66ca"
+    },
+    {
+      "path": "assets/index-C6yTdsJ5.css",
+      "sha256": "8f761316c7310f514ea90691d3736cc9b1111b13ce2a3589859dde6232f42e00"
+    },
+    {
+      "path": "assets/index-kEMlBy40.js",
+      "sha256": "adf7555fb311d4713314ab55e927582b7f5fbb5a8f113e08c0280db88ca7f933"
+    },
+    {
+      "path": "assets/instrument-sans-latin-400-normal-DRC__1Mx.woff2",
+      "sha256": "9a91efaa3599a6ef01b2f49e9ec670e3a2f39baeef09c73198f1052cf3bb0850"
+    },
+    {
+      "path": "assets/instrument-sans-latin-600-normal-B7fBEWYG.woff2",
+      "sha256": "efb770916eda95a0e31d80cccde9651d4e8617010b21220e9f227c4820d675da"
+    },
+    {
+      "path": "index.html",
+      "sha256": "2e9d6bac5b188ed08fa22d0bbff6cb73eec7a59134fc5a64ea2167f2049146e6"
+    }
+  ]
+}
