@@ -17,7 +17,18 @@ export const flagCount = (conversation, classification) => conversation[classifi
 export const flagVariables = catalog => catalog.filter(v => ['Flag', 'Calculado'].includes(v.type));
 export const metricValue = variable => variable?.result?.status === 'evaluado' && typeof variable.result.value === 'number' && Number.isFinite(variable.result.value) ? variable.result.value : null;
 
-export const needsModelReview = conversation => (conversation.consensusPendingFlags || 0) > 0;
+export const evaluationStatus = conversation => conversation.evaluationStatus || (!conversation.evaluated ? 'not_evaluated'
+  : conversation.evaluationErrors > 0 ? 'partial' : conversation.consensusPendingFlags > 0 ? 'review_pending'
+    : conversation.evaluationIncomplete ? 'partial' : 'evaluated');
+export const needsModelReview = conversation => conversation.evaluationStatus ? conversation.evaluationStatus === 'review_pending' : (conversation.consensusPendingFlags || 0) > 0;
+export const evaluationNeedsAttention = conversation => evaluationStatus(conversation) !== 'evaluated';
+export const evaluationPending = conversation => conversation.evaluationStatus ? ['not_evaluated', 'review_pending'].includes(conversation.evaluationStatus) : evaluationNeedsAttention(conversation);
+export const evaluationStatusLabel = conversation => ({ not_evaluated: 'Sin evaluar', review_pending: 'Falta una revisión de modelo', partial: 'Evaluada con incidencias', evaluated: 'Evaluada' }[evaluationStatus(conversation)]);
+export function evaluationCoverage(conversations) {
+  const counts = { not_evaluated: 0, review_pending: 0, partial: 0, evaluated: 0 };
+  for (const conversation of conversations) counts[evaluationStatus(conversation)]++;
+  return counts;
+}
 export const noVisibleFlagsLabel = conversation => needsModelReview(conversation) ? 'Doble revisión pendiente'
   : conversation.suppressedFlags > 0 ? 'Sin flags con coincidencia' : 'Sin flags vigentes';
 

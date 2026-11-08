@@ -245,14 +245,17 @@ test('cero más abstención no es un negativo completo y código no suma votos',
   assert.equal(ai.result.value,null);assert.equal(ai.result.status,'no_evaluado');assert.equal(ai.result.comparison.agreement,'incomplete');
   const code=view.variables.find(v=>v.id==='num_mensajes_cliente');assert.equal(code.result.value,1);assert.equal(code.result.comparison,undefined);
 });
-test('fallos no técnicos no publican el secundario como un respaldo automático y no reaparecen al adjuntar Atom',async()=>{
+test('fallos no técnicos conservan el resultado dual independiente sin publicarlo como respaldo automático',async()=>{
   const {state,store,c}=fixture();dual(state);
   await runEvaluationBatch(store,registry(()=>{throw new AppError(422,'Rechazo','AI_SAFETY_REFUSAL');},(c,v)=>answer(c,v,1)),{max:1});
-  assert.equal(state.operationalRefs.length,0);
+  assert.equal(state.operationalRefs.length,1);
   const {ensureEvaluationState}=await import('../src/evaluation-context.js');ensureEvaluationState(state);
-  assert.equal(conversationView(state,c,undefined,true).evaluated,false);
+  const view=conversationView(state,c,undefined,true);
+  assert.equal(view.evaluated,true);assert.equal(view.evaluationStatus,'partial');assert.equal(view.evaluation.usedFallback,false);assert.deepEqual(view.marks,[]);
+  assert.deepEqual(view.evaluation.modelReviews.map(r=>r.status),['failed','completed']);
   const {AtomHistoryStore}=await import('../src/store.js');const attached=new AtomHistoryStore(store,{}).attach(state,{conversations:[c],countries:[],loadedAt:'now'});
-  assert.equal(conversationView(attached,attached.conversations[0],undefined,true).evaluated,false);
+  const restored=conversationView(attached,attached.conversations[0],undefined,true);
+  assert.equal(restored.evaluated,true);assert.equal(restored.evaluationStatus,'partial');assert.deepEqual(restored.marks,[]);
 });
 test('refutaciones heredadas con huella siguen vigentes después de introducir los dictámenes comunes',async()=>{
   const {state,store,c}=fixture();await runEvaluationBatch(store,registry((c,v)=>answer(c,v,1),(c,v)=>answer(c,v,0)),{max:1});

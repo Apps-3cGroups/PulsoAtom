@@ -1,4 +1,4 @@
-import { flagCount, needsModelReview } from '../services/flags';
+import { flagCount, evaluationStatus } from '../services/flags';
 import { defaultDateRange } from '../services/dateRange';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Input, Table, Tag } from 'antd';
@@ -25,7 +25,7 @@ export default function Conversations({ search = false }) {
     { title: 'ASISTENTE DE VENTA', key: 'agent', width: 210, render: (_, c) => <div className="table-stack"><span>{c.agent.name}</span><span className="small muted">{c.countryName} <span className="country-code small-code">{c.country}</span></span></div> },
     { title: 'FECHA', key: 'date', width: 150, render: (_, c) => <div className="table-stack"><span>{dateText(c.date, { year: undefined })}</span><span className="mono small muted">{timeText(c.startedAt)} · {c.channel}</span></div> },
     { title: 'FLAGS DE ATENCIÓN', key: 'priority', width: 180, render: (_, c) => <div className="priority-cell">{flagCount(c, 'critical') > 0 && <PriorityTag priority="critical" count={flagCount(c, 'critical')} />}{flagCount(c, 'normal') > 0 && <PriorityTag priority="normal" count={flagCount(c, 'normal')} />}{!flagCount(c, 'critical') && !flagCount(c, 'normal') && <span className="muted">—</span>}</div> },
-    { title: 'POSITIVOS', key: 'positive', width: 115, render: (_, c) => flagCount(c, 'positive') > 0 ? <span className="positive-count"><Mark kind="positive" />{flagCount(c, 'positive')}</span> : <span className="muted">{c.evaluated && !c.evaluationIncomplete && !needsModelReview(c) ? '0' : '—'}</span> },
+    { title: 'POSITIVOS', key: 'positive', width: 115, render: (_, c) => flagCount(c, 'positive') > 0 ? <span className="positive-count"><Mark kind="positive" />{flagCount(c, 'positive')}</span> : <span className="muted">{evaluationStatus(c) === 'evaluated' ? '0' : '—'}</span> },
     { title: 'RESULTADOS', key: 'marks', render: (_, c) => <Marks conversation={c} /> },
     { title: '', key: 'open', width: 90, render: (_, c) => <Button type="text" aria-label={`Abrir conversación de ${c.client.name} ${c.id}`} onClick={() => open(c)} icon={<ArrowRightOutlined />} /> },
   ];

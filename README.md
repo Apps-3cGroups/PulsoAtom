@@ -59,7 +59,7 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Histórico y Búsqueda:** filtros de fechas, país, asistente, prioridad, estado y variable; búsqueda de mensajes con apertura de evidencia en contexto.
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
-- **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. Programación diaria de hasta 100 conversaciones nuevas o con contenido nuevo, según la política de la instalación.
+- **Evaluaciones:** lotes a demanda de 20, 50 o 100 conversaciones desde el portal, con progreso por modelo y fallos visibles. Programación diaria de hasta 100 conversaciones nuevas o con contenido nuevo, según la política de la instalación.
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -125,7 +125,7 @@ La lectura histórica de Atom consulta conversaciones y mensajes sin guardar tra
 
 En **Evaluaciones → Herramientas internas → Modelos locales**, consultar el Gateway, seleccionar las herramientas e IDs exactos de Clef/Gemma y guardar. Las credenciales permanecen en el servidor. El guardado selecciona doble revisión y pausa el diario para el piloto; no ejecuta IA ni borra evaluaciones. No se requiere `AI_MODEL_PROFILES`, ni claves de GPT/Luna o Gemini. Una política antigua con esos proveedores permanece sin disponibilidad hasta guardar la política local.
 
-El endpoint operativo permite hasta 20 conversaciones por lote. Para la limpieza respaldada y prueba inicial de las últimas cinco, seguir [la guía del piloto local](docs/MODELOS_Y_COMPARACION.md#piloto-controlado-y-limpieza-respaldada). Los comandos de evaluación leen la configuración guardada en Pulso. Las pruebas originales de OpenAI quedan como documentación histórica en [el informe de octubre](docs/PRUEBA_IA_2026-10-27.md).
+El endpoint operativo permite hasta 100 conversaciones por lote (20 por defecto). En Evaluaciones, seleccionar «Gemma y Clef» fija ambos modelos para ese lote y ejecuta primero todas las revisiones de Gemma y después las de Clef, sin cambiar la política ni la programación guardada. Las muestras comparativas conservan su máximo de 20. Para la limpieza respaldada y prueba inicial de las últimas cinco, seguir [la guía del piloto local](docs/MODELOS_Y_COMPARACION.md#piloto-controlado-y-limpieza-respaldada). Los comandos de evaluación leen la configuración guardada en Pulso. Las pruebas originales de OpenAI quedan como documentación histórica en [el informe de octubre](docs/PRUEBA_IA_2026-10-27.md).
 
 La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y los modelos de la política vigente. Los pendientes que superen el límite quedan para días posteriores.
 
@@ -205,3 +205,13 @@ Los límites de esta implementación son 12 preguntas por solicitud, 254 mensaje
 El protocolo, las instrucciones del adaptador, las solicitudes y la procedencia de cada resultado se guardan. Los reintentos conservan respuestas válidas y no añaden votos. El despliegue no cambia perfiles guardados, programación ni evaluaciones previas; la activación es explícita. Las comparaciones nativas pertenecen a una misma ejecución con contenido y checklist equivalentes, sin reutilizar automáticamente las 500 evaluaciones anteriores de Gemma.
 
 La prueba sintética de `preflightLocalModels` no modifica la base. No ejecutar el piloto de limpieza o reinicio para activar este adaptador sobre un histórico existente: ese procedimiento tiene un alcance diferente y requiere autorización específica.
+
+### Cobertura y siguiente lote local
+
+El mapa conserva el universo completo del período por **última actividad**. Una evaluación terminada con abstenciones válidas figura como evaluada; los errores técnicos figuran como «Evaluada con incidencias» y una revisión de modelo aún en curso como pendiente. Conversación permite consultar ambas respuestas guardadas, incluidas discrepancias y abstenciones. Solo la coincidencia positiva equivalente publica flags automáticos.
+
+El complemento histórico de Clef se vincula a la evaluación operativa de Gemma exclusivamente mediante su cohorte, tareas reutilizadas y huellas verificadas; no se elige la última evaluación arbitraria ni se modifica el histórico.
+
+Para el bloque adicional autorizado de 500 existe `api/scripts/start-next-local-batch.js`. Las operaciones del workflow `local-next500-inspect`, `local-next500-start` y `local-next500-status` consultan, inician una sola vez y siguen ese bloque fijo. El inicio requiere la versión exacta desplegada, modelos locales disponibles, programación diaria pausada y mantenimiento anterior finalizado. Excluye toda conversación con evaluaciones previas, fija las 500 siguientes por última actividad, conserva los registros anteriores y procesa Gemma → Clef en un trabajador separado del despliegue. No limpia datos ni reanuda automáticamente. Las huellas y los IDs del manifiesto son privados; los logs del workflow solo muestran agregados. Al terminar las 1,000 revisiones libera su mantenimiento y mantiene pausada la programación diaria.
+
+El máximo ordinario del portal sigue siendo 100 conversaciones; las 500 requieren esa operación administrativa explícita. Un nuevo despliegue no inicia evaluaciones.

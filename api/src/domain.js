@@ -41,6 +41,20 @@ export function viewContext(state, profileId) {
     reviews: Map.groupBy ? Map.groupBy(state.reviews, r => r.conversationId) : state.reviews.reduce((m, r) => m.set(r.conversationId, [...(m.get(r.conversationId) || []), r]), new Map()),
   };
 }
+// Completion describes the saved executions, not whether every business
+// question has a conclusive answer. Valid abstentions remain completed work.
+export function evaluationCompletion(evaluation, variables, profileView = false) {
+  if (!evaluation) return 'not_evaluated';
+  const reviews = evaluation.modelReviews || [];
+  const technicalError = variables.some(v => v.enabledInEvaluation
+    && (v.result.error || v.result.comparison?.cells?.some(cell => cell.error)));
+  if (reviews.some(r => ['pending', 'running'].includes(r.status))) return 'review_pending';
+  if (technicalError || reviews.some(r => ['partial', 'failed'].includes(r.status)) || (!reviews.length && evaluation.partial)) return 'partial';
+  const requiresTwoModels = !profileView && variables.some(v => v.enabledInEvaluation && v.classification
+    && ['IA', 'IA + código'].includes(v.method));
+  if (requiresTwoModels && !evaluation.dual) return 'review_pending';
+  return 'evaluated';
+}
 export function conversationView(state, conversation, context = viewContext(state), detail = false) {
   const evaluation = selectedEvaluation(state, conversation, context.profileId);
   const reviews = (context.profileId ? [] : context.reviews.get(conversation.id) || []).filter(r => r.evaluationId === evaluation?.id);
@@ -86,9 +100,13 @@ export function conversationView(state, conversation, context = viewContext(stat
   const consensusPendingFlags = variables.filter(v => v.consensusPending && !v.review).length;
   const pendingFlags = evaluation ? variables.filter(v => v.enabledInEvaluation && v.classification && v.result.status !== 'evaluado' && !v.review).length : 0;
   const evaluationErrors = variables.filter(v => v.enabledInEvaluation && (v.result.error || v.result.comparison?.cells?.some(cell => cell.error))).length;
+  const evaluationStatus = evaluationCompletion(evaluation, variables, !!context.profileId);
+  const unavailableFlags = variables.filter(v => evaluation && resultMap.has(v.id) && v.enabledInEvaluation && v.classification && !v.review
+    && !v.result.error && !v.result.comparison?.cells?.some(cell => cell.error)
+    && (v.result.status === 'no_evaluado' || v.result.comparison?.cells?.some(cell => cell.result?.status === 'no_evaluado'))).length;
   const base = { provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
-    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationIncomplete: !!evaluation && (pendingFlags > 0 || evaluationErrors > 0), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
-  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: !!evaluation.modelReviewPending, provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
+    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
+  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: evaluationStatus === 'review_pending', modelReviews: evaluation.modelReviews || [], provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
     metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : base;
 }
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
