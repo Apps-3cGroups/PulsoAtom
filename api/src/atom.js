@@ -12,6 +12,10 @@ const validateConversationIds = ids => {
 };
 
 const iso = value => value instanceof Date ? value.toISOString() : new Date(`${value}Z`).toISOString();
+const optionalIso = value => {
+  if (value == null || value === '') return null;
+  try { return iso(value); } catch { return null; }
+};
 const localDate = (value, timezone) => {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
   const part = type => parts.find(item => item.type === type).value;
@@ -23,6 +27,7 @@ const normalizeIdentity = value => String(value || '').trim().normalize('NFD').r
 
 export function mapAtomConversation(row, events, country, timezone) {
   const startedAt = iso(row.FechaInicioUtc || row.FechaUltimaActividadUtc);
+  const lastActivityAt = optionalIso(row.FechaUltimaActividadUtc);
   const messages = [];
   const media = new Set();
   for (const event of events) {
@@ -35,17 +40,22 @@ export function mapAtomConversation(row, events, country, timezone) {
     const isClientOrigin = row.ClienteNombre && normalizeIdentity(event.DeOrigen) === normalizeIdentity(row.ClienteNombre);
     messages.push({ id: String(event.IdEvento), actor: isClientOrigin ? 'cliente' : actor(event.RolEmisor), text, timestamp: iso(event.FechaHoraUtc) });
   }
+  // Navigation and date filters use the same activity basis as evaluation
+  // selection. Preserve the original start and message timestamps: changing a
+  // display date must not invalidate saved model answers or their evidence.
+  const latestMessageTime = messages.reduce((latest, message) => Math.max(latest, Date.parse(message.timestamp)), -Infinity);
+  const activityAt = lastActivityAt || (Number.isFinite(latestMessageTime) ? new Date(latestMessageTime).toISOString() : startedAt);
   return {
     id: String(row.IdConversacion), sourceId: row.IdExternoAtom,
     sourceDocumentId: row.IdDocumentoVigente == null ? null : String(row.IdDocumentoVigente), demo: false,
     country: country.code, countryName: country.name, sourceCountryCode: Number(row.CodigoPais),
     agent: { id: row.IdAsesorActual == null ? 'sin-asesor' : String(row.IdAsesorActual), name: row.AsesorNombre || 'Sin asesor asignado' },
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
-    date: localDate(startedAt, timezone), startedAt,
-    lastActivityAt: row.FechaUltimaActividadUtc ? iso(row.FechaUltimaActividadUtc) : null,
+    date: localDate(activityAt, timezone), startedAt,
+    lastActivityAt,
     sourceCreatedAt: row.FechaCreacionUtc ? iso(row.FechaCreacionUtc) : startedAt,
     sourceUpdatedAt: row.FechaActualizacionUtc ? iso(row.FechaActualizacionUtc) : startedAt,
-    endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : iso(row.FechaUltimaActividadUtc),
+    endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : activityAt,
     completed: !!row.FechaFinUtc,
     channel: row.CanalNombre || 'Sin canal', topics: [], media: [...media], messages,
     sourceUrl: null, evaluationId: null,

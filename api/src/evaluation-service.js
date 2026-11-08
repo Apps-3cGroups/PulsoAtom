@@ -99,6 +99,17 @@ function pickCandidates(state, options) {
       const withoutFlag = candidates.find(c => { const e = selectedEvaluation(state, c); return e && e.results.some(r => r.status === 'evaluado') && !hasFlag(e); });
       if (withFlag && withoutFlag) candidates = [withFlag, withoutFlag, ...candidates.filter(c => c.id !== withFlag.id && c.id !== withoutFlag.id)];
     }
+  } else if (!options.scheduleDate) {
+    // Manual batches use last activity, independently of flags or evaluation
+    // outcomes. Explicit cohorts preserve their recorded order above.
+    const activityTime = conversation => {
+      const source = Date.parse(conversation.lastActivityAt);
+      if (Number.isFinite(source)) return source;
+      const messages = conversation.messages.map(m => Date.parse(m.timestamp)).filter(Number.isFinite);
+      return messages.length ? Math.max(...messages) : Date.parse(conversation.startedAt || conversation.date) || 0;
+    };
+    candidates.sort((a, b) => activityTime(b) - activityTime(a)
+      || String(b.id).localeCompare(String(a.id), 'en', { numeric: true }));
   }
   return candidates.slice(0, options.max ?? 20);
 }
@@ -108,7 +119,11 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const purpose = options.purpose || 'operational';
-  const limit = options.scheduleDate ? 100 : 20;
+  if (options.largeBatch && (options.largeBatch !== true || purpose !== 'operational' || options.scheduleDate
+    || !options.maintenanceId || state.settings.evaluationMaintenance !== options.maintenanceId)) {
+    throw new AppError(422, 'Los lotes ampliados requieren un mantenimiento explícito y coincidente.', 'INVALID_LARGE_BATCH');
+  }
+  const limit = purpose === 'comparison' ? 20 : options.largeBatch ? 500 : 100;
   if (options.max != null && (!Number.isInteger(options.max) || options.max < 1 || options.max > limit)) throw new AppError(422, `El máximo de esta ejecución es ${limit} conversaciones.`, 'INVALID_BATCH_SIZE');
   const requestHash = digest({ ...options, onProgress: undefined, author: undefined });
   if (options.idempotencyKey) {
@@ -120,9 +135,13 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   }
   validateCatalog(state.catalog);
   const policy = registry.policy(state);
-  const dual = purpose === 'operational' && policy.mode === 'dual';
-  const requestedIds = purpose === 'comparison' ? options.modelIds : dual ? [policy.primaryId, policy.secondaryId] : [policy.primaryId];
-  if (!Array.isArray(requestedIds) || !requestedIds.length || requestedIds.length > 3 || new Set(requestedIds).size !== requestedIds.length || (purpose === 'comparison' && requestedIds.length < 2)) throw new AppError(422, 'Selecciona entre dos y tres modelos distintos para comparar.', 'INVALID_MODELS');
+  const explicitOperationalModels = purpose === 'operational' && options.modelIds !== undefined;
+  const dual = purpose === 'operational' && (explicitOperationalModels || policy.mode === 'dual');
+  const requestedIds = purpose === 'comparison' || explicitOperationalModels ? options.modelIds : dual ? [policy.primaryId, policy.secondaryId] : [policy.primaryId];
+  if (!Array.isArray(requestedIds) || !requestedIds.length || requestedIds.length > 3 || new Set(requestedIds).size !== requestedIds.length
+    || (purpose === 'comparison' && requestedIds.length < 2) || (explicitOperationalModels && requestedIds.length !== 2)) throw new AppError(422, 'Selecciona modelos distintos: dos para operación o hasta tres para comparar.', 'INVALID_MODELS');
+  const executionOrder = options.executionOrder || 'conversation-first';
+  if (!['conversation-first', 'model-first'].includes(executionOrder)) throw new AppError(422, 'El orden de ejecución es inválido.', 'INVALID_EXECUTION_ORDER');
   const profiles = requestedIds.map(id => registry.snapshot(registry.resolve(id)));
   if (new Set(profiles.map(p => `${p.provider}:${p.model}`)).size !== profiles.length) throw new AppError(422, 'Dos perfiles apuntan al mismo modelo. Selecciona modelos distintos.', 'DUPLICATE_MODEL');
   const fallback = purpose === 'operational' && !dual && policy.fallbackId ? registry.snapshot(registry.resolve(policy.fallbackId)) : null;
@@ -135,7 +154,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   const job = { id: randomUUID(), purpose, status: 'running', scope: options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
     sourceJobId: options.sourceJobId || null, scheduleDate: options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
     total: candidates.length * profiles.length, caseCount: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
-    modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
+    modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', executionOrder, concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
     idempotencyKey: options.idempotencyKey || null, requestHash, createdAt: now(), updatedAt: now(), finishedAt: null };
   const tasks = candidates.flatMap(c => {
     const codeResults = evaluateCodeVariables(c, catalog.filter(v => v.active && supportsCodeVariable(v)));
@@ -175,29 +194,48 @@ async function processJob(store, registry, job, catalog, onProgress, selectedTas
   }));
   try {
     const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && t.status !== 'completed' && (!selectedTaskIds || selectedTaskIds.includes(t.id)));
-    const cases = [...new Set(tasks.map(t => t.conversationId))];
-    const worker = async () => { while (cases.length) { const conversationId = cases.shift();
-    for (const task of tasks.filter(t => t.conversationId === conversationId)) {
-      let error = null;
-      try {
-        // Atom may change while a long batch is running. Re-read before each task.
-        const fresh = await readHistory(store, [task.conversationId]);
-        const conversation = fresh.conversations.find(c => c.id === task.conversationId);
-        await processTask(store, registry, job, task, conversation, catalog);
-      }
-      catch (caught) { error = safeError(caught); }
-      await store.transaction(draft => {
-        const current = draft.tasks.find(t => t.id === task.id);
-        if (error && current.status !== 'completed' && current.round === task.round) { current.status = 'failed'; current.error = error; }
-        updateJob(draft, job.id, false);
-      });
-      if (onProgress) await onProgress({ conversationId: task.conversationId, error: error?.message || null });
-    }
-    } };
-    await Promise.all(Array.from({ length: job.concurrency || 1 }, worker));
+    const runTasks = async phaseTasks => {
+      const cases = [...new Set(phaseTasks.map(t => t.conversationId))];
+      const worker = async () => {
+        while (cases.length) {
+          const conversationId = cases.shift();
+          for (const task of phaseTasks.filter(t => t.conversationId === conversationId)) {
+            let error = null;
+            try {
+              // Atom may change while a long batch is running. Re-read before each task.
+              const fresh = await readHistory(store, [task.conversationId]);
+              const conversation = fresh.conversations.find(c => c.id === task.conversationId);
+              await processTask(store, registry, job, task, conversation, catalog);
+            }
+            catch (caught) { error = safeError(caught); }
+            await store.transaction(draft => {
+              const current = draft.tasks.find(t => t.id === task.id);
+              if (error && current.status !== 'completed' && current.round === task.round) { current.status = 'failed'; current.error = error; }
+              updateJob(draft, job.id, false);
+            });
+            if (onProgress) await onProgress({ conversationId: task.conversationId, error: error?.message || null });
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: job.concurrency || 1 }, worker));
+    };
+    if (job.executionOrder === 'model-first') {
+      // Await the whole phase, including bounded retries and persistence, before
+      // the next model starts. Resume uses these same persisted profile phases.
+      for (const profile of job.modelProfiles) await runTasks(tasks.filter(t => t.profile.id === profile.id));
+    } else await runTasks(tasks);
     await store.transaction(draft => updateJob(draft, job.id, true, selectedTaskIds));
     return (await store.read()).jobs.find(j => j.id === job.id);
   } finally { await stopHeartbeat(); }
+}
+export function evaluationModelProgress(state, job) {
+  return (job.modelProfiles || []).map(profile => {
+    const tasks = (state.tasks || []).filter(t => t.jobId === job.id && t.profile.id === profile.id);
+    const count = status => tasks.filter(t => t.status === status).length;
+    return { profileId: profile.id, label: profile.label, total: tasks.length,
+      completed: count('completed'), partial: count('partial'), failed: count('failed'), running: count('running'),
+      pending: tasks.filter(t => !['completed', 'partial', 'failed', 'running'].includes(t.status)).length };
+  });
 }
 function updateJob(state, id, finished, selectedTaskIds) {
   const job = state.jobs.find(j => j.id === id), tasks = state.tasks.filter(t => t.jobId === id);
@@ -331,10 +369,12 @@ async function processTask(store, registry, job, task, conversation, catalog) {
       const anchor = state.evaluations.find(e => e.id === ref?.evaluationId);
       const primary = state.tasks.find(t => t.jobId === job.id && t.conversationId === conversation.id && t.profile.id === job.modelProfiles[0].id);
       if (job.mode === 'dual' && task.profile.id !== primary?.profile.id && ['failed', 'partial'].includes(primary?.status) && retryable(primary.error || {})) evaluation.contingencyFor = primary.profile;
-      const blockedPrimary = job.mode === 'dual' && ['failed', 'partial'].includes(primary?.status) && !retryable(primary.error || {});
       const blockedCurrent = partial && failure && !retryable(failure);
       const newer = state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.includes(conversation.id));
-      if (!blockedPrimary && !blockedCurrent && !newer) {
+      // A dual reference exposes independently saved results, including incidents.
+      // It is not fallback approval: flags still require valid votes from both.
+      // Preserve the first anchor for reviews and never replace a newer job.
+      if (!newer && (job.mode === 'dual' || !blockedCurrent)) {
         if (ref && (job.mode !== 'dual' || anchor?.jobId !== job.id)) ref.evaluationId = evaluation.id;
         else if (!ref) state.operationalRefs.push({ id: conversation.id, evaluationId: evaluation.id });
       }

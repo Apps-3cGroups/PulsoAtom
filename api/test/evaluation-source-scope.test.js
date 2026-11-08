@@ -46,7 +46,7 @@ test('la selección sin IDs puede leer el universo, pero cada tarea relee única
   const f = fixture();
   await runEvaluationBatch(f.store, f.registry, { max: 2 });
   assert.deepEqual(f.reads[0], { fresh: true });
-  assert.deepEqual(f.reads.slice(1).map(r => r.conversationIds), [['first'], ['first'], ['second'], ['second']]);
+  assert.deepEqual(f.reads.slice(1).map(r => r.conversationIds), [['second'], ['second'], ['first'], ['first']]);
 });
 
 for (const mutation of ['missing-before', 'changed-after']) {

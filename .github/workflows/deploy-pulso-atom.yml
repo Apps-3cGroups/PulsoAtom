@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       expected_policy_version:
@@ -59,8 +59,8 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
-    name: Explicit Gemma operation
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
     defaults:
@@ -99,12 +99,12 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
-      - name: Run the selected Gemma operation
+      - name: Run the selected model operation
         env:
           TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
           GEMMA_OPERATION: ${{ inputs.operation }}
@@ -120,8 +120,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid Gemma operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
             if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
@@ -145,6 +145,9 @@ jobs:
           }
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'local-next500-inspect' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--inspect' }
+            'local-next500-start' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--start' }
+            'local-next500-status' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--status' }
             'gemma-preflight' { $entryScript = 'scripts/check-gemma-contract.js'; $scriptArguments = '' }
             'gemma-inspect' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = '--inspect' }
             'gemma-prepare' { $entryScript = 'scripts/prepare-gemma-renewal.js'; $scriptArguments = "--prepare --expected-policy-version $($env:EXPECTED_POLICY_VERSION)" }
@@ -202,7 +205,7 @@ jobs:
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
             # Isolated source + existing dependencies/env. No pull, npm, PM2,
             # migrations, reset or database writes. Preflight is synthetic only;
-            # inspect reads configuration/totals and does not invoke any model.
+            # inspect/status read safe aggregates and do not invoke any model.
             $remoteCommand = @"
           set -Eeuo pipefail
           cleanup_check() { sudo -n rm -rf -- '$remoteRoot' || true; }
@@ -262,7 +265,7 @@ jobs:
               Write-Output 'Verified removal of the current temporary SSH key and directory.'
             }
           }
-          if ($checkExit -ne 0) { throw "Gemma operation failed (exit $checkExit). Review the sanitized result and maintenance status before retrying a state-changing operation." }
+          if ($checkExit -ne 0) { throw "Model operation failed (exit $checkExit). Review the sanitized result and maintenance status before retrying a state-changing operation." }
 
   deploy:
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}

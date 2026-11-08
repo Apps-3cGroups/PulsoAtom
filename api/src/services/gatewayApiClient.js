@@ -17,6 +17,32 @@ const httpError = (status, operation) => new AppError(502,
   status === 501 && operation === 'POST /v1/systemone' ? 'AI_CONFIGURATION'
     : [408, 429].includes(status) || status >= 500 ? 'AI_TRANSIENT' : 'AI_CONFIGURATION');
 const invalidEnvelope = () => new AppError(502, 'El Gateway devolvió una respuesta inválida.', 'INVALID_AI_RESULT');
+const contextLimitCodes = new Set(['context_length_exceeded', 'context_window_exceeded', 'input_context_length_exceeded']);
+const contextLimitPatterns = [
+  /^(?:the\s+)?(?:maximum\s+)?context(?:\s+(?:length|window|size))?\s+(?:limit\s+)?(?:has\s+been\s+|was\s+|is\s+)?exceeded\b/i,
+  /^(?:the\s+)?(?:input|prompt)(?:\s+token)?(?:\s+(?:length|size))?\s+(?:exceeds?|exceeded|is\s+too\s+long\s+for)\s+(?:the\s+)?(?:model['’]?s\s+)?(?:maximum\s+)?context(?:\s+(?:length|window|size))?\b/i,
+  /^(?:this\s+model['’]?s\s+|the\s+model['’]?s\s+)?maximum\s+context\s+length\s+is\s+\d+\s+tokens\b[^\n]{0,500}\b(?:you\s+(?:requested|submitted)|your\s+(?:messages|request)\s+resulted\s+in)\s+\d+\s+tokens\b/i,
+  /^trying\s+to\s+keep\s+the\s+first\s+\d+\s+tokens\s+when\s+context\s+overflows\b/i,
+  /^cannot\s+truncate\s+prompt\s+with\s+n_keep\s*(?:=\s*\d+|\(\d+\))\s*>=\s*n_ctx\s*(?:=\s*\d+|\(\d+\))/i,
+  /^(?:the\s+)?number\s+of\s+tokens\s+to\s+keep\s+from\s+the\s+(?:initial|system)\s+prompt\s+is\s+greater\s+than\s+the\s+context\s+(?:length|size|window)\b/i,
+];
+function isContextLimit(response, depth = 0) {
+  // Inspect only documented error fields, never serialize arbitrary payloads
+  // (which can contain prompts, transcripts, URLs or credentials). Matching is
+  // anchored to the error itself so quoted conversation text is not a signal.
+  if (typeof response === 'string') {
+    if (response.length > 8192) return false;
+    const message = response.trim().replace(/^error(?:\s+predicting)?:\s*/i, '');
+    return contextLimitCodes.has(message) || contextLimitPatterns.some(pattern => pattern.test(message));
+  }
+  if (!response || typeof response !== 'object' || Array.isArray(response) || depth > 3) return false;
+  return contextLimitCodes.has(response.code)
+    || ['message', 'error', 'detail'].some(key => Object.hasOwn(response, key) && isContextLimit(response[key], depth + 1));
+}
+const upstreamError = (status, operation, response) => [400, 413, 422].includes(status)
+  && operation === 'POST /v1/chat/completions' && isContextLimit(response)
+  ? new AppError(422, 'La conversación supera el contexto admitido por el modelo. Queda pendiente de revisión.', 'AI_CONTEXT_LIMIT')
+  : httpError(status, operation);
 
 export class GatewayApiClient {
   #token;
@@ -69,7 +95,7 @@ export class GatewayApiClient {
       || typeof envelope.ok !== 'boolean' || !Number.isInteger(envelope.upstream_status_code)) throw invalidEnvelope();
     const status = envelope.upstream_status_code;
     if (status < 100 || status > 599) throw invalidEnvelope();
-    if (status < 200 || status >= 300) throw httpError(status, `${method} ${path}`);
+    if (status < 200 || status >= 300) throw upstreamError(status, `${method} ${path}`, envelope.response);
     if (!envelope.ok || envelope.tool_key !== toolKey || envelope.method !== method || envelope.path !== path
       || !requestIdPattern.test(envelope.request_uuid || '') || !Object.hasOwn(envelope, 'response')) throw invalidEnvelope();
     return { response: envelope.response, requestId: envelope.request_uuid,

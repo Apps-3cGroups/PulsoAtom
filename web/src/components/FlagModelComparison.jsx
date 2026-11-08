@@ -1,4 +1,5 @@
 import { classificationOf } from '../services/flags';
+import { modelResultStatus } from '../services/modelReview';
 import { Tag } from 'antd';
 import { CheckCircleOutlined, ExclamationCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { dateText, timeText } from './common';
@@ -11,14 +12,13 @@ export default function FlagModelComparison({ variable, demo }) {
   return <section className="flag-comparison" aria-label={`Revisión de modelos: ${variable.name}`}>
     {demo && <Tag color="gold">Demostración · resultados sintéticos</Tag>}
     <div className={`flag-agreement ${agreed ? 'flag-agreement-positive' : ''}`}>
-      {agreed ? <CheckCircleOutlined /> : comparison.agreement === 'disagree' ? <ExclamationCircleOutlined /> : <ClockCircleOutlined />}
+      {agreed || comparison.agreement === 'agree-negative' ? <CheckCircleOutlined /> : comparison.agreement === 'disagree' ? <ExclamationCircleOutlined /> : <ClockCircleOutlined />}
       <div><strong>{agreed ? 'Detectado por 2 modelos' : comparison.label}</strong><p>El acuerdo entre modelos no equivale a certeza. El dictamen humano se aplica al flag común.</p></div>
     </div>
     {comparison.contingencyLabel && <p className="flag-contingency"><strong>{comparison.contingencyLabel}</strong></p>}
     <div className="flag-model-columns">{comparison.cells.map(cell => {
       const result = cell.result;
-      const pending = ['pending', 'running'].includes(cell.status);
-      const status = !result ? pending ? 'Revisión pendiente' : 'Sin resultado' : result.status !== 'evaluado' ? result.error ? 'Revisión pendiente' : 'No evaluada' : result.value === 1 ? 'Detecta el evento' : 'No detecta el evento';
+      const status = modelResultStatus(cell);
       return <article className="flag-model-column" key={cell.profileId}>
         <header><h3>{cell.label}</h3><Tag color={result?.value === 1 ? classificationOf(variable) === 'positive' ? 'green' : classificationOf(variable) === 'critical' ? 'red' : 'pink' : result?.status === 'evaluado' ? 'default' : 'gold'}>{status}</Tag><small>{cell.model}</small></header>
         <div className="flag-model-body"><h4>{result?.reasonSource === 'adapter_template' ? 'Decisión del modelo' : 'Justificación'}</h4><p>{result?.reason || cell.error?.message || 'La respuesta de este modelo todavía no está disponible.'}</p>

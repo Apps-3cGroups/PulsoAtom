@@ -83,7 +83,9 @@ test('gemma-extend es una operación explícita sobre producción validada y nun
   assert.match(mapping, /--extend --maintenance-id \$\(\$env:MAINTENANCE_ID\) --expected-total \$\(\$env:EXPECTED_EVALUATIONS\) --from \$\(\$env:FROM_DATE\) --to \$\(\$env:TO_DATE\) --limit \$\(\$env:CONVERSATION_LIMIT\)/);
   assert.doesNotMatch(mapping, /--start|--prepare|reset-evaluations/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch' && .*inputs\.operation == 'gemma-extend'/);
-  assert.match(workflow, /\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\('gemma-preflight', 'gemma-inspect'\)/);
+  const checkoutOperations = workflow.match(/\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\(([^)]+)\)/)?.[1];
+  assert.ok(checkoutOperations);
+  assert.doesNotMatch(checkoutOperations, /'gemma-extend'/);
   assert.match(workflow, /if \(\$env:GEMMA_OPERATION -cin @\('gemma-start', 'gemma-extend'\)\) \{\s+if \(\$env:FROM_DATE -cnotmatch/);
   assert.equal((workflow.match(/\[datetime\]::TryParseExact/g) || []).length, 2);
   assert.match(workflow, /\$fromDate -gt \$toDate/);
@@ -97,4 +99,41 @@ test('gemma-extend es una operación explícita sobre producción validada y nun
   assert.ok(production.indexOf('"$actual_sha" = "__EXPECTED_SHA__"') < production.indexOf('exec node'));
   assert.ok(production.indexOf('diff --quiet HEAD -- api') < production.indexOf('exec node'));
   assert.match(production, /node --env-file=\/var\/www\/nodeapps\/PulsoAtom\/api\/\.env __ENTRY_SCRIPT__ __SCRIPT_ARGUMENTS__/);
+});
+
+test('el próximo lote local separa inspección y estado de su inicio sobre el commit desplegado', async () => {
+  const workflow = await readFile(workflowPath, 'utf8');
+  const allowed = workflow.match(/\$env:GEMMA_OPERATION -cnotin @\(([^)]+)\)/)?.[1];
+  const options = workflow.match(/options: \[([^\]]+)\]/)?.[1];
+  const jobCondition = workflow.match(/gemma-check:\n\s+if: ([^\n]+)/)?.[1];
+  const checkoutOperations = workflow.match(/\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\(([^)]+)\)/)?.[1];
+  const checkoutCondition = workflow.match(/uses: actions\/checkout@v4\n\s+if: ([^\n]+)/)?.[1];
+  for (const value of [allowed, options, jobCondition, checkoutOperations, checkoutCondition]) assert.ok(value);
+  for (const operation of ['local-next500-inspect', 'local-next500-start', 'local-next500-status']) {
+    assert.ok(allowed.includes(`'${operation}'`));
+    assert.ok(options.split(',').map(s => s.trim()).includes(operation));
+    assert.ok(jobCondition.includes(`inputs.operation == '${operation}'`));
+    const mapping = workflow.split('\n').find(line => line.trim().startsWith(`'${operation}' {`));
+    assert.equal(mapping.trim(), `'${operation}' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--${operation.split('-').at(-1)}' }`);
+    assert.doesNotMatch(mapping, /\$env:|\$\(|--prepare|--extend|--reset/);
+  }
+  for (const readonly of ['local-next500-inspect', 'local-next500-status']) {
+    assert.ok(checkoutOperations.includes(`'${readonly}'`));
+    assert.ok(checkoutCondition.includes(`inputs.operation == '${readonly}'`));
+  }
+  assert.doesNotMatch(checkoutOperations, /'local-next500-start'/);
+  assert.doesNotMatch(checkoutCondition, /'local-next500-start'/);
+  assert.match(jobCondition, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /if \(-not \$useCheckoutSource -and \$env:GITHUB_SHA -cnotmatch '\^\[a-f0-9\]\{40\}\$'\)/);
+  const production = workflow.match(/\$remoteCommand = @'\n([\s\S]*?)\n {10}'@/)?.[1];
+  assert.ok(production);
+  for (const guard of ['"$actual_sha" = "__EXPECTED_SHA__"', 'diff --quiet HEAD -- api']) {
+    assert.ok(production.indexOf(guard) >= 0 && production.indexOf(guard) < production.indexOf('exec node'));
+  }
+  assert.doesNotMatch(production, /git pull|pm2|npm |migrate|reset-evaluations/);
+  const deployCondition = workflow.match(/\n  deploy:\n\s+if: ([^\n]+)/)?.[1];
+  assert.equal(deployCondition, "${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}");
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /Verified removal of the current temporary SSH key and directory/);
 });

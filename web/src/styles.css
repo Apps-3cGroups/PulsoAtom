@@ -807,7 +807,80 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .comparison-result.detected-positive { color: #167b54; }
 .comparison-result.detected-positive .result-figure { font-weight: 800; font-size: 20px; }
 .partial-indicator { font: 700 11px/12px 'Instrument Sans', sans-serif; min-width: 9px; color: #8b6638; }
+
+/* Saved model reviews are available directly in the conversation detail. */
+.conversation-model-reviews { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+.model-reviews-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.model-reviews-heading h2 { margin-top: 4px; font-size: 22px; }
+.model-reviews-heading > span { white-space: nowrap; }
+.model-review-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.model-review-card { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--border); background: var(--surface-raised); border-radius: 10px; min-width: 0; }
+.model-review-icon { display: grid; place-items: center; height: 34px; width: 34px; border-radius: 10px; flex: none; background: var(--surface); color: var(--muted); font-size: 17px; }
+.review-complete .model-review-icon { color: var(--accent); background: var(--accent-soft); }
+.review-error .model-review-icon { color: #8b6638; background: #fff1d8; }
+.model-review-description { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.model-review-description h3 { font-family: 'Bricolage Grotesque', sans-serif; font-size: 20px; line-height: 1.1; }
+.model-review-description > span { color: var(--secondary); font-size: 12px; }
+.model-review-description .model-review-model { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.model-review-coverage { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; text-align: right; color: var(--muted); font-size: 11px; }
+.model-review-coverage strong { font: 600 25px/1 'Bricolage Grotesque', sans-serif; color: var(--ink); font-variant-numeric: tabular-nums; }
+.model-review-coverage strong small { font-size: 15px; font-weight: 500; color: var(--muted); }
+.model-review-coverage .ant-tag { margin: 3px 0 0; }
+.model-review-selector { display: flex; align-items: center; gap: 12px; padding-top: 20px; }
+.model-review-selector label { color: var(--secondary); font-weight: 600; flex: none; }
+.model-review-selector .ant-select { flex: 1; min-width: 180px; max-width: 520px; }
+.model-review-selector > span { margin-left: auto; }
+.conversation-model-reviews .flag-comparison { margin-top: 14px; }
+.conversation-model-reviews .flag-agreement { padding: 12px 14px; margin-bottom: 14px; }
+.conversation-model-reviews .flag-model-column header { padding: 12px 16px; }
+.conversation-model-reviews .flag-model-column header h3 { display: inline-block; margin: 0 12px 0 0; font-size: 18px; }
+.conversation-model-reviews .flag-model-column header small { margin-top: 5px; }
+.conversation-model-reviews .flag-model-body { max-height: 270px; overflow: auto; scrollbar-gutter: stable; }
+.conversation-model-reviews .flag-criterion { margin-bottom: 0; }
+.model-review-empty { color: var(--muted); margin-top: 14px; line-height: 1.6; }
+.summary-page .conversation-cell.status-partial { border: 1px solid #c8a579; background: #fbf6ed; }
+.summary-page .conversation-cell.status-partial > .anticon { color: #8b6638; font-size: 11px; }
+.summary-page .conversation-cell.status-review_pending > .anticon { color: var(--muted); font-size: 11px; }
+.summary-page .not-evaluated-legend { white-space: nowrap; gap: 5px; }
+@media (max-width: 900px) {
+  .model-review-card { flex-wrap: wrap; }
+  .model-review-coverage { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 6px; text-align: left; padding-left: 46px; width: 100%; }
+  .model-review-coverage strong { font-size: 21px; }
+  .model-review-selector { flex-wrap: wrap; }
+  .model-review-selector > span { margin-left: 0; width: 100%; }
+}
+@media (max-width: 620px) {
+  .conversation-model-reviews { padding: 14px; }
+  .model-review-cards { grid-template-columns: 1fr; gap: 8px; }
+  .model-reviews-heading { flex-wrap: wrap; gap: 8px; }
+  .model-reviews-heading h2 { font-size: 20px; }
+  .model-review-card { padding: 12px; }
+  .model-review-selector label { width: 100%; }
+  .model-review-selector .ant-select { max-width: none; min-width: 0; width: 100%; }
+  .conversation-model-reviews .flag-model-body { max-height: 240px; }
+}
 /* An individual answer stays available as evidence, without an operational flag. */
 .unpublished-result details { margin-top: 10px; color: var(--muted); font-size: 12px; }
 .unpublished-result summary { cursor: pointer; padding: 4px 0; }
 .unpublished-result details p { line-height: 1.6; }
+
+/* Manual evaluation batches: the form stays mounted during progress polling. */
+.manual-batch-controls { margin-top: 22px; }
+.manual-batch-fields { display: grid; grid-template-columns: minmax(145px, .8fr) minmax(0, 1.4fr); gap: 14px; }
+.manual-batch-fields > label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: var(--secondary); }
+.manual-batch-fields .ant-select { width: 100%; }
+.manual-batch-preview { display: flex; gap: 11px; padding: 13px 14px; margin-top: 14px; border: 1px solid var(--border); background: var(--surface-raised); border-radius: 8px; }
+.manual-batch-preview > .anticon { color: var(--accent); margin-top: 3px; font-size: 17px; }
+.manual-batch-preview > div { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.manual-batch-preview strong { font-size: 13px; font-weight: 600; color: var(--text); }
+.manual-batch-preview span { font-size: 12px; color: var(--secondary); line-height: 1.5; }
+.manual-batch-preview small, .manual-batch-unavailable { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.manual-batch-unavailable { margin: 9px 0 0; }
+.job-model-progress { display: flex; flex-direction: column; gap: 7px; min-width: 240px; padding-block: 3px; }
+.job-model-progress > strong { font-size: 12px; font-weight: 600; }
+.job-model-stage { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; color: var(--muted); }
+.job-model-stage > span:first-child { min-width: 43px; color: var(--secondary); }
+.job-model-stage > b { font-variant-numeric: tabular-nums; color: var(--text); }
+.job-model-stage .ant-tag { margin: 0; font-size: 10px; line-height: 18px; }
+@media (max-width: 900px) and (min-width: 701px) { .manual-batch-fields { grid-template-columns: 1fr; gap: 10px; } }
+@media (max-width: 440px) { .manual-batch-fields { grid-template-columns: 1fr; gap: 10px; } .manual-batch-preview { padding: 11px; } }
