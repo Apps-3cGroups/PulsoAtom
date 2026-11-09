@@ -17,6 +17,32 @@ export const flagCount = (conversation, classification) => conversation[classifi
 export const flagVariables = catalog => catalog.filter(v => ['Flag', 'Calculado'].includes(v.type));
 export const metricValue = variable => variable?.result?.status === 'evaluado' && typeof variable.result.value === 'number' && Number.isFinite(variable.result.value) ? variable.result.value : null;
 
+export const evaluationStatus = conversation => conversation.evaluationStatus || (!conversation.evaluated ? 'not_evaluated'
+  : conversation.evaluationErrors > 0 ? 'partial' : conversation.consensusPendingFlags > 0 ? 'review_pending'
+    : conversation.evaluationIncomplete ? 'partial' : 'evaluated');
+export const needsModelReview = conversation => conversation.evaluationStatus ? conversation.evaluationStatus === 'review_pending' : (conversation.consensusPendingFlags || 0) > 0;
+export const evaluationNeedsAttention = conversation => evaluationStatus(conversation) !== 'evaluated';
+export const evaluationPending = conversation => conversation.evaluationStatus ? ['not_evaluated', 'review_pending'].includes(conversation.evaluationStatus) : evaluationNeedsAttention(conversation);
+export const evaluationStatusLabel = conversation => ({ not_evaluated: 'Sin evaluar', review_pending: 'Falta una revisión de modelo', partial: 'Evaluada con incidencias', evaluated: 'Evaluada' }[evaluationStatus(conversation)]);
+export function evaluationCoverage(conversations) {
+  const counts = { not_evaluated: 0, review_pending: 0, partial: 0, evaluated: 0 };
+  for (const conversation of conversations) counts[evaluationStatus(conversation)]++;
+  return counts;
+}
+export const noVisibleFlagsLabel = conversation => needsModelReview(conversation) ? 'Doble revisión pendiente'
+  : conversation.suppressedFlags > 0 ? 'Sin flags con coincidencia' : 'Sin flags vigentes';
+
+// Retained individual results are not equivalent to a published operational flag.
+export function unmarkedResultLabel(variable) {
+  if (variable.consensusSuppressed) {
+    if (variable.result.codeRule || ['Código', 'Cálculo'].includes(variable.method)) return 'Calculado por código · fuera de los flags por coincidencia';
+    if (variable.result.comparison?.agreement === 'disagree') return 'Los modelos discrepan · no se muestra como flag';
+    return 'Detección sin doble coincidencia · no se muestra como flag';
+  }
+  if (variable.consensusPending) return 'Doble revisión pendiente · sin conclusión conjunta';
+  return variable.result.value === 0 ? 'Evento no detectado' : String(variable.result.value ?? 'Sin resultado');
+}
+
 export const conversationMetricIds = ['min_primera_respuesta_humano', 'min_silencio_max_humano', 'min_duracion_conversacion', 'num_mensajes_asistente', 'num_mensajes_cliente', 'ratio_mensajes_asistente_entre_cliente', 'num_mensajes_por_turno_asistente'];
 
 export const flagCountLabel = (kind, count) => count === undefined ? flagLabel(kind) : `${count} ${count === 1 ? ({ critical: 'flag crítico', normal: 'flag normal', positive: 'positivo' }[kind] || flagLabel(kind)) : ({ critical: 'flags críticos', normal: 'flags normales', positive: 'positivos' }[kind] || flagLabel(kind))}`;

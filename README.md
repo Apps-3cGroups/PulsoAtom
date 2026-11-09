@@ -1,6 +1,6 @@
 # Pulso
 
-Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. El motor de OpenAI evalúa las variables activas del checklist; cada instalación debe habilitar explícitamente la transferencia mediante su configuración.
+Portal de revisión de calidad de conversaciones de Atom. El histórico se consulta en Atom; el catálogo, las evaluaciones y la auditoría viven en `dbPulsosAtom`. Los modelos configurados evalúan las variables activas del checklist. Esta instalación utiliza Clef y Gemma mediante GatewayAgents. Los proveedores públicos quedan fuera de nuevas ejecuciones; sus resultados históricos conservan su identidad.
 
 ## Abrir y ejecutar
 
@@ -59,8 +59,8 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Histórico y Búsqueda:** filtros de fechas, país, asistente, prioridad, estado y variable; búsqueda de mensajes con apertura de evidencia en contexto.
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
-- **Evaluaciones:** lotes a demanda de hasta 20 conversaciones desde el portal, con progreso y fallos visibles. Programación diaria de hasta 100 conversaciones nuevas o con contenido nuevo, según la política de la instalación.
-- **Modelos:** dashboard ejecutivo de Clef y Gemma en `/pulsoAtom/modelos`, para administradores. Compara el tiempo promedio, la respuesta más rápida y más lenta, la efectividad global y las evaluaciones completas e incompletas con el mismo gráfico de dos barras. Incluye filtros por período y país. Consulta [las reglas del comparativo](docs/DASHBOARD_MODELOS.md).
+- **Evaluaciones:** lotes a demanda de 20, 50 o 100 conversaciones desde el portal, con progreso por modelo y fallos visibles. Programación diaria de hasta 100 conversaciones nuevas o con contenido nuevo, según la política de la instalación.
+- **Modelos:** dashboard ejecutivo de Clef y Gemma en `/pulsoAtom/modelos`, para administradores. Compara tiempos, cobertura de evaluación y ejecuciones completas e incompletas con barras por modelo. Incluye filtros por período y país. Consulta [las reglas del comparativo](docs/DASHBOARD_MODELOS.md).
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.
@@ -89,8 +89,8 @@ Completa **`api/.env`**, que está excluido del control de versiones. No uses va
 | --- | --- |
 | `APP_DB_*` | Base MySQL propia `dbPulsosAtom`: cuentas, catálogo, versiones, evaluaciones y auditoría. |
 | `ATOM_DB_*`, `ATOM_*_TABLE` | Conexión independiente de lectura a conversaciones, eventos y países. El catálogo de países proviene de `dbSomos3c_2.tblCatalogoPaises`. |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_TIMEOUT_MS` | OpenAI Responses API con salida JSON Schema estricta. La clave permanece solo en `api/.env`. |
-| `OPENAI_EVALUATION_ENABLED` | Bloqueo explícito de transferencia; `false` por defecto. Se activa solo al habilitar nuevos lotes de evaluación. |
+| `GATEWAY_BASE_URL`, `AGENT_SHARED_TOKEN`, `GATEWAY_PORTAL_KEY` | Conexión privada a GatewayAgents. Clave solo en backend; identidad `portal-pulso`. |
+| `CLEF_*`, `GEMMA_*` | Ajustes iniciales y límites de generación. Herramientas, IDs y activación se pueden guardar en Evaluaciones → Herramientas internas → Modelos locales. |
 | `PUBLIC_ORIGIN`, `SESSION_HOURS`, `COOKIE_SECURE` | Origen autorizado y sesiones. Ajustar el origen exacto y habilitar cookies seguras al usar HTTPS. |
 | `APP_TIMEZONE` | Zona horaria de presentación; el horario diario también conserva su propia zona. |
 | `TD_API_BASE_URL` | URL base de la API TD para S3 y SMTP. Se configura solo en `api/.env`; no se envía al navegador. También se acepta la clave heredada `URL-Base`. |
@@ -120,13 +120,15 @@ Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Ser
 
 En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
 
-### Evaluación con OpenAI
+### Evaluación con Clef y Gemma
 
-La lectura histórica de Atom ya está conectada: el servidor consulta las conversaciones, su documento vigente y los eventos, y resuelve el país en el catálogo corporativo. Las respuestas se mantienen en memoria durante un minuto; no se guardan transcripciones en Pulso. El evaluador envía únicamente roles, IDs y texto de los mensajes, junto con las definiciones activas compatibles con IA, a Responses API. Solicita `store: false`, valida que los resultados incluyan todas las variables solicitadas y que cada evidencia positiva cite mensajes reales, y guarda los resultados y la versión del checklist en Pulso. Ya se ejecutó y documentó una muestra de cinco conversaciones reales.
+La lectura histórica de Atom consulta conversaciones y mensajes sin guardar transcripciones en Pulso. Los modelos locales reciben roles, IDs, texto y definiciones activas compatibles con IA a través del Gateway. Las respuestas se validan por variable, identidad de modelo y evidencia. Código y métricas se calculan una sola vez y no cuentan como votos.
 
-La transferencia está deshabilitada por defecto (`OPENAI_EVALUATION_ENABLED=false`). En esta instalación local ya se autorizó y habilitó para futuros lotes, y el portal está configurado en modo real. Una vez habilitada, `cd api && npm run eval:sample` selecciona cinco conversaciones pendientes al azar, las evalúa y presenta IDs y flags sin imprimir transcripciones; `npm run eval:sample -- --recheck <ID de ejecución>` reevalúa únicamente los mismos cinco IDs de una muestra anterior. El endpoint del portal permite lotes a demanda de hasta 20 conversaciones. La primera muestra y su reevaluación están documentadas en [el informe de prueba](docs/PRUEBA_IA_2026-10-27.md).
+En **Evaluaciones → Herramientas internas → Modelos locales**, consultar el Gateway, seleccionar las herramientas e IDs exactos de Clef/Gemma y guardar. Las credenciales permanecen en el servidor. El guardado selecciona doble revisión y pausa el diario para el piloto; no ejecuta IA ni borra evaluaciones. No se requiere `AI_MODEL_PROFILES`, ni claves de GPT/Luna o Gemini. Una política antigua con esos proveedores permanece sin disponibilidad hasta guardar la política local.
 
-La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y OpenAI. Los pendientes que superen el límite quedan para días posteriores.
+El endpoint operativo permite hasta 100 conversaciones por lote (20 por defecto). En Evaluaciones, seleccionar «Gemma y Clef» fija ambos modelos para ese lote y ejecuta primero todas las revisiones de Gemma y después las de Clef, sin cambiar la política ni la programación guardada. Las muestras comparativas conservan su máximo de 20. Para la limpieza respaldada y prueba inicial de las últimas cinco, seguir [la guía del piloto local](docs/MODELOS_Y_COMPARACION.md#piloto-controlado-y-limpieza-respaldada). Los comandos de evaluación leen la configuración guardada en Pulso. Las pruebas originales de OpenAI quedan como documentación histórica en [el informe de octubre](docs/PRUEBA_IA_2026-10-27.md).
+
+La programación diaria se configura en el portal por un administrador. El servidor comprueba el horario cada minuto en la zona seleccionada y procesa hasta 100 conversaciones por día, con una única ejecución por fecha. Debe permanecer encendido y conectado a Atom, MySQL y los modelos de la política vigente. Los pendientes que superen el límite quedan para días posteriores.
 
 Con `includeOpenConversations` y `refreshChangedConversations` habilitados en la configuración persistida, se incluyen conversaciones abiertas y cerradas. Las abiertas muestran «Evaluación provisional». Se compara la huella del texto, roles, IDs, fechas de mensajes, país y estado de cierre: una importación idéntica no repite la IA, mientras un mensaje nuevo o el cierre requieren actualizar el resultado. El horario conserva su fecha de inicio para seleccionar registros nuevos; las conversaciones ya evaluadas cuyo contenido cambió también se actualizan aunque Atom no cambie su fecha de actualización.
 
@@ -179,8 +181,38 @@ python3 api/scripts/import-catalog.py \
 ```
 
 
-### Doble revisión GPT / Gemini
+### Doble revisión de modelos
 
 La rama de doble revisión añade dos respuestas independientes por conversación y un único flag operativo. Desde el flag se consultan razones y citas lado a lado; la revisión humana conserva los originales. Administración configura doble revisión o principal con respaldo en **Evaluaciones → Herramientas internas**.
 
-Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. La configuración de Gemini y el piloto real permanecen pendientes; no se habilita ni se reevalúa el histórico al instalar. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
+Antes de desplegar se requiere aplicar la migración `002_multi_model.sql` a la base propia mediante `npm run db:migrate` en `api/`, sin lotes activos. Instalar una versión no habilita proveedores ni reevalúa el histórico. Para utilizar Clef/Gemma, configurar GatewayAgents en el servidor y completar Modelos locales en el portal; verificar su inferencia mediante el piloto limitado a las cinco conversaciones más recientes. Consultar [operación y despliegue](docs/MODELOS_Y_COMPARACION.md).
+
+### Clef Flash: respuesta de chat
+
+La instancia `clef-flash` comprobada en el Gateway utiliza **Chat** (`POST /v1/chat/completions`). Si deja `content` vacío y entrega un objeto JSON completo del checklist en `reasoning_content`, Pulso valida ese objeto con las mismas reglas de valores, motivos y evidencia. Esta compatibilidad se limita al ID exacto `clef-flash`; no extrae JSON de prosa ni sustituye una respuesta final no vacía. Las variables ausentes o inválidas siguen pendientes, nunca se convierten en ceros.
+
+El esquema específico de Clef Flash exige las combinaciones válidas de estado, valor y evidencia, y limita las citas a IDs de mensajes existentes. Cada intento registra el campo utilizado (`responseField`) y la versión del esquema, sin conservar el texto original. Esa versión forma parte de la configuración de Clef: sus ejecuciones iniciadas con una versión anterior deben comenzar una nueva ejecución. Las instrucciones comunes, las huellas de Gemma, la política, la programación y las evaluaciones existentes se preservan.
+
+Clef Flash también recibe una aclaración versionada (`decisionInstructionsVersion: clef-flash-decisions-1`) con ejemplos sintéticos de evento presente, evento ausente y contexto insuficiente. Un evento no observado en texto relevante suficiente corresponde a `evaluado/0`; `no_evaluado/null` exige un impedimento concreto. La versión participa en la huella de configuración y se conserva en los intentos. Pulso no transforma abstenciones en ceros a partir de sus motivos; conserva la decisión recibida. Los otros modelos mantienen sus instrucciones actuales.
+
+### Clef: decisiones nativas
+
+El adaptador opcional de decisiones utiliza `POST /v1/systemone` y requiere una instancia que el servidor publique como tipo `decision`. En Modelos locales, seleccionar **Decisiones (System One)** únicamente para ese tipo de instancia y su ID exacto. El Gateway debe publicar esa ruta y `GET /api/v1/models`. La instancia de chat `clef-flash` descrita arriba debe usar **Chat**. Gemma conserva su interfaz de chat.
+
+El adaptador clasifica eventos como presentes, ausentes o con contexto insuficiente. Una segunda decisión selecciona un mensaje de evidencia sin recibir respuestas de Gemma. Las descripciones visibles son plantillas de Pulso, identificadas como tales; Clef no genera justificaciones libres. Las probabilidades se conservan para trazabilidad, no se presentan como certeza.
+
+Los límites de esta implementación son 12 preguntas por solicitud, 254 mensajes para seleccionar evidencia, un máximo de 22 solicitudes de inferencia por intento y el tiempo total configurado para Clef. No se recorta el contenido para hacerlo caber: si excede el presupuesto conservador del contexto, queda pendiente. La lista abierta `productos_solicitados` queda no evaluada por falta de esa capacidad. Código y métricas mantienen su procesamiento habitual.
+
+El protocolo, las instrucciones del adaptador, las solicitudes y la procedencia de cada resultado se guardan. Los reintentos conservan respuestas válidas y no añaden votos. El despliegue no cambia perfiles guardados, programación ni evaluaciones previas; la activación es explícita. Las comparaciones nativas pertenecen a una misma ejecución con contenido y checklist equivalentes, sin reutilizar automáticamente las 500 evaluaciones anteriores de Gemma.
+
+La prueba sintética de `preflightLocalModels` no modifica la base. No ejecutar el piloto de limpieza o reinicio para activar este adaptador sobre un histórico existente: ese procedimiento tiene un alcance diferente y requiere autorización específica.
+
+### Cobertura y siguiente lote local
+
+El mapa conserva el universo completo del período por **última actividad**. Una evaluación terminada con abstenciones válidas figura como evaluada; los errores técnicos figuran como «Evaluada con incidencias» y una revisión de modelo aún en curso como pendiente. Conversación permite consultar ambas respuestas guardadas, incluidas discrepancias y abstenciones. Solo la coincidencia positiva equivalente publica flags automáticos.
+
+El complemento histórico de Clef se vincula a la evaluación operativa de Gemma exclusivamente mediante su cohorte, tareas reutilizadas y huellas verificadas; no se elige la última evaluación arbitraria ni se modifica el histórico.
+
+Para el bloque adicional autorizado de 500 existe `api/scripts/start-next-local-batch.js`. Las operaciones del workflow `local-next500-inspect`, `local-next500-start` y `local-next500-status` consultan, inician una sola vez y siguen ese bloque fijo. El inicio requiere la versión exacta desplegada, modelos locales disponibles, programación diaria pausada y mantenimiento anterior finalizado. Excluye toda conversación con evaluaciones previas, fija las 500 siguientes por última actividad, conserva los registros anteriores y procesa Gemma → Clef en un trabajador separado del despliegue. No limpia datos ni reanuda automáticamente. Las huellas y los IDs del manifiesto son privados; los logs del workflow solo muestran agregados. Al terminar las 1,000 revisiones libera su mantenimiento y mantiene pausada la programación diaria.
+
+El máximo ordinario del portal sigue siendo 100 conversaciones; las 500 requieren esa operación administrativa explícita. Un nuevo despliegue no inicia evaluaciones.

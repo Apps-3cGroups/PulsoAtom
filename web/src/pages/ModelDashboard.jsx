@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Alert, Button, Drawer, Input, Select, Tooltip } from 'antd';
 import { BarChartOutlined, FilterOutlined, InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useApi } from '../hooks';
+import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
-import { comparisonScale, duration, metricLeader, number, percentage } from '../services/modelDashboard';
+import { comparisonScale, duration, metricLeader, modelDashboardDefaultFilters, modelDashboardPeriodLabel, number, percentage, resetModelDashboardFilters } from '../services/modelDashboard';
 import { EmptyState, ErrorState, LoadingState, dateText } from '../components/common';
 import './model-dashboard.css';
 
@@ -33,7 +33,8 @@ function Insight({ title, leader, children }) {
 
 export default function ModelDashboard() {
   const navigate = useNavigate();
-  const [filters, setFilters] = useState({ from: '', to: '', country: '', left: '', right: '' });
+  const { bootstrap } = usePortal();
+  const [filters, setFilters] = useState(() => modelDashboardDefaultFilters(bootstrap));
   const [draft, setDraft] = useState(filters);
   const [showFilters, setShowFilters] = useState(false);
   const path = `/model-dashboard?${queryString(filters)}`;
@@ -49,6 +50,7 @@ export default function ModelDashboard() {
   const flagCount = cohort?.flagsMin === cohort?.flagsMax ? number(cohort?.flagsMin ?? 0) : `${number(cohort?.flagsMin ?? 0)}–${number(cohort?.flagsMax ?? 0)}`;
   const fastest = metricLeader(models, 'averageMs', true);
   const coverage = metricLeader(models, 'coverage');
+  const periodLabel = modelDashboardPeriodLabel(filters, modelDashboardDefaultFilters(bootstrap));
   const labelFor = (profile, all) => `${profile.label} · ${profile.model || 'Sin configurar'}${all.filter(p => p.profileId === profile.profileId && p.model === profile.model).length > 1 ? ` · ${profile.id.split('@').at(-1).slice(0, 6)}` : ''}`;
 
   return <div className="model-dashboard">
@@ -57,24 +59,24 @@ export default function ModelDashboard() {
       <label>Evaluaciones desde<Input type="date" aria-label="Evaluaciones desde" value={draft.from} onChange={e => setDraft({ ...draft, from: e.target.value })} /></label>
       <label>Hasta<Input type="date" aria-label="Evaluaciones hasta" value={draft.to} onChange={e => setDraft({ ...draft, to: e.target.value })} /></label>
       <label>País<Select aria-label="Filtrar país" value={draft.country} onChange={country => setDraft({ ...draft, country })} options={[{ value: '', label: 'Todos los países' }, ...(data?.countries || []).map(value => ({ value, label: value }))]} /></label>
-      <Button type="primary" htmlType="submit" disabled={!!invalidDates} loading={request.loading}>Aplicar</Button><Button onClick={() => { const next = { ...filters, from: '', to: '', country: '' }; setDraft(next); setFilters(next); setShowFilters(false); }}>Limpiar</Button>
+      <Button type="primary" htmlType="submit" disabled={!!invalidDates} loading={request.loading}>Aplicar</Button><Button onClick={() => { const next = resetModelDashboardFilters({ ...filters, left: data?.selected?.left || filters.left, right: data?.selected?.right || filters.right }, bootstrap); setDraft(next); setFilters(next); setShowFilters(false); }}>Restablecer últimos 7 días</Button>
     </form>
     {invalidDates && <Alert type="error" showIcon message="La fecha inicial debe ser anterior o igual a la fecha final." />}</Drawer>
     {request.error ? <ErrorState error={request.error} retry={request.reload} /> : !data || request.loading || request.dataPath !== path ? <LoadingState /> : <>
-      <div className="model-comparison-context"><div className="model-selectors">{['left', 'right'].map((side, i) => <div className={`model-selector model-color-${i}`} key={side}><i className="model-dot" /><Select aria-label={`Modelo ${i + 1}`} value={data.selected[side] || undefined} placeholder={`Selecciona el modelo ${i + 1}`} onChange={value => switchModel(side, value)} options={data.profiles.map(p => ({ value: p.id, label: labelFor(p, data.profiles), disabled: models.some((m, index) => index !== i && (m.id === p.id || (m.provider === p.provider && m.model === p.model))) }))} /></div>)}</div><button className="model-filter-summary" onClick={() => setShowFilters(true)}>{filters.country || 'Todos los países'} · {filters.from || filters.to ? `${filters.from || 'Inicio'} — ${filters.to || 'Hoy'}` : 'Todo el histórico'} <FilterOutlined /></button></div>
+      <div className="model-comparison-context"><div className="model-selectors">{['left', 'right'].map((side, i) => <div className={`model-selector model-color-${i}`} key={side}><i className="model-dot" /><Select aria-label={`Modelo ${i + 1}`} value={data.selected[side] || undefined} placeholder={`Selecciona el modelo ${i + 1}`} onChange={value => switchModel(side, value)} options={data.profiles.map(p => ({ value: p.id, label: labelFor(p, data.profiles), disabled: models.some((m, index) => index !== i && (m.id === p.id || (m.provider === p.provider && m.model === p.model))) }))} /></div>)}</div><button className="model-filter-summary" onClick={() => setShowFilters(true)}>{filters.country || 'Todos los países'} · {periodLabel} <FilterOutlined /></button></div>
       {data.demo && <Alert type="warning" showIcon message="Datos de demostración. Estos tiempos y resultados no miden el rendimiento real de los proveedores." />}
       {!cohort.conversations ? <section className="model-empty"><EmptyState title="Todavía no hay evaluaciones comparables" description="No hay resultados de ambos modelos para estos filtros. Selecciona otro período o país." /><Button type="primary" onClick={() => navigate('/evaluaciones')}>Ir a Evaluaciones</Button></section> : <>
         <section className="model-executive-summary" aria-label="Lectura ejecutiva">
           <div className="model-cohort"><span className="eyebrow">BASE COMPARABLE</span><strong>{number(cohort.conversations)} <small>conversaciones</small></strong><p>Mismas conversaciones para ambos modelos.</p></div>
           <Insight title="MENOR TIEMPO PROMEDIO" leader={fastest}>{fastest && !fastest.tie ? `${percentage(fastest.other ? 1 - fastest.value / fastest.other : null)} menos tiempo` : `${number(cohort.timed)} conversaciones con tiempos de ambos`}</Insight>
-          <Insight title="MAYOR EFECTIVIDAD" leader={coverage}>{coverage && !coverage.tie ? `${number((coverage.value - coverage.other) * 100)} puntos porcentuales de ventaja` : 'Mismo porcentaje de evaluación'}</Insight>
+          <Insight title="MAYOR COBERTURA" leader={coverage}>{coverage ? coverage.tie ? 'Mismo porcentaje de flags con conclusión' : `${number((coverage.value - coverage.other) * 100)} puntos porcentuales más de cobertura` : 'Sin base comparable'}</Insight>
         </section>
         <div className="model-grid-caption"><span><BarChartOutlined /> Mismo gráfico, mismos colores en todos los indicadores.</span><span>Escala compartida dentro de cada KPI.</span></div>
         <section className="model-kpi-grid" aria-label="Indicadores comparativos">
           <KpiCard models={models} metric="averageMs" title="Tiempo promedio" direction="lower" format={duration} help="Tiempo medio por evaluación, incluidos los reintentos, sobre las mismas conversaciones." details={models.map(() => `${number(cohort.timed)} evaluaciones con tiempo registrado`)} />
           <KpiCard models={models} metric="minMs" title="Respuesta más rápida" direction="lower" format={duration} help="El menor tiempo registrado por cada modelo en las conversaciones comparadas." />
           <KpiCard models={models} metric="maxMs" title="Respuesta más lenta" direction="lower" format={duration} help="El mayor tiempo registrado por cada modelo en las conversaciones comparadas." />
-          <KpiCard models={models} metric="coverage" title="Efectividad" direction="higher" format={percentage} ceiling={1} help="Porcentaje de flags que el modelo pudo evaluar. Una respuesta válida puede indicar presencia o ausencia; no mide exactitud." details={models.map(m => `${number(m.answered / cohort.conversations)} de ${flagCount} flags evaluados, en promedio`)} />
+          <KpiCard models={models} metric="coverage" title="Cobertura de evaluación" direction="higher" format={percentage} ceiling={1} help="Porcentaje de flags con una conclusión válida de presencia o ausencia. Mide cobertura, no exactitud ni certeza." details={models.map(m => `${number(m.answered / cohort.conversations)} de ${flagCount} flags con conclusión, en promedio`)} />
           <KpiCard models={models} metric="completionRate" title="Evaluaciones completas" direction="higher" format={percentage} ceiling={1} help="Porcentaje de evaluaciones que el modelo terminó de procesar." details={models.map(m => `${number(m.completed)} de ${number(cohort.conversations)} evaluaciones`)} />
           <KpiCard models={models} metric="incomplete" title="Evaluaciones incompletas" direction="lower" help="Evaluaciones con fallos, respuestas parciales o todavía pendientes de terminar." details={models.map(() => `De ${number(cohort.conversations)} evaluaciones comparadas`)} />
         </section>

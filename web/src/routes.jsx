@@ -25,7 +25,7 @@ export default function PortalRoutes() {
       <Route path="/activas" element={<Active />} />
       <Route path="/historico" element={<Conversations />} />
       <Route path="/busqueda" element={<Conversations search />} />
-      <Route path="/conversacion" element={<Conversation />} />
+      <Route path="/conversacion" element={<Navigate to="/historico" replace />} />
       <Route path="/conversacion/:id" element={<Conversation />} />
       <Route path="/comparacion" element={adminOnly(<Comparison />)} />
       <Route path="/modelos" element={adminOnly(<ModelDashboard />)} />

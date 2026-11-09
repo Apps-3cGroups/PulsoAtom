@@ -1,75 +1,88 @@
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { apiRoot, config, atomDatabaseConfig, databaseConfig } from '../src/config.js';
 import { MysqlStore, AtomHistoryStore } from '../src/store.js';
 import { AtomReader } from '../src/atom.js';
 import { registryFromEnv } from '../src/model-registry.js';
-import { eligibleConversations, runEvaluationBatch } from '../src/evaluation-service.js';
-import { currentEvaluation, sourceFingerprint } from '../src/source-state.js';
+import { AppError } from '../src/errors.js';
+import { createGemmaBackfillPlan, gemmaBackfillProfile, inspectGemmaBackfill, executeGemmaBackfill,
+  persistBackfillManifest, acquireBackfillLock, readRequiredBackfillManifest } from '../src/gemma-backfill.js';
 
-if (!process.argv.includes('--execute') || process.env.OPENAI_EVALUATION_ENABLED !== 'true') throw new Error('Requiere --execute y OPENAI_EVALUATION_ENABLED=true.');
-const base = new MysqlStore(databaseConfig());
-const store = new AtomHistoryStore(base, new AtomReader(atomDatabaseConfig(), config.timezone));
-const evaluator = registryFromEnv();
-const directory = path.join(apiRoot, '.data', 'backfills');
-let manifest, filename;
-const persist = async () => { await writeFile(`${filename}.tmp`, JSON.stringify(manifest, null, 2), { mode: 0o600 }); await rename(`${filename}.tmp`, filename); };
-const inspect = state => {
-  const byId = new Map(state.conversations.map(c => [c.id, c]));
-  const current = manifest.conversationIds.map(id => byId.get(id));
-  const done = current.filter(c => c && currentEvaluation(state,c)?.sourceHash === sourceFingerprint(c));
-  return { done, missing: current.filter(c => !c).length,
-    pending: current.filter(c => c && !done.some(d=>d.id===c.id)) };
-};
-try {
-  if (!evaluator.configured) throw new Error('Falta configurar el evaluador.');
-  let state = await store.readWithConversations({ fresh: true });
-  const maintenanceId = state.settings.evaluationMaintenance;
-  if (!maintenanceId) throw new Error('No hay un reinicio pendiente. Este comando solo reanuda una renovación autorizada.');
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  filename = path.join(directory, `${maintenanceId}.json`);
-  try { manifest = JSON.parse(await readFile(filename,'utf8')); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    manifest = { id: maintenanceId, createdAt: new Date().toISOString(), status: 'running',
-      conversationIds: eligibleConversations(state, { pendingOnly: false, includeOpen: true }).map(c=>c.id), jobs: [] };
-    await persist();
+// Default and --plan are read-only. Reset/backup is a separate explicit command.
+function argumentsFor(args) {
+  let mode = 'plan', explicitMode = false, maintenanceId = null, resume = false, maxBatches = Infinity;
+  for (let i = 0; i < args.length; i++) {
+    const argument = args[i];
+    if (['--plan', '--dry-run', '--execute', '--status'].includes(argument)) {
+      if (explicitMode) throw new AppError(422, 'Selecciona solo --plan, --status o --execute.', 'INVALID_ARGUMENTS');
+      explicitMode = true; mode = argument === '--execute' ? 'execute' : argument === '--status' ? 'status' : 'plan';
+    } else if (argument === '--maintenance-id') maintenanceId = args[++i];
+    else if (argument === '--resume') resume = true;
+    else if (argument === '--max-batches') {
+      const value = args[++i];
+      if (!/^\d+$/.test(value || '') || Number(value) < 1 || Number(value) > 10000) throw new AppError(422, '--max-batches debe estar entre 1 y 10000.', 'INVALID_ARGUMENTS');
+      maxBatches = Number(value);
+    } else throw new AppError(422, 'Argumento no admitido. Usa --plan o --execute --maintenance-id ID [--resume] [--max-batches N].', 'INVALID_ARGUMENTS');
   }
-  console.log(JSON.stringify({ event: 'start', total: manifest.conversationIds.length, models: evaluator.list().map(p=>({id:p.id,model:p.model,available:p.available})), manifest: filename }));
-  // A maximum of three passes; failed cases remain explicitly pending, never fabricated.
-  for (let pass = 1; pass <= 3; pass++) {
-    state = await store.readWithConversations({ fresh: true });
-    const progress = inspect(state);
-    if (!progress.pending.length) break;
-    const pendingIds = progress.pending.map(c=>c.id);
-    for (let offset = 0; offset < pendingIds.length; offset += 20) {
-      const ids = pendingIds.slice(offset, offset + 20);
-      const job = await runEvaluationBatch(store, evaluator, { conversationIds: ids, pendingOnly: true, max: 20, maintenanceId, concurrency: 3,
-        onProgress: async ({ conversationId, error }) => {
-          const latest = inspect(await store.readWithConversations());
-          console.log(JSON.stringify({ event:'progress', conversationId, saved:latest.done.length, total:manifest.conversationIds.length, error: error ? 'No completada; revisar lote.' : null }));
-        } });
-      manifest.jobs.push(job.id); manifest.completed = inspect(await store.readWithConversations()).done.length; await persist();
-      console.log(JSON.stringify({ event: 'batch', pass, jobId: job.id, completed: job.completed, failed: job.failed }));
-      if (job.errors.some(e=>['AI_REJECTED','AI_CONFIGURATION','AI_SAFETY_REFUSAL'].includes(e.code))) throw new Error('El proveedor rechazó una evaluación. Se requiere intervención antes de continuar.');
+  if (maintenanceId != null && !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(maintenanceId)) throw new AppError(422, 'El mantenimiento debe ser un UUID válido.', 'INVALID_ARGUMENTS');
+  if (mode !== 'plan' && !maintenanceId) throw new AppError(422, 'Indica el ID del mantenimiento respaldado con --maintenance-id.', 'INVALID_ARGUMENTS');
+  if (mode !== 'execute' && (resume || maxBatches !== Infinity)) throw new AppError(422, '--resume y --max-batches requieren --execute.', 'INVALID_ARGUMENTS');
+  return { mode, maintenanceId, resume, maxBatches };
+}
+
+let store, manifest, filename, release;
+const summaryOnly = summary => { const { cases, ...counts } = summary; return counts; };
+try {
+  const options = argumentsFor(process.argv.slice(2));
+  const db = databaseConfig(), atom = atomDatabaseConfig();
+  if (config.demo || !db || !atom) throw new AppError(409, 'Configura Pulso real y la lectura de Atom antes de preparar la renovación.', 'INTEGRATION_PENDING');
+  store = new AtomHistoryStore(new MysqlStore(db), new AtomReader(atom, config.timezone));
+  const registry = registryFromEnv();
+  const settingsState = await store.read();
+  if (options.mode !== 'status') gemmaBackfillProfile(settingsState, registry);
+  const directory = path.join(apiRoot, '.data', 'backfills');
+  if (options.mode === 'plan') {
+    const state = await store.readWithConversations({ fresh: true });
+    const plan = createGemmaBackfillPlan(state, registry, { maintenanceId: options.maintenanceId });
+    console.log(JSON.stringify({ event: 'plan', readOnly: true, total: plan.conversations.length,
+      open: plan.conversations.filter(c => !c.completedAtSource).length,
+      closed: plan.conversations.filter(c => c.completedAtSource).length, profile: plan.profile,
+      catalogHash: plan.conversations[0].catalogHash, promptHash: plan.conversations[0].promptHash,
+      rulesVersion: plan.conversations[0].rulesVersion, dailyEnabled: state.settings.dailyEnabled,
+      maintenanceActive: !!state.settings.evaluationMaintenance, runningJobs: state.jobs.filter(j => ['running', 'queued', 'pending'].includes(j.status)).length,
+      existingEvaluations: state.evaluations.length, maxRounds: 3, concurrency: 1, batchSize: 20,
+      note: 'No se creó un manifiesto ni se ejecutó IA. El respaldo y reinicio son acciones separadas.' }, null, 2));
+  } else {
+    filename = path.join(directory, `${options.maintenanceId}.json`);
+    if (options.mode === 'execute') {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      release = await acquireBackfillLock(`${filename}.lock`, options.maintenanceId);
+    }
+    manifest = await readRequiredBackfillManifest(filename);
+    if (options.mode === 'status') {
+      const state = await store.readWithConversations({ fresh: true });
+      console.log(JSON.stringify({ event: 'status', readOnly: true, manifest: filename,
+        ...summaryOnly(inspectGemmaBackfill(state, manifest)), savedStatus: manifest.status,
+        dailyEnabled: state.settings.dailyEnabled, maintenanceActive: state.settings.evaluationMaintenance === manifest.id }, null, 2));
+    } else {
+      console.log(JSON.stringify({ event: 'start', manifest: filename, total: manifest.conversations.length, profile: manifest.profile, resume: options.resume }));
+      const summary = await executeGemmaBackfill(store, registry, manifest, { resume: options.resume, maxBatches: options.maxBatches,
+        checkpoint: current => persistBackfillManifest(filename, current),
+        onProgress: progress => console.log(JSON.stringify({ event: 'progress', ...progress })) });
+      console.log(JSON.stringify({ event: summary.status === 'completed' ? 'complete' : 'pending', manifest: filename, ...summaryOnly(summary) }));
+      if (summary.pending) process.exitCode = 2;
     }
   }
-  state = await store.readWithConversations({ fresh: true });
-  const result = inspect(state);
-  manifest.completed = result.done.length; manifest.missing = result.missing; manifest.pendingIds = result.pending.map(c=>c.id);
-  manifest.status = result.done.length === manifest.conversationIds.length ? 'completed' : 'partial'; manifest.updatedAt = new Date().toISOString();
-  await persist();
-  if (manifest.status !== 'completed') throw new Error(`Quedan ${manifest.conversationIds.length - result.done.length} conversaciones pendientes. Reanuda este comando sin limpiar otra vez.`);
-  await store.transaction(draft => {
-    if (draft.settings.evaluationMaintenance !== maintenanceId) throw new Error('La configuración de renovación cambió.');
-    draft.settings = { ...draft.settings, evaluationMaintenance: null, resetPreviousDailyEnabled: undefined,
-      dailyEnabled: true, dailyStartedAt: draft.settings.dailyStartedAt || manifest.createdAt,
-      includeOpenConversations: true, refreshChangedConversations: true,
-      lastBackfillId: maintenanceId, lastBackfillCompletedAt: manifest.updatedAt, version: draft.settings.version + 1 };
-  });
-  console.log(JSON.stringify({ event: 'complete', evaluated: result.done.length, provisional: result.done.filter(c=>c.completed===false).length,
-    dailyTime: state.settings.dailyTime, timezone: state.settings.timezone, manifest: filename }));
 } catch (error) {
-  if (manifest) { manifest.lastError = error.code || error.name; await persist(); }
-  console.error(error.code || error.name, error.message); process.exitCode = 1;
-} finally { await store.close(); }
+  if (manifest && release) {
+    manifest.lastError = error instanceof AppError ? error.code : 'BACKFILL_FAILED';
+    manifest.status = 'blocked'; manifest.updatedAt = new Date().toISOString();
+    try { await persistBackfillManifest(filename, manifest); } catch { console.error('No se pudo actualizar el checkpoint. Conserva el manifiesto y revisa el almacenamiento.'); }
+  }
+  console.error(error instanceof AppError ? `${error.code}: ${error.message}` : 'No se pudo completar la renovación. Revisa conexión y almacenamiento; no se muestran datos privados.');
+  process.exitCode = 1;
+} finally {
+  try { if (release) await release(); }
+  catch { console.error('No se pudo retirar el bloqueo local; verifica que el proceso terminó antes de retirarlo manualmente.'); process.exitCode = 1; }
+  await store?.close();
+}

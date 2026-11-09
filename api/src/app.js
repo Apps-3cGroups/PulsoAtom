@@ -7,7 +7,7 @@ import { AppError } from './errors.js';
 import { tokenHash, newToken, verifyPassword, publicUser, requireUser, requireAdmin } from './auth.js';
 import { countries } from './data/seed.js';
 import { createCatalogSchema, updateCatalogSchema, batchSchema, validateCatalog, saveCatalogVersion, ensureVersion, listQuerySchema, filteredConversations, summarize, priorityOrder, conversationView, viewContext, recordReview, reviewSchema } from './domain.js';
-import { startEvaluationBatch, recoverEvaluationJobs } from './evaluation-service.js';
+import { startEvaluationBatch, recoverEvaluationJobs, evaluationModelProgress } from './evaluation-service.js';
 import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
 import { registryFromEnv, asRegistry } from './model-registry.js';
@@ -15,33 +15,38 @@ import { mountModelRoutes } from './model-routes.js';
 import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
+import { conversationDailyMetrics } from './daily-metrics.js';
 
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
 const externalLoginSchema = z.object({ username: z.string().trim().min(1).max(254), password: z.string().min(1).max(200) }).strict();
 const grantSchema = z.object({ externalId: z.number().int().positive(), role: z.enum(['admin', 'supervisor']) }).strict();
 const settingsSchema = z.object({ dailyEnabled: z.boolean(), dailyTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('es', { timeZone: value }); return true; } catch { return false; } }, 'Zona horaria inválida'), expectedVersion: z.number().int().positive() }).strict();
-const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(20).default(20), idempotencyKey: z.string().uuid().optional() }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
-export const integrationStatus = () => ({
-  ready: process.env.OPENAI_EVALUATION_ENABLED === 'true' && !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.ATOM_DB_HOST && process.env.APP_DB_HOST),
-  atomConfigured: !!(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_CONVERSATIONS_TABLE && process.env.ATOM_MESSAGES_TABLE && process.env.ATOM_COUNTRIES_TABLE),
-  aiConfigured: !!(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL),
-  blockers: [...(process.env.ATOM_DB_HOST && process.env.ATOM_DB_NAME && process.env.ATOM_COUNTRIES_TABLE ? [] : ['Configurar la lectura histórica de Atom.']), ...(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL ? [] : ['Configurar OpenAI para la evaluación.']), ...(process.env.OPENAI_EVALUATION_ENABLED === 'true' ? [] : ['La transferencia de conversaciones a OpenAI está deshabilitada.'])],
-});
+const evaluationRequestSchema = z.object({ scope: z.enum(['new', 'period']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), max: z.number().int().min(1).max(100).default(20), reviewMode: z.enum(['configured', 'local-dual']).default('configured'), idempotencyKey: z.string().uuid().optional() }).strict().refine(v => v.scope !== 'period' || (v.from && v.to && v.from <= v.to), 'Selecciona un período válido.');
+const localDualModelIds = ['gemma-local', 'clef-local'];
+export const integrationStatus = (registry = registryFromEnv(), env = process.env) => {
+  const atomConfigured = !!(env.ATOM_DB_HOST && env.ATOM_DB_NAME && env.ATOM_CONVERSATIONS_TABLE && env.ATOM_MESSAGES_TABLE && env.ATOM_COUNTRIES_TABLE);
+  const aiConfigured = registry.configured;
+  return { ready: aiConfigured && atomConfigured && !!env.APP_DB_HOST, atomConfigured, aiConfigured,
+    blockers: [...(atomConfigured ? [] : ['Configurar la lectura histórica de Atom.']), ...(aiConfigured ? [] : ['Configurar y habilitar los modelos de evaluación.'])] };
+};
 
-export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}) {
+export function createApp(store, config, evaluator = registryFromEnv({ demo: config.demo }), identity = null, tdServices = {}, modelServices = {}) {
   const registry = asRegistry(evaluator);
+  const localDualAvailable = state => {
+    const bound = registry.forState(state);
+    try {
+      const profiles = localDualModelIds.map(id => bound.resolve(id));
+      return new Set(profiles.map(p => `${p.provider}:${p.model}`)).size === profiles.length;
+    } catch { return false; }
+  };
   const status = state => {
+    const currentRegistry = registry.forState(state);
     const blockers = [];
     if (!store.readWithConversations) blockers.push('Configura la lectura histórica de Atom.');
-    let modelsReady = registry.configured;
-    if (state) {
-      const policy = registry.policy(state);
-      try { for (const id of [policy.primaryId, policy.mode === 'dual' ? policy.secondaryId : policy.fallbackId].filter((id, index) => index === 0 || policy.mode === 'dual' || id)) registry.resolve(id); }
-      catch { modelsReady = false; }
-    }
+    const modelsReady = currentRegistry.configured && currentRegistry.policyAvailable(state);
     if (!modelsReady) blockers.push('Configura y habilita los modelos de la política seleccionada.');
-    return { ...integrationStatus(), aiConfigured: modelsReady, ready: !config.demo && !!store.readWithConversations && modelsReady, blockers };
+    return { ...integrationStatus(currentRegistry), aiConfigured: modelsReady, ready: !config.demo && !!store.readWithConversations && modelsReady, blockers };
   };
   const basePath = normalizeBasePath(config.basePath);
   const prefix = `${basePath}/api`;
@@ -142,7 +147,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
-  mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory });
+  mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory, ...modelServices });
   mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });
   app.get(`${prefix}/access/grants`, requireAdmin, async (_req, res) => {
     if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
@@ -194,7 +199,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       catalog: currentCatalog(state).map(v => ({ id: v.id, name: v.name, family: v.family, phase: v.phase, mark: v.mark, type: v.type, active: v.active, version: v.version, availability: catalogAvailability(v) })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
       activityDateRange: { min: activityDates.at(0) || null, max: activityDates.at(-1) || null },
-      integrations: integrationStatus(),
+      integrations: status(state),
     });
   });
   app.get(`${prefix}/catalog`, async (req, res) => {
@@ -287,7 +292,10 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     await expose(state, req.user.id, [conversation], query.modelProfileId);
-    res.json({ conversation: conversationView(state, conversation, viewContext(state, query.modelProfileId), true) });
+    const detail = conversationView(state, conversation, viewContext(state, query.modelProfileId), true);
+    // Read-only daily figures are separate from the original saved evaluation.
+    detail.dailyMetrics = conversationDailyMetrics(conversation, { timezone: config.timezone });
+    res.json({ conversation: detail });
   });
   app.post(`${prefix}/conversations/:id/reviews`, async (req, res) => {
     const input = reviewSchema.parse(req.body);
@@ -297,14 +305,19 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   app.get(`${prefix}/evaluations`, requireAdmin, async (_req, res) => {
     await recoverEvaluationJobs(store);
     const state = await store.read();
-    res.json({ status: status(state), settings: state.settings, jobs: state.jobs, activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
+    const dualAvailable = localDualAvailable(state);
+    res.json({ status: status(state), settings: state.settings,
+      jobs: state.jobs.map(job => ({ ...job, modelProgress: evaluationModelProgress(state, job) })),
+      limits: { manual: 100, comparison: 20, daily: 100 }, localDualAvailable: dualAvailable,
+      localDualReady: !config.demo && !!store.readWithConversations && dualAvailable,
+      activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
   });
   app.get(`${prefix}/evaluations/settings`, requireAdmin, async (_req, res) => {
     res.set('Cache-Control', 'no-store').json({ settings: (await store.read()).settings });
   });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
-    if (input.dailyEnabled && (config.demo || !store.readWithConversations || !status().ready)) throw new AppError(409, 'La evaluación diaria requiere Atom, Pulso y un modelo habilitado en modo real.', 'INTEGRATION_PENDING', integrationStatus().blockers);
+    if (input.dailyEnabled && (config.demo || !store.readWithConversations)) throw new AppError(409, 'La evaluación diaria requiere Atom y Pulso en modo real.', 'INTEGRATION_PENDING');
     const settings = await store.transaction(state => {
       if (state.settings.evaluationMaintenance) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
       if (input.dailyEnabled && !status(state).ready) throw new AppError(409, 'Completa la configuración de los modelos seleccionados.', 'AI_CONFIGURATION');
@@ -315,10 +328,13 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ settings });
   });
   app.post(`${prefix}/evaluations`, requireAdmin, async (req, res) => {
-    if (!registry.configured) throw new AppError(409, 'No hay un modelo configurado y habilitado.', 'EVALUATION_DISABLED');
-    if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
     const input = evaluationRequestSchema.parse(req.body);
-    const { job, completion } = await startEvaluationBatch(store, registry, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max, idempotencyKey: input.idempotencyKey, author: req.user });
+    const state = await store.read();
+    const dual = input.reviewMode === 'local-dual';
+    if (!(dual ? localDualAvailable(state) : status(state).aiConfigured)) throw new AppError(409, dual ? 'Configura y habilita Gemma y Clef como modelos distintos.' : 'Configura y habilita los modelos de la política seleccionada.', 'EVALUATION_DISABLED');
+    if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
+    const { job, completion } = await startEvaluationBatch(store, registry, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max, idempotencyKey: input.idempotencyKey, author: req.user,
+      ...(dual ? { modelIds: localDualModelIds, executionOrder: 'model-first' } : {}) });
     completion.catch(error => console.error('Error en ejecución de Pulso:', error.code || error.name));
     res.status(202).json({ job });
   });

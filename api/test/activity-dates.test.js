@@ -25,7 +25,7 @@ function fixture() {
 
 test('Atom conserva inicio y fecha local de última actividad sin usar la fecha de ingesta', () => {
   const c = conversation('sample', new Date('2026-10-30T12:00:00Z'), new Date('2026-11-04T02:00:00Z'));
-  assert.equal(c.date, '2026-10-30'); assert.equal(c.startedAt, '2026-10-30T12:00:00.000Z');
+  assert.equal(c.date, '2026-11-03'); assert.equal(c.startedDate, '2026-10-30'); assert.equal(c.startedAt, '2026-10-30T12:00:00.000Z');
   assert.equal(c.activityDate, '2026-11-03'); assert.equal(c.lastActivityAt, '2026-11-04T02:00:00.000Z');
   assert.equal(c.sourceUpdatedAt, '2026-11-06T18:00:00.000Z');
   const sqlDates = conversation('sql-date', '2026-10-30 12:00:00', '2026-11-04 02:00:00');
@@ -36,7 +36,7 @@ test('Atom conserva inicio y fecha local de última actividad sin usar la fecha 
 
 test('si no hay última actividad se usa el inicio, nunca fecha de carga ni actualización', () => {
   const c = conversation('missing-activity', '2026-10-30T12:00:00Z', null);
-  assert.equal(c.activityDate, '2026-10-30'); assert.equal(c.lastActivityAt, c.startedAt);
+  assert.equal(c.activityDate, '2026-10-30'); assert.equal(c.lastActivityAt, null); assert.equal(c.activityAt, c.startedAt);
   assert.equal(c.endedAt, c.startedAt);
   const state = fixture();
   delete state.conversations[2].activityDate; delete state.conversations[2].lastActivityAt;
@@ -44,21 +44,23 @@ test('si no hay última actividad se usa el inicio, nunca fecha de carga ni actu
   assert.equal(result.length, 1); assert.equal(result[0].displayDate, '2026-11-01');
 });
 
-test('filtro y orden por actividad son opt-in y no sobrescriben la fecha histórica', () => {
+test('filtro y orden conservan actividad por defecto y permiten consultar el inicio explícitamente', () => {
   const state = fixture(), before = structuredClone(state);
-  assert.equal(listQuerySchema.parse({}).dateBasis, 'started');
+  assert.equal(listQuerySchema.parse({}).dateBasis, 'activity');
   assert.throws(() => listQuerySchema.parse({ dateBasis: 'ingestion' }));
   const query = { from: '2026-11-01', to: '2026-11-04' };
-  assert.deepEqual(filteredConversations(state, query).map(c => c.id), ['nov-start']);
+  assert.deepEqual(filteredConversations(state, query).map(c => c.id), ['older-latest', 'oct-reopened', 'nov-start']);
+  assert.deepEqual(filteredConversations(state, { ...query, dateBasis: 'started' }).map(c => c.id), ['nov-start']);
   const activity = filteredConversations(state, { ...query, dateBasis: 'activity' });
   assert.deepEqual(activity.map(c => c.id), ['older-latest', 'oct-reopened', 'nov-start']);
   assert.deepEqual(activity.map(c => c.displayDate), ['2026-11-04', '2026-11-03', '2026-11-01']);
-  assert.equal(activity[0].date, '2026-10-29');
+  assert.equal(activity[0].date, '2026-11-04');
+  assert.equal(activity[0].startedDate, '2026-10-29');
   assert.equal(activity[0].displayAt, activity[0].lastActivityAt);
   assert.equal(activity[0].dateBasis, 'activity');
   const started = filteredConversations(state, { dateBasis: 'started' });
   assert.deepEqual(started.map(c => c.id), ['nov-start', 'oct-reopened', 'older-latest']);
-  assert.equal(started[0].displayDate, started[0].date);
+  assert.equal(started[0].displayDate, started[0].startedDate);
   assert.equal(filteredConversations(state, { ...query, dateBasis: 'activity', country: 'CR' }).length, 0);
   assert.deepEqual(state, before);
 });
@@ -80,15 +82,17 @@ test('bootstrap separa ambos rangos y Resumen/Histórico/Búsqueda aceptan activ
   const client = request.agent(app);
   await client.post('/pulsoAtom/api/auth/demo').send({ role: 'admin' }).expect(200);
   const bootstrap = await client.get('/pulsoAtom/api/bootstrap').expect(200);
-  assert.deepEqual(bootstrap.body.dateRange, { min: '2026-10-29', max: '2026-11-01' });
+  assert.deepEqual(bootstrap.body.dateRange, { min: '2026-11-01', max: '2026-11-04' });
   assert.deepEqual(bootstrap.body.activityDateRange, { min: '2026-11-01', max: '2026-11-04' });
   const search = '?dateBasis=activity&from=2026-11-03&to=2026-11-04';
   const summary = await client.get(`/pulsoAtom/api/summary${search}`).expect(200);
   assert.equal(summary.body.metrics.total, 2);
   assert.deepEqual(summary.body.conversations.map(c => c.displayDate), ['2026-11-04', '2026-11-03']);
-  assert.equal(summary.body.conversations[0].date, '2026-10-29');
+  assert.equal(summary.body.conversations[0].date, '2026-11-04');
   const legacy = await client.get('/pulsoAtom/api/summary?from=2026-11-03&to=2026-11-04').expect(200);
-  assert.equal(legacy.body.metrics.total, 0);
+  assert.equal(legacy.body.metrics.total, 2);
+  const byStart = await client.get('/pulsoAtom/api/summary?dateBasis=started&from=2026-10-29&to=2026-10-30').expect(200);
+  assert.equal(byStart.body.metrics.total, 2);
   for (const path of ['conversations', 'search']) {
     const response = await client.get(`/pulsoAtom/api/${path}${search}`).expect(200);
     assert.equal(response.body.total, 2);

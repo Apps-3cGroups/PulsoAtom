@@ -21,6 +21,7 @@ test('Atom se transforma en conversación pendiente, con país de catálogo y si
   assert.equal(conversation.id, '9');
   assert.equal(conversation.country, 'CR');
   assert.equal(conversation.date, '2026-10-20');
+  assert.equal(conversation.lastActivityAt, '2026-10-21T02:20:00.000Z');
   assert.equal(conversation.evaluationId, null);
   assert.equal(conversation.completed, false);
   assert.equal(conversation.client.phoneLast4, null);
@@ -75,7 +76,7 @@ test('las rutas reales muestran el país y los mensajes de Atom sin presentar ev
   assert.equal(detail.body.conversation.evaluation, null);
 });
 
-test('un lote a demanda crea resultados reales y los muestra en la conversación', async () => {
+test('un lote de un modelo conserva resultados en el detalle sin publicar flags sin consenso', async () => {
   const overrides = { OPENAI_EVALUATION_ENABLED: 'true', OPENAI_API_KEY: 'test', OPENAI_MODEL: 'mock', ATOM_DB_HOST: 'test', ATOM_DB_NAME: 'test', ATOM_COUNTRIES_TABLE: 'test', APP_DB_HOST: 'test' };
   const previous = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
   Object.assign(process.env, overrides);
@@ -105,7 +106,11 @@ test('un lote a demanda crea resultados reales y los muestra en la conversación
     assert.equal(stored.jobs[0].status, 'completed');
     const detail = await client.get('/pulsoAtom/api/conversations/10').expect(200);
     assert.equal(detail.body.conversation.evaluated, true);
-    assert.equal(detail.body.conversation.p1, 1);
+    assert.equal(detail.body.conversation.p1, 0);
+    const detection = detail.body.conversation.variables.find(v => v.id === 'cliente_amenazo_cancelar_pedido');
+    assert.equal(detection.result.value, 1);
+    assert.equal(detection.consensusSuppressed, true);
+    assert.equal(detection.consensusPending, true);
     assert.equal(stored.conversations.length, 0);
   } finally {
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;

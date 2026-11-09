@@ -56,6 +56,44 @@ const tables = {
   modelPolicies: 'model_policies',
 };
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
+const MAX_BATCH_ROWS = 100;
+const MAX_BATCH_BYTES = 256 * 1024;
+function* rowBatches(rows) {
+  let batch = [], bytes = 0;
+  for (const row of rows) {
+    const size = row.reduce((total, value) => total + Buffer.byteLength(String(value ?? ''), 'utf8') + 16, 0);
+    if (batch.length && (batch.length >= MAX_BATCH_ROWS || bytes + size > MAX_BATCH_BYTES)) {
+      yield batch; batch = []; bytes = 0;
+    }
+    batch.push(row); bytes += size;
+  }
+  if (batch.length) yield batch;
+}
+async function insertRows(connection, statement, rows, suffix = '') {
+  for (const batch of rowBatches(rows)) {
+    const placeholders = batch.map(row => `(${row.map(() => '?').join(', ')})`).join(', ');
+    await connection.execute(`${statement} VALUES ${placeholders}${suffix}`, batch.flat());
+  }
+}
+async function persistEvaluationIndex(connection, evaluation) {
+  const versions = new Map(evaluation.catalogVersions.map(ref => [ref.id, ref.version]));
+  // Preserve the former sequential upsert semantics if a legacy payload happens
+  // to repeat an ID: the last result and its evidence are the persisted ones.
+  const results = [...new Map(evaluation.results.map(result => [result.variableId, result])).values()];
+  await insertRows(connection,
+    'INSERT INTO evaluation_results (evaluation_id, variable_id, catalog_version, status, value_json, reason)',
+    results.map(result => [evaluation.id, result.variableId, versions.get(result.variableId), result.status,
+      result.value === undefined ? null : JSON.stringify(result.value), result.reason ?? null]),
+    ' ON DUPLICATE KEY UPDATE catalog_version = VALUES(catalog_version), status = VALUES(status), value_json = VALUES(value_json), reason = VALUES(reason)');
+  // Only replace evidence for variables in this payload. Historical variables
+  // omitted from an update and every other evaluation remain untouched.
+  for (const batch of rowBatches(results.map(result => [result.variableId]))) {
+    await connection.execute(`DELETE FROM evaluation_evidence WHERE evaluation_id = ? AND variable_id IN (${batch.map(() => '?').join(', ')})`, [evaluation.id, ...batch.flat()]);
+  }
+  await insertRows(connection,
+    'INSERT INTO evaluation_evidence (evaluation_id, variable_id, source_message_id, quote)',
+    results.flatMap(result => (result.evidence || []).map(evidence => [evaluation.id, result.variableId, evidence.messageId, evidence.quote])));
+}
 function emptyState() {
   const state = createState(false);
   for (const key of Object.keys(tables)) state[key] = [];
@@ -101,14 +139,7 @@ export class MysqlStore {
           if (before.get(item.id) === payload) continue;
           if (key === 'users') await connection.execute('INSERT INTO users (id, email, payload) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)', [item.id, item.email.toLowerCase(), payload]);
           else await connection.execute(`INSERT INTO ${table} (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)`, [item.id, payload]);
-          if (key === 'evaluations') {
-            const versions = new Map(item.catalogVersions.map(ref => [ref.id, ref.version]));
-            for (const result of item.results) {
-              await connection.execute('INSERT INTO evaluation_results (evaluation_id, variable_id, catalog_version, status, value_json, reason) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE catalog_version = VALUES(catalog_version), status = VALUES(status), value_json = VALUES(value_json), reason = VALUES(reason)', [item.id, result.variableId, versions.get(result.variableId), result.status, result.value === undefined ? null : JSON.stringify(result.value), result.reason ?? null]);
-              await connection.execute('DELETE FROM evaluation_evidence WHERE evaluation_id = ? AND variable_id = ?', [item.id, result.variableId]);
-              for (const evidence of result.evidence || []) await connection.execute('INSERT INTO evaluation_evidence (evaluation_id, variable_id, source_message_id, quote) VALUES (?, ?, ?, ?)', [item.id, result.variableId, evidence.messageId, evidence.quote]);
-            }
-          }
+          if (key === 'evaluations') await persistEvaluationIndex(connection, item);
         }
         // Solo las sesiones expiran o se eliminan; el histórico es acumulativo.
         if (key === 'sessions') for (const id of before.keys()) if (!after.has(id)) await connection.execute('DELETE FROM sessions WHERE id = ?', [id]);
@@ -124,8 +155,8 @@ export class MysqlStore {
 export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
-  async readWithConversations({ fresh = false } = {}) {
-    const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh })]);
+  async readWithConversations({ fresh = false, conversationIds } = {}) {
+    const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh, ...(conversationIds !== undefined ? { conversationIds } : {}) })]);
     return this.attach(state, source);
   }
   attach(state, source) {

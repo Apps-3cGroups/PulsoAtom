@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { digest, ensureEvaluationState, exposeEvaluation, historicalProfileId } from './evaluation-context.js';
+import { ensureEvaluationState, evaluationExposureId, exposeEvaluation, historicalProfileId } from './evaluation-context.js';
 import { comparisonRows, findComparison, qualityMetrics, sampleSummary, saveValidation, validationView } from './comparisons.js';
 import { startEvaluationBatch, resumeEvaluationBatch, recoverEvaluationJobs } from './evaluation-service.js';
+import { mountLocalModelConfigurationRoutes } from './local-model-configuration.js';
 import { modelDashboard } from './model-dashboard.js';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
@@ -13,15 +14,17 @@ const validationSchema = z.object({ items: z.array(z.object({ variableId: z.stri
   outcome: z.enum(['present', 'absent', 'insufficient']), comment: z.string().trim().min(5).max(2000), messageId: z.string().max(200).optional() }).strict()).min(1).max(500) }).strict();
 const reportFailure = completion => completion.catch(error => console.error('Error en ejecución de Pulso:', error.code || error.name));
 
-export function mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory }) {
+export function mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory, gatewayEnv = process.env, gatewayFetchImpl = fetch }) {
+  mountLocalModelConfigurationRoutes(app, prefix, { store, registry, config, requireAdmin, gatewayEnv, gatewayFetchImpl });
   const ready = () => { if (!config.demo && !store.readWithConversations) throw new AppError(409, 'Configura la lectura de Atom.', 'INTEGRATION_PENDING'); };
   app.get(`${prefix}/model-dashboard`, requireAdmin, async (req, res) => {
     const query = z.object({ from: date.optional(), to: date.optional(), country: z.string().max(10).optional(),
       jobId: z.string().max(200).optional(), left: z.string().max(200).optional(), right: z.string().max(200).optional() }).strict()
       .refine(v => !v.from || !v.to || v.from <= v.to, 'Período inválido').parse(req.query);
     const state = await readHistory();
-    const { exposureContexts, ...dashboard } = modelDashboard(state, registry, query, config.timezone);
-    const exposures = exposureContexts.filter(e => !(state.exposures || []).some(x => x.id === digest([req.user.id, e.conversationId, e.sourceHash, e.catalogHash])));
+    const { exposureContexts, ...dashboard } = modelDashboard(state, registry.forState(state), query, config.timezone);
+    const existing = new Set((state.exposures || []).map(e => e.id));
+    const exposures = exposureContexts.filter(e => { const id = evaluationExposureId(req.user.id, e); return id && !existing.has(id); });
     if (exposures.length) await store.transaction(draft => { for (const e of exposures) exposeEvaluation(draft, req.user.id, e); });
     res.json(dashboard);
   });
@@ -34,24 +37,27 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
   });
   app.get(`${prefix}/models`, requireAdmin, async (_req, res) => {
     const state = await store.read();
-    const profiles = registry.list();
+    const boundRegistry = registry.forState(state);
+    const profiles = boundRegistry.list();
     for (const e of state.evaluations) {
       const id = historicalProfileId(e);
       if (!profiles.some(p => (p.viewId || p.id) === id)) profiles.push({ id, label: e.profileLabel || e.model || 'Evaluación histórica', model: e.model || null,
         provider: e.provider || 'legacy', available: false, enabled: false, configured: false, historical: true, demo: !!e.demo });
     }
-    res.json({ profiles, policy: registry.policy(state), localStatus: 'Pendiente de definir infraestructura' });
+    const localProfiles = profiles.filter(p => p.provider === 'gateway' && !p.historical);
+    res.json({ profiles, policy: boundRegistry.policy(state), localStatus: localProfiles.some(p => p.available) ? 'Modelos locales habilitados' : 'Modelos locales pendientes de configuración' });
   });
   app.patch(`${prefix}/models/policy`, requireAdmin, async (req, res) => {
     const input = z.object({ mode: z.enum(['single', 'dual']).default('single'), secondaryId: z.string().max(80).nullable().default(null), primaryId: z.string().max(80), fallbackId: z.string().max(80).nullable(), expectedVersion: z.number().int().positive() }).strict().parse(req.body);
-    const primary = registry.resolve(input.primaryId);
-    const secondary = input.mode === 'dual' ? registry.resolve(input.secondaryId) : null;
-    const fallback = input.mode === 'single' && input.fallbackId ? registry.resolve(input.fallbackId) : null;
-    if (secondary && primary.provider === secondary.provider && primary.model === secondary.model) throw new AppError(422, 'Selecciona dos modelos diferentes.', 'DUPLICATE_MODEL');
-    if (fallback && primary.provider === fallback.provider && primary.model === fallback.model) throw new AppError(422, 'El respaldo debe ser otro modelo.', 'DUPLICATE_MODEL');
     const policy = await store.transaction(state => {
       ensureEvaluationState(state);
-      const current = registry.policy(state);
+      const boundRegistry = registry.forState(state);
+      const primary = boundRegistry.resolve(input.primaryId);
+      const secondary = input.mode === 'dual' ? boundRegistry.resolve(input.secondaryId) : null;
+      const fallback = input.mode === 'single' && input.fallbackId ? boundRegistry.resolve(input.fallbackId) : null;
+      if (secondary && primary.provider === secondary.provider && primary.model === secondary.model) throw new AppError(422, 'Selecciona dos modelos diferentes.', 'DUPLICATE_MODEL');
+      if (fallback && primary.provider === fallback.provider && primary.model === fallback.model) throw new AppError(422, 'El respaldo debe ser otro modelo.', 'DUPLICATE_MODEL');
+      const current = boundRegistry.policy(state);
       if (current.version !== input.expectedVersion) throw new AppError(409, 'La política cambió. Recarga antes de guardar.', 'VERSION_CONFLICT');
       if (!state.modelPolicies.some(p => p.version === current.version)) state.modelPolicies.push({ id: String(current.version), ...current });
       state.settings.aiPolicy = { mode: input.mode, secondaryId: secondary?.id || null, primaryId: input.primaryId, fallbackId: fallback?.id || null, version: current.version + 1, updatedAt: new Date().toISOString(), updatedBy: req.user.name, updatedById: req.user.id };
@@ -79,7 +85,13 @@ export function mountModelRoutes(app, prefix, { store, registry, config, require
     const selectedCase = typeof req.query.conversationId === 'string' ? req.query.conversationId : null;
     const visibleSample = selectedCase ? { ...sample, cases: sample.cases.filter(c => c.conversationId === selectedCase) } : sample;
     if (reveal) {
-      await store.transaction(draft => { for (const c of visibleSample.cases) exposeEvaluation(draft, req.user.id, { ...c, catalogVersions: sample.catalogVersions }); });
+      const exposures = visibleSample.cases.map(c => ({ ...c, catalogVersions: sample.catalogVersions }));
+      const existing = new Set(state.exposures.map(e => e.id));
+      // Polling an already revealed sample is read-only. The same identity is
+      // checked again by exposeEvaluation under the write lock for first-view races.
+      if (exposures.some(e => { const id = evaluationExposureId(req.user.id, e); return id && !existing.has(id); })) {
+        await store.transaction(draft => { for (const exposure of exposures) exposeEvaluation(draft, req.user.id, exposure); });
+      }
     }
     const cases = sample.cases.map(c => {
       const source = state.conversations.find(s => s.id === c.conversationId);

@@ -9,6 +9,7 @@ import { createApp } from '../src/app.js';
 import { createState, initialCatalog } from '../src/data/seed.js';
 import { conversationView, filteredConversations, summarize } from '../src/domain.js';
 import { hashPassword, verifyPassword } from '../src/auth.js';
+import { dualizeEvaluation } from './fixtures/dual-state.js';
 
 let directory, store, app, admin, supervisor;
 const config = { demo: true, origin: 'http://127.0.0.1:3000', sessionHours: 8, secureCookie: false, timezone: 'America/Tegucigalpa' };
@@ -106,20 +107,29 @@ test('la activación por lotes es atómica, no habilita plantillas y valida vers
   await write(admin, 'post', '/catalog/batch-status', { items: changed.map(v => ({ id: v.id, version: v.version })), active: false }).expect(200);
 });
 test('refutar y deshacer preservan la evidencia original y el historial', async () => {
-  const state = await store.read();
+  const reviewStore = await new DemoStore(path.join(directory, 'review-state.json')).init();
+  await reviewStore.transaction(state => {
+    const c = state.conversations.find(c => c.evaluationId && !state.reviews.some(r => r.conversationId === c.id)
+      && state.evaluations.find(e => e.id === c.evaluationId).results.some(r => r.value === 1));
+    dualizeEvaluation(state, c);
+  });
+  const reviewApp = createApp(reviewStore, config), reviewer = request.agent(reviewApp);
+  await write(reviewer, 'post', '/auth/demo', { role: 'supervisor' }).expect(200);
+  const state = await reviewStore.read();
   const candidate = filteredConversations(state, {}).find(c => c.marks.some(m => ['critical', 'normal'].includes(m.kind)) && !state.reviews.some(r => r.conversationId === c.id));
-  const detail = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
+  const detail = (await reviewer.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   const variable = detail.variables.find(v => ['critical', 'normal'].includes(v.kind));
   const body = { variableId: variable.id, evaluationId: detail.evaluation.id, expectedReviewId: null, action: 'refutar', reason: 'falta_contexto', comment: 'El contexto permite descartar este evento.' };
-  const review = await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, body).expect(201);
-  let changed = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
+  const review = await write(reviewer, 'post', `/conversations/${candidate.id}/reviews`, body).expect(201);
+  let changed = (await reviewer.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   assert.equal(changed.variables.find(v => v.id === variable.id).kind, 'refuted');
   assert.deepEqual(changed.variables.find(v => v.id === variable.id).result.evidence, variable.result.evidence);
-  await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, body).expect(409);
-  await write(supervisor, 'post', `/conversations/${candidate.id}/reviews`, { ...body, action: 'deshacer', expectedReviewId: review.body.review.id, reason: 'otro', comment: 'Restablecer la evaluación después de revisar.' }).expect(201);
-  changed = (await admin.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
+  await write(reviewer, 'post', `/conversations/${candidate.id}/reviews`, body).expect(409);
+  await write(reviewer, 'post', `/conversations/${candidate.id}/reviews`, { ...body, action: 'deshacer', expectedReviewId: review.body.review.id, expectedVerdictId: review.body.review.id, reason: 'otro', comment: 'Restablecer la evaluación después de revisar.' }).expect(201);
+  changed = (await reviewer.get(`/pulsoAtom/api/conversations/${candidate.id}`)).body.conversation;
   assert.equal(changed.variables.find(v => v.id === variable.id).kind, variable.kind);
   assert.deepEqual(changed.reviews.map(r => r.action), ['refutar', 'deshacer']);
+  await reviewStore.close();
 });
 test('un flag humano requiere evidencia propia y nunca modifica el resultado base', async () => {
   const state = await store.read();

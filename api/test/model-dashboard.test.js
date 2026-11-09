@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { modelDashboard } from '../src/model-dashboard.js';
-import { sourceFingerprint } from '../src/evaluation-context.js';
+import { digest, sourceFingerprint } from '../src/evaluation-context.js';
 
 const profiles = [{ id: 'gpt', viewId: 'gpt@a', configurationHash: 'a', label: 'GPT', model: 'gpt-model', provider: 'openai' },
   { id: 'gemini', viewId: 'gemini@b', configurationHash: 'b', label: 'Gemini', model: 'gemini-model', provider: 'gemini' }];
@@ -20,7 +20,8 @@ function fixture() {
     profiles.forEach((profile, i) => {
       const id = `${conversation.id}:${profile.id}`;
       state.tasks.push({ id, jobId: 'job', conversationId: conversation.id, profile, context, status: 'completed', evaluationId: id });
-      state.evaluations.push({ id, conversationId: conversation.id, jobId: 'job', profileId: profile.id, provider: profile.provider, model: profile.model,
+      state.evaluations.push({ id, taskId: id, conversationId: conversation.id, jobId: 'job', purpose: 'operational',
+        profileId: profile.id, requestedProfileId: profile.id, provider: profile.provider, model: profile.model, catalogVersions: structuredClone(refs),
         modelConfiguration: profile, ...context, durationMs: (c + 1) * (i ? 2000 : 1000),
         results: variables.map(v => ({ variableId: v.id, status: 'evaluado', value: i ? 0 : 1 })) });
     });
@@ -36,7 +37,7 @@ test('prioriza los perfiles reales Clef y Gemma sin renombrar resultados de otro
   state.tasks.forEach((task, index) => { task.profile = local[index % 2]; });
   state.evaluations.forEach((evaluation, index) => {
     const p = local[index % 2];
-    Object.assign(evaluation, { profileId: p.id, provider: p.provider, model: p.model, modelConfiguration: p });
+    Object.assign(evaluation, { profileId: p.id, requestedProfileId: p.id, provider: p.provider, model: p.model, modelConfiguration: p });
   });
   const result = modelDashboard(state, registry);
   assert.deepEqual(result.metrics.map(m => [m.profileId, m.label, m.model, m.answered]), [
@@ -142,4 +143,123 @@ test('agregados individualizables conservan contexto de exposición para futuras
   assert.equal(narrowed.exposureContexts.length, 1);
   assert.equal(narrowed.exposureContexts[0].conversationId, 'c0');
   assert.equal(narrowed.exposureContexts[0].sourceHash, state.tasks[0].context.sourceHash);
+});
+
+test('abstenciones válidas finalizan el trabajo; límites del adaptador no son abstenciones del modelo', () => {
+  const state = fixture();
+  for (const evaluation of state.evaluations) for (const r of evaluation.results) Object.assign(r, { status: 'no_evaluado', value: null });
+  state.evaluations[0].results[0].unavailabilityCode = 'evidence_capacity_exceeded';
+  const { metrics, cohort } = modelDashboard(state, registry);
+  assert.deepEqual(metrics.map(m => [m.completed, m.partial, m.completionRate, m.answered]), [[2, 0, 1, 0], [2, 0, 1, 0]]);
+  assert.equal(metrics[0].abstained, 5);
+  assert.equal(metrics[0].unavailable, 1);
+  assert.equal(metrics[0].failedFlags, 0);
+  assert.equal(cohort.jointAnswered, 0);
+  assert.equal(cohort.agreementRate, null);
+});
+
+test('una respuesta debe pertenecer a la tarea, ejecución, contenido, modelo y versión exactos', () => {
+  for (const mutate of [
+    e => { e.jobId = 'unrelated-job'; }, e => { e.taskId = 'unrelated-task'; },
+    e => { e.conversationId = 'unrelated-conversation'; }, e => { e.model = 'unrequested-model'; },
+    e => { e.purpose = 'comparison'; }, e => { e.modelConfiguration.configurationHash = 'changed'; },
+  ]) {
+    const state = fixture();
+    state.evaluations[0].modelConfiguration = structuredClone(state.evaluations[0].modelConfiguration);
+    mutate(state.evaluations[0]);
+    const result = modelDashboard(state, registry);
+    assert.equal(result.metrics[0].answered, 3);
+    assert.equal(result.cohort.timed, 1);
+  }
+  const state = fixture();
+  state.evaluations[0].catalogVersions[0].version = 2;
+  state.evaluations[1].catalogVersions[0].active = false;
+  let result = modelDashboard(state, registry);
+  assert.deepEqual(result.metrics.map(m => m.answered), [5, 5]);
+  assert.equal(result.cohort.jointAnswered, 5);
+  state.evaluations[0].results.push({ ...state.evaluations[0].results[1] });
+  result = modelDashboard(state, registry);
+  assert.equal(result.metrics[0].answered, 4);
+});
+
+test('las decisiones nativas exigen el contrato congelado, sin mezclar la configuración chat anterior', () => {
+  const state = fixture();
+  const native = { ...profiles[0], protocol: 'systemone', configurationHash: 'a'.repeat(64),
+    adapterVersion: 'synthetic-v1', instructionsHash: 'b'.repeat(64) };
+  state.jobs[0].modelProfiles = [native, profiles[1]];
+  for (const task of state.tasks.filter(t => t.profile.id === native.id)) task.profile = structuredClone(native);
+  for (const e of state.evaluations.filter(e => e.profileId === native.id)) Object.assign(e, {
+    modelConfiguration: structuredClone(native), protocol: native.protocol, adapterVersion: native.adapterVersion, instructionsHash: native.instructionsHash,
+  });
+  let result = modelDashboard(state, registry);
+  assert.equal(result.metrics[0].answered, 6);
+  state.evaluations[0].instructionsHash = 'c'.repeat(64);
+  result = modelDashboard(state, registry);
+  assert.equal(result.metrics[0].answered, 3);
+  assert.equal(result.cohort.jointAnswered, 3);
+});
+
+function complementFixture() {
+  const state = fixture();
+  state.conversations = state.conversations.slice(0, 1);
+  state.tasks = state.tasks.slice(0, 2);
+  state.evaluations = state.evaluations.slice(0, 2);
+  const local = ['gemma-local', 'clef-local'].map(id => ({ id, label: id, provider: 'gateway', model: `${id}-synthetic`,
+    protocol: 'chat', configurationHash: digest({ id }) }));
+  const original = state.jobs[0];
+  Object.assign(original, { mode: 'single', maintenanceId: 'synthetic-maintenance', modelProfiles: [local[0]], conversationIds: ['c0'] });
+  const complement = { ...structuredClone(original), id: 'complement', createdAt: '2026-11-10T07:00:00Z',
+    purpose: 'comparison', cohortId: `clef-complement-${original.maintenanceId}`, cohortManifestHash: digest('synthetic-manifest'), modelProfiles: local };
+  state.jobs.push(complement);
+  state.tasks.forEach((task, i) => {
+    Object.assign(task, { jobId: i ? complement.id : original.id, profile: structuredClone(local[i]) });
+    task.context.promptVersion = 'synthetic-v1';
+    Object.assign(state.evaluations[i], { ...task.context, purpose: i ? 'comparison' : 'operational',
+      jobId: task.jobId, profileId: local[i].id, requestedProfileId: local[i].id, provider: local[i].provider, model: local[i].model,
+      modelConfiguration: structuredClone(local[i]), usedFallback: false });
+  });
+  const originalTask = state.tasks[0];
+  state.tasks.push({ ...structuredClone(originalTask), id: 'reused-gemma-task', jobId: complement.id,
+    reusedEvaluationId: originalTask.evaluationId, reusedTaskId: originalTask.id, reusedJobId: original.id });
+  state.comparisons = [{ id: complement.id, jobId: complement.id, cohortId: complement.cohortId, modelProfiles: structuredClone(local),
+    catalogVersions: structuredClone(complement.catalogVersions), cases: [{ conversationId: 'c0', ...originalTask.context }] }];
+  return state;
+}
+
+test('incluye el complemento histórico Gemma/Clef con vínculo explícito sin duplicar la conversación', () => {
+  const state = complementFixture(), before = structuredClone(state);
+  const result = modelDashboard(state, registry, { jobId: 'complement' });
+  assert.equal(result.cohort.conversations, 1);
+  assert.deepEqual(result.metrics.map(m => [m.profileId, m.answered, m.completed]), [['clef-local', 3, 1], ['gemma-local', 3, 1]]);
+  assert.equal(result.cohort.timed, 1);
+  assert.equal(result.jobs.length, 1);
+  assert.deepEqual(state, before);
+  assert.equal(modelDashboard(state, registry, { from: '2026-11-10', to: '2026-11-10' }).cohort.conversations, 1);
+  assert.equal(modelDashboard(state, registry, { from: '2026-11-11' }).cohort.conversations, 0);
+  assert.equal(modelDashboard(state, registry).cohort.conversations, 1);
+});
+
+test('el protocolo chat implícito de las tareas históricas conserva su identidad comprobada', () => {
+  const state = complementFixture();
+  for (const task of state.tasks) delete task.profile.protocol;
+  const result = modelDashboard(state, registry, { jobId: 'complement' });
+  assert.equal(result.cohort.conversations, 1);
+  assert.deepEqual(result.metrics.map(m => [m.answered, m.completed]), [[3, 1], [3, 1]]);
+});
+
+test('un complemento sin trazabilidad o una muestra genérica no aporta respuestas ni tiempos', () => {
+  for (const mutate of [
+    s => { delete s.jobs[1].cohortManifestHash; },
+    s => { s.tasks[2].reusedTaskId = 'another-task'; },
+    s => { s.evaluations[1].taskId = 'another-task'; },
+    s => { s.comparisons[0].cases[0].sourceHash = 'different'; },
+    s => { s.jobs[1].cohortId = 'generic-laboratory'; },
+  ]) {
+    const state = complementFixture(); mutate(state);
+    const result = modelDashboard(state, registry);
+    assert.equal(result.cohort.conversations, 0);
+    assert.equal(result.cohort.timed, 0);
+    assert.ok(result.metrics.every(m => m.answered === 0));
+    assert.throws(() => modelDashboard(state, registry, { jobId: 'complement' }), { code: 'INVALID_JOB' });
+  }
 });

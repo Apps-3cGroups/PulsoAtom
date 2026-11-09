@@ -50,7 +50,26 @@ La coincidencia exige la misma variable, contenido, catálogo, instrucciones y r
 
 Los adaptadores validan cada ítem, conservan resultados válidos y reintentan únicamente los inválidos, dentro del límite existente. Los diagnósticos incluyen la variable y las reglas fallidas, sin registrar credenciales ni respuestas brutas. Se mantiene la identidad del proveedor; no se mezclan respuestas de respaldo bajo el nombre del principal.
 
-## Reglas de métricas y repetición
+## Minidashboard diario de Conversación
+
+El detalle `GET /pulsoAtom/api/conversations/:id` incorpora `dailyMetrics`, calculado por código a partir de los mensajes actuales de Atom. El bloque contiene los días disponibles, siete métricas por día, esperas pendientes y referencias de cruces de fecha. Solo se entrega en el detalle, nunca en listados, Resumen o comparación de modelos.
+
+El día corresponde a la fecha del mensaje en `APP_TIMEZONE` (por defecto `America/Tegucigalpa`), no a la fecha de carga. Se selecciona inicialmente el último día con mensajes; `metricDate=YYYY-MM-DD` conserva la selección en la URL. Cambiarlo no consulta la IA ni vuelve a cargar la conversación. Solo cambia el minidashboard: la transcripción, el checklist, sus flags y las revisiones conservan su alcance original.
+
+La presentación reúne los tres tiempos en una zona principal y la participación en un lateral. Los tiempos se muestran en horas/minutos/segundos, con redondeo al segundo. La línea de actividad separa cliente, bot y persona, con conteos explícitos y exclusivamente timestamps reales del día. La franja de espera inicial y el primer humano resaltado requieren evidencia de esa fecha; sin ella no se dibujan. Los mensajes simultáneos pueden superponerse, pero los conteos conservan todos los mensajes. El anillo representa participación cliente/equipo (personas + bot), no calidad ni cumplimiento. Ratio y mensajes por turno aparecen debajo del anillo. La ayuda consultable conserva cálculo, cobertura y alcance; la animación breve respeta `prefers-reduced-motion`.
+
+- Las siete métricas comparten el mismo día. Se excluyen eventos de sistema.
+- **Tiempo transcurrido del día:** primer → último mensaje de ese día, incluidas sus pausas. No significa tiempo de trabajo ni separa el chat en atenciones.
+- **Mayor silencio humano:** mayor espera completada cliente → humano dentro del día. El bot y los mensajes adicionales del cliente no reinician la espera. Un pendiente posterior no oculta los intervalos completados.
+- **Espera pendiente:** se presenta aparte, observada solo hasta el último mensaje disponible de ese día, nunca hasta la hora actual. Cero minutos observados sigue significando pendiente, no atendida.
+- **Cruces de día:** se conserva la referencia entre el primer cliente pendiente y el humano de otra fecha, marcada como continuidad no confirmada. No se agrega esa separación al silencio diario ni se interpreta como SLA.
+- Una fecha inválida de cliente/bot/humano impide asignar todo el contenido a días. Se conservan las fechas válidas disponibles, pero las siete métricas quedan no disponibles con motivo; no se deducen esperas de una secuencia incompleta.
+
+La regla de presentación se identifica con `pulso-daily-metrics-v1`. No modifica las reglas del evaluador ni las huellas de equivalencia, no escribe métricas nuevas en MySQL y no requiere migración. Los campos históricos `metrics`, `variables`, evaluaciones y revisiones se mantienen para compatibilidad; el minidashboard no reutiliza métricas acumuladas como si fueran diarias. Si la API aún no entrega `dailyMetrics`, la interfaz indica que no están disponibles.
+
+## Reglas del evaluador guardado y repetición
+
+Estas reglas conservan el alcance del contenido evaluado y el significado de los flags guardados; son independientes del selector diario del minidashboard.
 
 - Primera respuesta: primer cliente → siguiente humano; tiempo transcurrido sin descontar horarios.
 - Silencio: primer cliente pendiente → siguiente humano. El bot y nuevos mensajes del cliente no reinician la espera. Si queda una espera sin respuesta, el máximo queda no disponible.

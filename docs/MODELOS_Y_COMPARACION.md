@@ -17,28 +17,59 @@ Las refutaciones se realizan desde la vista de conversación, a la que se accede
 
 Mantener credenciales en `api/.env`, excluido de Git. No usar `VITE_*` para claves. La base propia (`APP_DB_*`) sigue separada del origen Atom (`ATOM_DB_*`).
 
-Se conserva `OPENAI_MODEL` y la configuración existente. Gemini queda pendiente hasta completar:
+Clef (`clef-local`) y Gemma (`gemma-local`) son los dos perfiles de ejecución de esta instalación, aun si `AI_MODEL_PROFILES` no existe. Las credenciales, perfiles y habilitaciones antiguas de GPT/Luna o Gemini no los reactivan. Las evaluaciones históricas conservan sus nombres e identidades originales.
+
+En el servidor basta preparar la conexión compartida:
 
 ```dotenv
-GEMINI_API_KEY=
-GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
-GEMINI_MODEL=
-GEMINI_TIMEOUT_MS=120000
-GEMINI_EVALUATION_ENABLED=false
+GATEWAY_BASE_URL=
+AGENT_SHARED_TOKEN=
+GATEWAY_PORTAL_KEY=portal-pulso
 ```
 
-Usar un ID de modelo que soporte el contrato de salida estructurada y habilitarlo únicamente al autorizar su uso. Reiniciar la API después de cambiar el entorno. No basta con elegir el perfil en la interfaz para configurarlo.
+Reiniciar la API al cambiar estas variables. Después, entrar como administrador a **Evaluaciones → Herramientas internas → Modelos locales**:
 
-Sin `AI_MODEL_PROFILES` se registran `openai-default` y `gemini-default`. Se pueden definir hasta 12 perfiles mediante JSON; cada `envPrefix` apunta a variables `*_API_KEY`, `*_BASE_URL`, `*_TIMEOUT_MS` y `*_EVALUATION_ENABLED`. Mantener IDs estables y modelos exactos. Cada perfil conserva su revisión de configuración mediante una huella. Los valores de configuración y las claves no salen del backend.
+1. Al abrir la configuración, Pulso consulta automáticamente las herramientas y los modelos de las herramientas guardadas. **Consultar Gateway** actualiza ambas listas. Son consultas de catálogo: no envían conversaciones ni generan evaluaciones.
+2. Elegir la herramienta y el ID exacto del modelo para cada uno de los dos perfiles. Cambiar de herramienta carga sus modelos automáticamente. Si falta elegir herramienta, no hay modelos o falla la consulta, el formulario explica el estado y ofrece reintento cuando corresponde. No se presuponen IDs ni se usan URLs proporcionadas por el catálogo.
+3. Elegir el formato JSON soportado y habilitar ambos perfiles. Guardar vuelve a verificar las herramientas/modelos, persiste su versión y selecciona la política dual Clef/Gemma. **La programación diaria queda pausada** para revisar primero el piloto solicitado.
+4. Los cambios guardados se aplican a las próximas ejecuciones sin reiniciar. No se limpian ni evalúan conversaciones al guardar. Se puede desactivar un perfil ya configurado incluso si el Gateway está caído, siempre que solo cambie su habilitación de activa a inactiva.
 
-```json
-[
-  {"id":"openai-default","label":"GPT","provider":"openai","model":"ID_EXACTO_OPENAI","envPrefix":"OPENAI"},
-  {"id":"gemini-default","label":"Gemini","provider":"gemini","model":"ID_EXACTO_GEMINI","envPrefix":"GEMINI"}
-]
+La conexión se informa como configurada, no como una prueba de inferencia exitosa. El modo demo no llama al Gateway. La configuración utiliza los dos perfiles fijos y permite editarlos, activarlos o inactivarlos en la misma pantalla. No permite crear otros perfiles. Un guardado obsoleto, lote activo o mantenimiento en curso impide sobrescribir la configuración.
+
+Los datos no secretos se versionan en `settings.localModelConfiguration`; la política conserva su propia auditoría. La URL y el token nunca se guardan en esos objetos ni se entregan a React. Los campos `CLEF_*` / `GEMMA_*` del entorno pueden aportar una configuración inicial, pero los valores guardados desde el portal tienen prioridad. Tiempo límite, temperatura y límite de tokens siguen siendo ajustes del backend. Una política antigua que referencia modelos públicos queda sin disponibilidad hasta guardar la nueva selección local; no se ejecuta automáticamente con otros modelos.
+
+Los adaptadores implementan `configured` y `evaluate(conversation, variables)`, devolviendo resultados normalizados, modelo efectivo, uso disponible e ID del proveedor. `GatewayEvaluator` implementa ese contrato para modelos locales, sin usar directamente sus direcciones privadas. Su conexión real requiere las credenciales, herramienta y modelo exactos del Gateway.
+
+## Clef y Gemma mediante GatewayAgents
+
+Todo el consumo sale del backend: `GET /v1/tools` descubre las herramientas y `POST /v1/tools/{toolKey}/invoke` invoca las rutas documentadas de modelos y Chat Completions. El token compartido solo se envía como `X-Gateway-Token`; no se expone a React, logs ni respuestas de Pulso. `portal_key` debe ser el identificador real asignado al portal. Pulso no sigue redirecciones ni utiliza la URL privada devuelta por el catálogo como destino de red.
+
+La identidad de este portal es `portal-pulso`, también usada por defecto cuando `GATEWAY_PORTAL_KEY` no existe. Para consultar el Gateway desde el servidor sin copiar sus credenciales ni ejecutar evaluaciones, situarse en `api/` y usar:
+
+```sh
+node scripts/discover-local-models.js
+node scripts/discover-local-models.js --tool CLAVE_EXACTA_DEL_CATALOGO
 ```
 
-Los adaptadores implementan `configured` y `evaluate(conversation, variables)`, devolviendo resultados normalizados, modelo efectivo, uso disponible e ID del proveedor. La integración local se incorporará con ese contrato cuando se defina infraestructura; no hay un endpoint local real habilitado.
+El primer comando imprime únicamente claves y estados de herramientas. El segundo consulta los IDs exactos de modelos de una herramienta activa y su `request_uuid`. Lee el `.env` del servidor, no imprime el token ni URLs internas y no accede a la base de datos. Usar los nombres descubiertos para completar los perfiles siguientes antes de preparar o aplicar el piloto.
+
+Confirmar los IDs exactos con DevOps y `/v1/models` del Gateway. Ambos modelos usan el mismo Gateway y la identidad de auditoría `portal-pulso`. La guía recibida documenta Gemma; no se presupone la herramienta ni el modelo Clef. Los demás ajustes están en `api/.env.example`: timeout máximo de 180 segundos por intento, temperatura, límite de salida y formato `json_schema` o `json_object`. El formato se elige explícitamente según lo que soporte el servicio, sin degradarlo automáticamente. La respuesta debe informar el mismo modelo solicitado. Una identidad distinta, una negativa de seguridad o un error de configuración no se convierten en un resultado válido.
+
+Estos perfiles reemplazan el registro de proveedores públicos; incluso si quedan claves antiguas en el entorno, las tareas del piloto solo pueden seleccionar los dos perfiles locales. La configuración guardada en MySQL se cambia a doble revisión al guardar los modelos locales o aplicar el piloto. El resultado conserva el `request_uuid` del Gateway como ID de respuesta para auditoría y el uso numérico disponible. La coincidencia requiere dos modelos efectivos distintos y resultados equivalentes; fallos, abstenciones y código no aportan votos adicionales.
+
+### Piloto controlado y limpieza respaldada
+
+El despliegue no borra ni evalúa datos por sí solo. Esta secuencia se ejecuta únicamente cuando se haya solicitado la limpieza. Desde `api/`, con el entorno real y la nueva versión disponibles:
+
+1. `node scripts/evaluate-local-pilot.js --plan`: lee la configuración persistida en Pulso, comprueba el catálogo del Gateway, los modelos y dos respuestas sintéticas; después fija las cinco conversaciones más recientes por **última actividad**, incluidas las abiertas. Guarda un manifiesto local con permisos `0600`, IDs, huellas y versiones, sin transcripciones. No modifica MySQL ni evalúa conversaciones reales.
+2. `node scripts/reset-evaluations.js`: consultar los totales antes de limpiar. No continuar si hay una ejecución activa o falló el preflight.
+3. `node scripts/reset-evaluations.js --apply --expected-evaluations TOTAL_VERIFICADO`: crea y comprueba un respaldo con SHA-256; después limpia las tablas de evaluaciones, revisiones y comparaciones bajo transacción. Conserva Atom, catálogo, usuarios y sesiones. Pausa el diario y devuelve `maintenanceId`. Guardar el respaldo en almacenamiento protegido y duradero antes de retirar la copia de trabajo.
+4. `node scripts/evaluate-local-pilot.js --apply --manifest RUTA_MANIFIESTO --maintenance-id ID_MANTENIMIENTO`: repite el preflight sintético, valida que la muestra y el catálogo no hayan cambiado, guarda la política dual Clef/Gemma sin respaldo público y ejecuta exactamente cinco conversaciones (diez tareas), con concurrencia uno.
+5. Si hay resultados parciales, usar `--resume` con los mismos argumentos. Conserva resultados válidos, reintenta solo pendientes y solo reanuda el mantenimiento que pertenece al trabajo. Si Atom cambió **antes de iniciar** y las tablas siguen vacías, `--plan --maintenance-id ID_MANTENIMIENTO` permite fijar una muestra nueva sin repetir la limpieza.
+
+Solo diez tareas completas con identidades y huellas válidas liberan el mantenimiento. La programación diaria permanece **pausada**, incluso tras el éxito, para revisar el piloto antes de ampliar el universo. El comando heredado `evaluate-all.js` rechaza políticas duales (`MASS_DUAL_UNSUPPORTED`); no debe usarse para esta prueba. La renovación masiva dual requiere un flujo separado que compruebe ambos resultados por conversación. La restauración existente requiere tablas de evaluación vacías; no debe sobrescribir resultados del piloto. También restaura la configuración anterior, por lo que un rollback debe conservar la pausa diaria y evitar reactivar proveedores antiguos inadvertidamente.
+
+Después de revisar el piloto, el administrador puede habilitar la programación diaria con la política local guardada. No necesita reiniciar por cambios de perfiles realizados en el portal. Ninguna prueba sintética demuestra conectividad ni resultados reales por sí sola.
 
 ## Acuerdo y métricas
 
@@ -56,7 +87,7 @@ Operación: modelo principal → un reintento técnico → respaldo → un reint
 
 Comparación: solo el modelo solicitado y un reintento. No se sustituye una columna por otro modelo. Cada tarea guarda su resultado una sola vez y la clave de idempotencia evita repetir una solicitud enviada de nuevo. Una reanudación explícita crea otra ronda auditada sin reevaluar tareas completadas.
 
-Manual: 20 conversaciones como máximo. Diario: 100, según el horario guardado. Los resultados comparativos jamás actualizan `operational_refs`. La programación diaria y OpenAI existentes no se modifican al migrar.
+Manual: 20 conversaciones como máximo. Diario: 100, según el horario guardado. Los resultados comparativos jamás actualizan `operational_refs`. Guardar la configuración local pausa el diario; consultar resultados o desplegar no reevalúa datos. Las políticas de proveedores públicos no están disponibles para nuevas ejecuciones.
 
 ## API bajo la ruta base configurada
 
@@ -65,6 +96,10 @@ Los endpoints siguientes son relativos a `${BASE_PATH}/api`: `/pulso/api` para l
 | Método y ruta | Uso |
 | --- | --- |
 | `GET /models` | Perfiles, disponibilidad y política vigente sin secretos. |
+| `GET /models/local-configuration` | Configuración de Clef/Gemma sin secretos, versión y disponibilidad; admin. |
+| `PUT /models/local-configuration` | Guardar los dos perfiles con `expectedVersion`, política dual y diario pausado; admin. |
+| `GET /models/gateway/tools` | Claves y estados del catálogo, sin inferencia; admin. |
+| `GET /models/gateway/tools/:toolKey/models` | IDs de modelos de una herramienta activa; admin. |
 | `PATCH /models/policy` | Guardar principal/respaldo con `expectedVersion`; solo admin. |
 | `GET /comparison-candidates` | País/período/búsqueda para selección manual; no devuelve predicciones. |
 | `GET /comparisons` | Muestras guardadas. |
@@ -88,21 +123,21 @@ El workflow de producción existente omite los scripts de base de datos por dise
 
 Para una demo aislada, usar `DEMO_MODE=true` y opcionalmente `DEMO_FILE=/ruta/aislada.json`. Los perfiles GPT, Gemini y Local de demo generan resultados sintéticos identificados; no contactan a ningún proveedor. Nunca copiar ese archivo a la base real.
 
-No se ejecutó una nueva comparación con datos reales en esta entrega. Falta configurar Gemini y escoger una muestra explícita para probar ambas conexiones reales. El adaptador Gemini y la contingencia se validaron con contratos y fallos simulados. Véase [QA de esta entrega](QA_MULTI_MODEL.md).
+La configuración local se valida con respuestas sintéticas identificadas y pruebas sin consumo externo. La conectividad y la inferencia reales de Clef/Gemma se verifican en el servidor con el piloto explícito de cinco conversaciones. La limpieza y ese piloto son operaciones separadas; no ocurren por desplegar esta interfaz.
 
 La arquitectura existente carga el histórico completo de Atom y documentos JSON de Pulso. Las evaluaciones/validaciones fuerzan lectura fresca para detectar cambios, lo que requiere dimensionar consultas e índices antes de cargas grandes. No se garantiza disponibilidad del origen o de proveedores externos; sus fallos quedan visibles.
 
 
 ## Doble revisión operativa (noviembre de 2026)
 
-En Evaluaciones → Herramientas internas → Revisión y contingencia, seleccionar **Doble revisión**, GPT como principal y Gemini como segundo modelo. Ambos deben estar configurados y habilitados. La política queda versionada y solo afecta ejecuciones nuevas; cambiarla no dispara IA ni reemplaza evaluaciones anteriores.
+En Evaluaciones → Herramientas internas → Revisión y contingencia, seleccionar **Doble revisión** y dos perfiles distintos, configurados y habilitados. Para la operación local serán Clef y Gemma. La política queda versionada y solo afecta ejecuciones nuevas; cambiarla no dispara IA ni reemplaza evaluaciones anteriores.
 
 - Se crean dos tareas independientes por conversación con la misma huella de contenido, checklist e instrucciones. Las respuestas no se comparten entre proveedores.
-- La vista operativa combina las detecciones: una variable detectada por cualquiera aparece una sola vez. No se guardan respuestas agregadas fingiendo que las produjo un modelo.
+- La vista operativa publica un flag automático únicamente cuando ambos modelos detectan la misma variable sobre contenido y versiones equivalentes. Las detecciones individuales quedan disponibles para revisión, sin contar como flags operativos. No se guardan respuestas agregadas fingiendo que las produjo un modelo.
 - Dos detecciones independientes: **Coinciden 2 modelos**. Una detección frente a un cero: **Discrepancia · requiere revisión**. Fallo o abstención: **comparación incompleta**. No se calcula un porcentaje de certeza.
 - Un cero y una abstención/fallo no equivalen a ausencia confirmada: el resultado agregado queda sin conclusión. Los cálculos se ejecutan una vez por conversación y no votan. Las reglas híbridas muestran la respuesta de IA y el ajuste de código, sin convertir la coincidencia impuesta en consenso.
-- La vista de conversación permite consultar GPT/Gemini, resultado, justificación, citas y versión del criterio. Se puede refutar el flag compartido; levantar uno omitido requiere la conversación completa. Autor, motivo, fecha y evidencia originales se conservan.
-- Si GPT falla técnicamente tras su reintento, Gemini se evalúa una vez como segunda revisión y puede mantener el resultado operativo. No se llama a Gemini otra vez como un respaldo adicional. Un fallo de configuración, entrada o seguridad del principal no publica al secundario como sustitución automática.
+- La vista de conversación permite consultar las dos identidades reales, resultado, justificación, citas y versión del criterio. Se puede refutar el flag compartido; levantar uno omitido requiere la conversación completa. Autor, motivo, fecha y evidencia originales se conservan.
+- Si un modelo falla técnicamente tras su reintento, se conserva la revisión del otro, identificando la comparación incompleta. No se convierte en coincidencia de dos modelos ni se ejecuta de nuevo al modelo completado como respaldo adicional. Un fallo de configuración, entrada o seguridad requiere intervención. El piloto local nunca recurre a GPT o Gemini.
 - **Detalle → Reanudar pendientes y fallidos** reanuda solo las tareas no completadas. Cambios de contenido, checklist, instrucciones, modelo o una ejecución operativa posterior impiden reutilizar un caso incompatible.
 - El historial distingue conversaciones de revisiones: 20 conversaciones en modo dual producen hasta 40 revisiones, además de los reintentos técnicos registrados por separado.
 - Se conserva el procesamiento existente de conversaciones abiertas y modificadas. No se dividen chats en atenciones.
@@ -110,8 +145,6 @@ En Evaluaciones → Herramientas internas → Revisión y contingencia, seleccio
 ### Preparación antes de publicar
 
 1. Conservar respaldo y verificar que no haya lotes activos. Aplicar `npm run db:migrate` desde `api/` sobre la base propia. La migración 002 crea tablas adicionales y referencias operativas sin borrar resultados o revisiones; ante empate de fecha elige la evaluación más reciente por secuencia. No modifica Atom. El flujo de despliegue actual no ejecuta esta migración por sí solo: completarla antes de fusionar/desplegar esta rama.
-2. Configurar una credencial de **Gemini API** y un modelo compatible en el backend. La clave OpenAI no autentica Gemini. La facturación/configuración del proveedor es independiente. Confirmar límites del proyecto antes de habilitarlo.
+2. Configurar la conexión de GatewayAgents en el backend y elegir los IDs de Clef/Gemma desde Modelos locales. No se requieren credenciales de proveedores públicos.
 3. Reiniciar la API con la configuración, guardar la política y ejecutar una muestra piloto explícita. No reevaluar automáticamente todo el histórico.
-4. Verificar persistencia en MySQL y respuestas reales de ambos proveedores. Las pruebas locales usan adaptadores sintéticos, sin consumo externo. La prueba real de Gemini y la migración sobre el servidor están pendientes de su configuración/publicación.
-
-Contrato Gemini consultado: [GenerateContent y GenerationConfig](https://aistudio.google.com/api-reference/generate-content). El adaptador utiliza `responseMimeType` y `responseJsonSchema`, y valida además todas las variables y referencias de evidencia en Pulso.
+4. Verificar persistencia en MySQL y respuestas reales de ambos modelos locales. Las pruebas automatizadas usan adaptadores sintéticos, sin consumo externo.

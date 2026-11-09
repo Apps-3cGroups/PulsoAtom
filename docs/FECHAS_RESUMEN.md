@@ -10,19 +10,19 @@ En períodos de más de 31 días, los indicadores abarcan el rango completo y el
 
 ## API y compatibilidad
 
-- `dateBasis=activity` usa `FechaUltimaActividadUtc`, convertida a la fecha local del portal. Si no existe, usa el inicio. Nunca se usa la fecha de ingesta para ubicar el chat.
-- Sin `dateBasis`, las consultas conservan el criterio histórico de inicio (`started`).
-- `date` y `startedAt` permanecen intactos; `displayDate` y `displayAt` indican las fechas del criterio consultado.
+- `dateBasis=activity` usa `FechaUltimaActividadUtc`, convertida a la fecha local del portal. Si no existe, usa el último mensaje con fecha válida y, por último, el inicio. Nunca se usa la fecha de ingesta para ubicar el chat.
+- Sin `dateBasis`, las consultas conservan el comportamiento actual de main: última actividad. `dateBasis=started` permite consultar explícitamente por inicio.
+- `date` conserva la fecha de actividad; `startedDate` y `startedAt` conservan el inicio. `displayDate` y `displayAt` indican las fechas del criterio consultado.
 - Bootstrap expone `activityDateRange` separado de `dateRange`.
 - El enlace desde un país del mapa a Histórico conserva `dateBasis=activity`, y la tabla identifica la columna «Última actividad».
 - Consultar un rango no ejecuta IA ni cambia resultados. La huella de contenido evaluado no cambia por estos campos de presentación.
 
 ## Comprobación
 
-Resultado local: 112 pruebas de API y 41 de web aprobadas; compilación aprobada. La prueba de navegador confirmó selección del 1 al 4 de noviembre, recarga, navegación a Histórico y Conversación, restablecimiento a siete días, rango de 65 días y recuperación desde un período vacío, sin errores JavaScript.
+La validación de la integración con main tras el PR #28 figura en [QA_PR27_INTEGRACION.md](QA_PR27_INTEGRACION.md). Las pruebas utilizan datos sintéticos, sin llamar a los modelos ni modificar evaluaciones reales.
 
 Pruebas de API: inicio en octubre con actividad en noviembre, cambio de día por zona horaria, fecha de ingesta distinta, fallback sin actividad, orden y filtros compatibles, y consultas sin ejecutar IA.
 
-Pruebas web: rangos inclusivos, cruces de mes/año, hoy frente a una fecha antigua de bootstrap, demo, fechas inválidas, un solo día y ventanas de 31 columnas para períodos largos. La prueba de navegador utiliza únicamente datos sintéticos y comprueba el calendario, recarga, navegación y distribución en 1366×768, 1440×900 y 1920×1080.
+Pruebas web: rangos inclusivos, cruces de mes/año, hoy frente a una fecha antigua de bootstrap, demo, fechas inválidas, un solo día y ventanas de 31 columnas para períodos largos. El informe de integración distingue estas pruebas de la comprobación visual realizada en el navegador disponible.
 
 API y web deben desplegarse juntas. No se necesita migración de base de datos ni reevaluar conversaciones.

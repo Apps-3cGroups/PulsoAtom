@@ -158,8 +158,12 @@ test('dashboard compara ejecuciones operativas sin ejecutar IA ni modificar resu
   const result = (await admin.get('/pulso/api/model-dashboard').expect(200)).body;
   assert.ok(result.cohort.conversations > 0);
   assert.equal(result.metrics.length, 2);
-  assert.equal(result.cohort.flagsMin, 47);
-  assert.equal(result.metrics[0].total, 47 * result.cohort.conversations);
+  const pairedJob = before.jobs.filter(j => j.purpose === 'operational' && j.mode === 'dual').at(-1);
+  const flagCount = pairedJob.catalogVersions.filter(ref => ref.active && before.catalogVersions.some(v => v.itemId === ref.id
+    && v.version === ref.version && v.snapshot.type === 'Flag' && ['IA', 'IA + código'].includes(v.snapshot.method))).length;
+  assert.ok(flagCount > 0);
+  assert.equal(result.cohort.flagsMin, flagCount);
+  assert.equal(result.metrics[0].total, flagCount * result.cohort.conversations);
   assert.doesNotMatch(JSON.stringify(result), /"(?:messages|evidence|reason|apiKey|Authorization|password)":/);
   assert.equal(calls, count);
   const after = await store.read();

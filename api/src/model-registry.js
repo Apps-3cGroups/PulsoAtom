@@ -1,20 +1,57 @@
 import { AppError } from './errors.js';
-import { OpenAIEvaluator } from './evaluator.js';
-import { GeminiEvaluator } from './gemini-evaluator.js';
+import { GatewayEvaluator } from './gateway-evaluator.js';
+import { ClefDecisionEvaluator } from './clef-decision-evaluator.js';
+import { GatewayApiClient } from './services/gatewayApiClient.js';
 import { digest } from './evaluation-context.js';
 
 // Provider adapters implement configured + evaluate(conversation, variables).
-// Local adapters can join this registry when the deployment is defined.
+// Gateway profiles keep local infrastructure and credentials in the backend.
 export class ModelRegistry {
-  constructor(profiles) {
+  constructor(profiles, { stateFactory, gatewayConfigured = false, localOnly = false } = {}) {
     if (new Set(profiles.map(p => p.id)).size !== profiles.length) throw new Error('Los perfiles de IA deben tener IDs únicos.');
     this.profiles = profiles;
+    this.stateFactory = stateFactory;
+    this.gatewayConfigured = gatewayConfigured;
+    this.localOnly = localOnly;
+  }
+  // Bind a fresh, immutable set of evaluators to persisted non-secret settings.
+  // Running jobs retain their own configuration; a new request sees saved edits.
+  forState(state) { return this.stateFactory ? this.stateFactory(state) : this; }
+  localConfiguration(state) {
+    const bound = this.forState(state);
+    const policy = bound.policy(state);
+    const profiles = bound.profiles.filter(p => p.provider === 'gateway').map(p => ({
+      id: p.id, label: p.label, toolKey: p.evaluator.toolKey || '', model: p.model || '',
+      enabled: !!p.enabled, responseFormat: p.evaluator.responseFormat || 'json_schema',
+      protocol: p.evaluator.protocol || 'chat', explanationType: p.evaluator.protocol === 'systemone' ? 'typed_decision' : 'model_text',
+    }));
+    const policyReady = policy.mode === 'dual' && policy.primaryId === 'clef-local' && policy.secondaryId === 'gemma-local' && bound.policyAvailable(state);
+    return { version: state?.settings?.localModelConfiguration?.version || 1,
+      gatewayConfigured: bound.gatewayConfigured, profiles, policyReady };
   }
   get configured() { return this.profiles.some(p => p.enabled && p.evaluator?.configured); }
   list() { return this.profiles.map(p => ({ ...this.snapshot(p), configured: !!p.evaluator?.configured,
     enabled: !!p.enabled, available: !!(p.enabled && p.evaluator?.configured) })); }
-  snapshot(p) { const configurationHash = digest([p.provider, p.model, p.evaluator?.baseUrl, p.evaluator?.timeoutMs]); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
-    configurationHash, demo: !!p.demo }; }
+  snapshot(p) {
+    // Preserve hashes of existing providers; local routes and generation options
+    // are part of a gateway profile's identity. Credentials never enter snapshots.
+    const settings = [p.provider, p.model, p.evaluator?.baseUrl, p.evaluator?.timeoutMs];
+    if (p.provider === 'gateway') {
+      // Keep the original chat hash byte-for-byte: existing Gemma evaluations
+      // and paused jobs must not change identity when this adapter is installed.
+      settings.push(p.evaluator.protocol === 'systemone'
+        ? { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, protocol: 'systemone', adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash }
+        : { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, responseFormat: p.evaluator.responseFormat,
+          maxTokens: p.evaluator.maxTokens, temperature: p.evaluator.temperature,
+          ...(p.evaluator.outputSchemaVersion ? { outputSchemaVersion: p.evaluator.outputSchemaVersion } : {}),
+          ...(p.evaluator.decisionInstructionsVersion ? { decisionInstructionsVersion: p.evaluator.decisionInstructionsVersion } : {}) });
+    }
+    const configurationHash = digest(settings); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
+    configurationHash, demo: !!p.demo, ...(p.provider === 'gateway' ? { protocol: p.evaluator.protocol || 'chat',
+      explanationType: p.evaluator.protocol === 'systemone' ? 'typed_decision' : 'model_text',
+      ...(p.evaluator.outputSchemaVersion ? { outputSchemaVersion: p.evaluator.outputSchemaVersion } : {}),
+      ...(p.evaluator.decisionInstructionsVersion ? { decisionInstructionsVersion: p.evaluator.decisionInstructionsVersion } : {}),
+      ...(p.evaluator.protocol === 'systemone' ? { adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash } : {}) } : {}) }; }
   resolve(id, expected) {
     const p = this.profiles.find(p => p.id === id);
     if (!p?.enabled || !p.evaluator?.configured) throw new AppError(409, 'El modelo está deshabilitado o pendiente de configuración.', 'AI_CONFIGURATION');
@@ -22,12 +59,23 @@ export class ModelRegistry {
     return p;
   }
   policy(state) {
-    return { mode: 'single', secondaryId: null, primaryId: this.profiles[0]?.id, fallbackId: null, version: 1, ...state.settings.aiPolicy };
+    return { mode: this.localOnly ? 'dual' : 'single', secondaryId: this.localOnly ? 'gemma-local' : null,
+      primaryId: this.profiles[0]?.id, fallbackId: null, version: 1, ...state?.settings?.aiPolicy };
+  }
+  policyAvailable(state) {
+    const policy = this.policy(state);
+    try {
+      const profiles = [this.resolve(policy.primaryId)];
+      if (policy.mode === 'dual') profiles.push(this.resolve(policy.secondaryId));
+      else if (policy.fallbackId) profiles.push(this.resolve(policy.fallbackId));
+      return new Set(profiles.map(p => `${p.provider}:${p.model}`)).size === profiles.length;
+    } catch { return false; }
   }
 }
 export function asRegistry(evaluator) {
   if (evaluator instanceof ModelRegistry) return evaluator;
-  return new ModelRegistry([{ id: 'openai-default', label: evaluator.model || 'OpenAI', provider: 'openai',
+  const provider = evaluator instanceof GatewayEvaluator || evaluator instanceof ClefDecisionEvaluator ? 'gateway' : 'openai';
+  return new ModelRegistry([{ id: `${provider}-default`, label: evaluator.model || (provider === 'gateway' ? 'Modelo local' : 'OpenAI'), provider,
     model: evaluator.model || 'configured-model', enabled: true, evaluator }]);
 }
 export function registryFromEnv({ demo = false, env = process.env, fetchImpl = fetch } = {}) {
@@ -48,17 +96,35 @@ export function registryFromEnv({ demo = false, env = process.env, fetchImpl = f
     } },
   })));
   const defaults = [
-    { id: 'openai-default', label: 'GPT', provider: 'openai', model: env.OPENAI_MODEL || '', envPrefix: 'OPENAI' },
-    { id: 'gemini-default', label: 'Gemini', provider: 'gemini', model: env.GEMINI_MODEL || '', envPrefix: 'GEMINI' },
+    { id: 'clef-local', label: 'Clef', provider: 'gateway', envPrefix: 'CLEF' },
+    { id: 'gemma-local', label: 'Gemma', provider: 'gateway', envPrefix: 'GEMMA' },
   ];
   const specs = env.AI_MODEL_PROFILES ? JSON.parse(env.AI_MODEL_PROFILES) : defaults;
   if (!Array.isArray(specs) || !specs.length || specs.length > 12) throw new Error('AI_MODEL_PROFILES debe contener entre 1 y 12 perfiles.');
-  return new ModelRegistry(specs.map(spec => {
-    if (!/^[a-z0-9-]{1,80}$/.test(spec.id) || !['openai', 'gemini'].includes(spec.provider) || !/^[A-Z][A-Z0-9_]*$/.test(spec.envPrefix) || typeof spec.model !== 'string' || typeof spec.label !== 'string') throw new Error('Perfil de IA inválido.');
-    const prefix = spec.envPrefix;
-    const options = { apiKey: env[`${prefix}_API_KEY`], baseUrl: env[`${prefix}_BASE_URL`], model: spec.model,
-      timeoutMs: Math.min(180000, Math.max(1000, Number(env[`${prefix}_TIMEOUT_MS`]) || 120000)), fetchImpl };
-    if (spec.provider === 'openai' && !options.baseUrl) options.baseUrl = 'https://api.openai.com/v1';
-    return { ...spec, enabled: env[`${prefix}_EVALUATION_ENABLED`] === 'true', evaluator: spec.provider === 'openai' ? new OpenAIEvaluator(options) : new GeminiEvaluator(options) };
-  }));
+  if (new Set(specs.map(p => p?.id)).size !== specs.length) throw new Error('Los perfiles de IA deben tener IDs únicos.');
+  for (const spec of specs) {
+    if (!spec || !/^[a-z0-9-]{1,80}$/.test(spec.id) || !['openai', 'gemini', 'gateway'].includes(spec.provider) || !/^[A-Z][A-Z0-9_]*$/.test(spec.envPrefix) || (spec.model !== undefined && typeof spec.model !== 'string') || typeof spec.label !== 'string') throw new Error('Perfil de IA inválido.');
+    if (spec.provider === 'gateway' && !defaults.some(p => p.id === spec.id)) throw new Error('Los perfiles locales de Pulso deben usar clef-local y gemma-local.');
+  }
+  // Public-provider environment variables may remain during deployment. They
+  // must never reactivate cloud calls or replace either of the two local slots.
+  const localSpecs = defaults.map(defaultSpec => ({ ...defaultSpec,
+    ...specs.find(spec => spec.provider === 'gateway' && spec.id === defaultSpec.id), label: defaultSpec.label }));
+  const gateway = { baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
+    portalKey: env.GATEWAY_PORTAL_KEY ?? 'portal-pulso', fetchImpl };
+  const gatewayConfigured = new GatewayApiClient(gateway).configured;
+  const build = state => new ModelRegistry(localSpecs.map(spec => {
+      const saved = state?.settings?.localModelConfiguration?.profiles?.find(p => p.id === spec.id);
+      const prefix = spec.envPrefix;
+      const model = saved?.model ?? spec.model ?? env[`${prefix}_MODEL`] ?? '';
+      const protocol = saved ? (saved.protocol ?? 'chat') : (env[`${prefix}_PROTOCOL`] ?? 'chat');
+      const protocolAllowed = protocol === 'chat' || (spec.id === 'clef-local' && protocol === 'systemone');
+      const Evaluator = protocol === 'systemone' && protocolAllowed ? ClefDecisionEvaluator : GatewayEvaluator;
+      const evaluator = new Evaluator({ baseUrl: env.GATEWAY_BASE_URL, token: env.AGENT_SHARED_TOKEN,
+        portalKey: gateway.portalKey, toolKey: saved?.toolKey ?? env[`${prefix}_TOOL_KEY`], model,
+        timeoutMs: Number(env[`${prefix}_TIMEOUT_MS`] || 180000), maxTokens: Number(env[`${prefix}_MAX_TOKENS`] || 16000),
+        temperature: Number(env[`${prefix}_TEMPERATURE`] || 0), responseFormat: saved?.responseFormat ?? env[`${prefix}_RESPONSE_FORMAT`] ?? 'json_schema', fetchImpl });
+      return { ...spec, model, enabled: protocolAllowed && (saved ? saved.enabled === true : env[`${prefix}_EVALUATION_ENABLED`] === 'true'), evaluator };
+  }), { stateFactory: build, gatewayConfigured, localOnly: true });
+  return build();
 }

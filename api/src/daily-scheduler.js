@@ -1,4 +1,5 @@
 import { startEvaluationBatch } from './evaluation-service.js';
+import { asRegistry } from './model-registry.js';
 
 export function scheduleClock(now, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -10,8 +11,11 @@ export function scheduleClock(now, timezone) {
 }
 
 export async function runDailyTick(store, evaluator, now = new Date()) {
-  const { settings, jobs } = await store.read();
+  const state = await store.read();
+  const { settings, jobs } = state;
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
+  const registry = asRegistry(evaluator).forState(state);
+  if (!registry.policyAvailable(state)) return null;
   const clock = scheduleClock(now, settings.timezone);
   if (clock.time < settings.dailyTime || jobs.some(job => job.scheduleDate === clock.date)) return null;
   const { job, completion } = await startEvaluationBatch(store, evaluator, {

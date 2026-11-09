@@ -1,5 +1,6 @@
 import { AppError } from './errors.js';
 import { sourceFingerprint } from './evaluation-context.js';
+import { evaluationMatchesProfile, operationalEvaluation } from './operational-evaluation.js';
 
 const contextKeys = ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'];
 const profileKey = p => p.viewId || `${p.id}@${p.configurationHash || p.model}`;
@@ -9,6 +10,29 @@ const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / value
 const aiFlag = v => v?.type === 'Flag' && ['IA', 'IA + código'].includes(v.method);
 const rawResult = result => result?.codeRule ? result.aiResult : result;
 const decisive = result => result?.status === 'evaluado' && !result.error && [0, 1].includes(result.value);
+const uniqueBy = (values, key) => {
+  const index = new Map();
+  for (const value of values) index.set(value[key], index.has(value[key]) ? null : value);
+  return index;
+};
+// Reuse the operational provenance validator for the additive historical
+// Gemma/Clef cohort. Arbitrary laboratory jobs never become dashboard runs.
+function explicitComplements(state, evaluations) {
+  const casesByJob = new Map();
+  for (const task of state.tasks || []) {
+    if (task.profile?.id !== 'gemma-local' || !task.reusedEvaluationId) continue;
+    const anchor = evaluations.get(task.reusedEvaluationId);
+    const original = (state.jobs || []).find(j => j.id === anchor?.jobId);
+    const job = (state.jobs || []).find(j => j.id === task.jobId);
+    if (!anchor || !original?.maintenanceId || job?.purpose !== 'comparison'
+      || job.cohortId !== `clef-complement-${original.maintenanceId}`) continue;
+    const view = operationalEvaluation(state, anchor);
+    if (!view.dual || !view.modelReviews?.some(r => r.provenance === 'cohort-complement')) continue;
+    if (!casesByJob.has(job.id)) casesByJob.set(job.id, new Set());
+    casesByJob.get(job.id).add(anchor.conversationId);
+  }
+  return casesByJob;
+}
 const dateInZone = (value, timezone) => {
   if (!value || !Number.isFinite(Date.parse(value))) return null;
   const parts = new Intl.DateTimeFormat('en', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
@@ -17,7 +41,10 @@ const dateInZone = (value, timezone) => {
 
 /** Read-only analytics: latest paired operational run per conversation, immutable checklist. */
 export function modelDashboard(state, registry, filters = {}, timezone = 'America/Tegucigalpa') {
-  const jobs = (state.jobs || []).filter(j => j.purpose !== 'comparison').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const evaluations = uniqueBy(state.evaluations || [], 'id');
+  const complements = explicitComplements(state, evaluations);
+  const jobs = (state.jobs || []).filter(j => j.purpose !== 'comparison' || complements.has(j.id))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
   const profileMap = new Map();
   const addProfile = p => {
     const id = profileKey(p);
@@ -40,14 +67,14 @@ export function modelDashboard(state, registry, filters = {}, timezone = 'Americ
   const selected = [first, second].filter(Boolean);
   const conversations = new Map((state.conversations || []).map(c => [c.id, c]));
   const snapshots = new Map((state.catalogVersions || []).map(v => [`${v.itemId}:${v.version}`, v.snapshot]));
-  const evaluations = new Map((state.evaluations || []).map(e => [e.id, e]));
   const tasksByJob = new Map();
   for (const task of state.tasks || []) {
     if (!task.profile) continue;
     if (!tasksByJob.has(task.jobId)) tasksByJob.set(task.jobId, new Map());
     const cases = tasksByJob.get(task.jobId);
     if (!cases.has(task.conversationId)) cases.set(task.conversationId, new Map());
-    cases.get(task.conversationId).set(profileKey(task.profile), task);
+    const profiles = cases.get(task.conversationId), key = profileKey(task.profile);
+    profiles.set(key, profiles.has(key) ? null : task);
   }
   const verdicts = new Map();
   for (const v of state.verdicts || []) verdicts.set(JSON.stringify([v.conversationId, v.sourceHash, v.variableId, v.catalogVersion]), v);
@@ -62,6 +89,8 @@ export function modelDashboard(state, registry, filters = {}, timezone = 'Americ
     if (!job.modelProfiles?.some(p => selected.some(s => s.id === profileKey(p)))) continue;
     const cases = tasksByJob.get(job.id) || new Map();
     for (const [conversationId, tasks] of cases) {
+      const complement = job.purpose === 'comparison';
+      if (complement && !complements.get(job.id)?.has(conversationId)) continue;
       const conversation = conversations.get(conversationId);
       if (filters.country && conversation?.country !== filters.country) continue;
       candidates.add(conversationId);
@@ -73,18 +102,30 @@ export function modelDashboard(state, registry, filters = {}, timezone = 'Americ
       if (!refs.length || refs.some(v => !snapshots.has(`${v.id}:${v.version}`))) { missingCatalog++; continue; }
       const variables = refs.map(v => snapshots.get(`${v.id}:${v.version}`)).filter(aiFlag);
       if (!variables.length) continue;
-      const cells = pair.map(task => {
+      const cells = pair.map((task, i) => {
+        const profile = job.modelProfiles.find(p => profileKey(p) === selected[i].id);
         const saved = evaluations.get(task.evaluationId);
-        const compatible = saved && sameContext(saved, task.context) && saved.profileId === task.profile.id && !saved.usedFallback
-          && saved.provider === task.profile.provider && (!saved.modelConfiguration || profileKey(saved.modelConfiguration) === profileKey(task.profile));
+        const reused = complement && task.profile.id === 'gemma-local';
+        const matchingProfile = profile && (task.profile.protocol || 'chat') === (profile.protocol || 'chat')
+          && ['id', 'provider', 'model', 'configurationHash', 'adapterVersion', 'instructionsHash'].every(key => task.profile[key] === profile[key]);
+        const compatible = matchingProfile && saved && sameContext(saved, task.context) && saved.conversationId === conversationId
+          && saved.jobId === (reused ? task.reusedJobId : job.id) && saved.taskId === (reused ? task.reusedTaskId : task.id)
+          && saved.purpose === (reused ? 'operational' : job.purpose)
+          && saved.profileId === task.profile.id && !saved.usedFallback && (!saved.requestedProfileId || saved.requestedProfileId === task.profile.id)
+          && saved.provider === task.profile.provider && saved.model === task.profile.model && evaluationMatchesProfile(saved, task.profile);
         const evaluation = compatible ? saved : null;
-        return { task, evaluation, results: new Map((evaluation?.results || []).map(r => [r.variableId, rawResult(r)])) };
+        const results = uniqueBy(evaluation?.results || [], 'variableId');
+        const values = variables.map(v => {
+          const ref = evaluation?.catalogVersions?.find(r => r.id === v.id);
+          return [v.id, ref?.active && ref.version === v.version ? rawResult(results.get(v.id)) : null];
+        });
+        return { task, evaluation, results: new Map(values) };
       });
       cohort.set(conversationId, { conversationId, conversation, job, variables, cells, context: pair[0].context });
     }
   }
   const cases = [...cohort.values()];
-  const metrics = selected.map(profile => ({ ...profile, total: 0, answered: 0, detected: 0, absent: 0, abstained: 0, failedFlags: 0, pending: 0,
+  const metrics = selected.map(profile => ({ ...profile, total: 0, answered: 0, detected: 0, absent: 0, abstained: 0, unavailable: 0, failedFlags: 0, pending: 0,
     completed: 0, partial: 0, failed: 0, inProgress: 0, fallback: 0, tp: 0, fp: 0, fn: 0, tn: 0, validated: 0 }));
   const flagCounts = new Map(), timedPairs = [];
   let agreement = 0, jointAnswered = 0, referenceCount = 0;
@@ -112,7 +153,9 @@ export function modelDashboard(state, registry, filters = {}, timezone = 'Americ
           if (r.value === 1) { m.detected++; } else m.absent++;
         } else {
           m.pending++;
-          if (r?.status === 'no_evaluado' && !r.error) m.abstained++; else m.failedFlags++;
+          if (r?.status === 'no_evaluado' && !r.error && !r.unavailabilityCode) m.abstained++;
+          else if (r?.unavailabilityCode && !r.error) m.unavailable++;
+          else m.failedFlags++;
         }
       });
       const distinctModels = item.cells.every(c => c.evaluation) && new Set(item.cells.map(c => `${c.evaluation.provider}:${c.evaluation.model}`)).size === 2;

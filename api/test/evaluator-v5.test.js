@@ -8,6 +8,7 @@ import { runEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-ser
 import { selectedEvaluation, sourceFingerprint, digest } from '../src/evaluation-context.js';
 import { comparisonRows, qualityMetrics } from '../src/comparisons.js';
 import { AppError } from '../src/errors.js';
+import { conversationView } from '../src/domain.js';
 
 const c = { id: 'v5-case', country: 'HN', date: '2026-11-03', completed: true, client: { name: 'Cliente sintético' },
   agent: { id: 'test-agent', name: 'Asesor sintético' }, media: [], topics: [], messages: [
@@ -59,7 +60,7 @@ test('OpenAI y Gemini devuelven resultados válidos junto a los errores por vari
   const vars = createState(false).catalog.filter(v => v.active && supportsAiVariable(v));
   const data = raw(vars); data.results[flagId].evidence_message_ids = ['m1'];
   const openai = new OpenAIEvaluator({ apiKey: 'synthetic', baseUrl: 'https://example.test', model: 'synthetic', fetchImpl: async () => ({ ok: true, json: async () => ({ status: 'completed', output: [{ content: [{ type: 'output_text', text: JSON.stringify(data) }] }] }) }) });
-  const gemini = new GeminiEvaluator({ apiKey: 'synthetic', baseUrl: 'https://example.test', model: 'synthetic', fetchImpl: async () => ({ ok: true, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify(data) }] } }] }) }) });
+  const gemini = new GeminiEvaluator({ apiKey: 'synthetic', baseUrl: 'https://example.test', model: 'synthetic', fetchImpl: async () => ({ ok: true, json: async () => ({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ results: Object.entries(data.results).map(([variableId, result]) => ({ variableId, ...result })) }) }] } }] }) }) });
   for (const evaluator of [openai, gemini]) {
     const answer = await evaluator.evaluate(c, vars);
     assert.equal(answer.results.length, 48);
@@ -158,11 +159,30 @@ test('reanudar con instrucciones antiguas se rechaza antes de mutar el lote o ll
   assert.equal(JSON.stringify(state), before); assert.equal(calls, previousCalls);
 });
 
-test('tener métricas calculadas no evita la intervención requerida por rechazo de seguridad', async () => {
+test('la revisión dual conserva métricas e incidencia del rechazo sin inventar respaldo ni publicar flags', async () => {
   const { state, store } = fixture(); dual(state);
-  const registry = models(() => { throw new AppError(422, 'Rechazo sintético.', 'AI_SAFETY_REFUSAL'); }, vars => parsed(vars));
+  let primaryCalls = 0, secondaryCalls = 0;
+  const registry = models(() => { primaryCalls++; throw new AppError(422, 'Rechazo sintético.', 'AI_SAFETY_REFUSAL'); }, vars => { secondaryCalls++; return parsed(vars); });
   const job = await runEvaluationBatch(store, registry, { max: 1 });
   assert.equal(job.status, 'partial');
-  assert.equal(state.operationalRefs.length, 0);
+  assert.equal(state.operationalRefs.length, 1);
+  assert.equal(primaryCalls, 1); assert.equal(secondaryCalls, 1);
+  const view = conversationView(state, c, undefined, true);
+  assert.equal(view.evaluated, true); assert.equal(view.evaluationStatus, 'partial');
+  assert.deepEqual(view.evaluation.modelReviews.map(r => r.status), ['partial', 'completed']);
+  assert.deepEqual(view.marks, []);
+  assert.ok(state.evaluations.every(e => !e.usedFallback && !e.contingencyFor));
   assert.ok(state.evaluations.find(e => e.requestedProfileId === 'v5-0').results.some(r => r.variableId === 'num_mensajes_cliente' && r.value === 1));
+});
+
+test('en modo individual las métricas no activan respaldo ni referencia ante un rechazo de seguridad', async () => {
+  const { state, store } = fixture();
+  state.settings.aiPolicy = { mode: 'single', primaryId: 'v5-0', fallbackId: 'v5-1', version: 1 };
+  let primaryCalls = 0, secondaryCalls = 0;
+  const registry = models(() => { primaryCalls++; throw new AppError(422, 'Rechazo sintético.', 'AI_SAFETY_REFUSAL'); }, vars => { secondaryCalls++; return parsed(vars); });
+  const job = await runEvaluationBatch(store, registry, { max: 1 });
+  assert.equal(job.status, 'partial'); assert.equal(primaryCalls, 1); assert.equal(secondaryCalls, 0);
+  assert.equal(state.operationalRefs.length, 0);
+  assert.equal(conversationView(state, c, undefined, true).evaluated, false);
+  assert.ok(state.evaluations[0].results.some(r => r.variableId === 'num_mensajes_cliente' && r.value === 1));
 });
