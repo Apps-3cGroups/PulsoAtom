@@ -7,6 +7,7 @@ import { catalogAvailability } from './catalog-presentation.js';
 import { asRegistry } from './model-registry.js';
 import { catalogReferences, digest, ensureEvaluationState, evaluationContext, selectedEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { startEvaluationHeartbeat } from './evaluation-heartbeat.js';
+import { activityOnDate, validateDailyActivityRequest, sameDailyCohort } from './daily-activity.js';
 
 const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE'].includes(error.code);
 const running = new Map();
@@ -83,6 +84,11 @@ export async function recoverEvaluationJobs(store) {
 }
 function pickCandidates(state, options) {
   let candidates = eligibleConversations(state, options);
+  if (options.dailyActivity) {
+    const assigned = new Set(state.jobs.filter(job => sameDailyCohort(job, options)).flatMap(job => job.conversationIds));
+    candidates = candidates.filter(c => options.countries.includes(c.country) && !assigned.has(c.id)
+      && activityOnDate(c, options.dailyActivity.date, options.dailyActivity.timezone));
+  }
   if (options.conversationIds) {
     if (!Array.isArray(options.conversationIds) || !options.conversationIds.length || new Set(options.conversationIds).size !== options.conversationIds.length) throw new AppError(422, 'La lista de conversaciones para revisión es inválida.', 'INVALID_RECHECK');
     const byId = new Map(candidates.map(c => [c.id, c]));
@@ -111,7 +117,7 @@ function pickCandidates(state, options) {
     candidates.sort((a, b) => activityTime(b) - activityTime(a)
       || String(b.id).localeCompare(String(a.id), 'en', { numeric: true }));
   }
-  return candidates.slice(0, options.max ?? 20);
+  return options.dailyActivity ? candidates : candidates.slice(0, options.max ?? 20);
 }
 export async function startEvaluationBatch(store, evaluator, options = {}) {
   const state = ensureEvaluationState(await readHistory(store, options.conversationIds));
@@ -119,6 +125,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const purpose = options.purpose || 'operational';
+  if (options.dailyActivity) validateDailyActivityRequest(state.settings, options);
   if (options.largeBatch && (options.largeBatch !== true || purpose !== 'operational' || options.scheduleDate
     || !options.maintenanceId || state.settings.evaluationMaintenance !== options.maintenanceId)) {
     throw new AppError(422, 'Los lotes ampliados requieren un mantenimiento explícito y coincidente.', 'INVALID_LARGE_BATCH');
@@ -149,9 +156,15 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   const pendingOnly = purpose === 'comparison' ? false : options.pendingOnly !== false;
   const candidates = pickCandidates(state, { ...options, pendingOnly });
   if (!candidates.length && purpose === 'comparison') throw new AppError(422, 'No hay conversaciones disponibles con estos filtros.', 'EMPTY_SAMPLE');
+  // Record the first empty run, then keep checking for delayed Atom imports
+  // without creating empty jobs every minute. Every new case gets both models.
+  if (options.dailyActivity && !candidates.length && state.jobs.some(job => sameDailyCohort(job, options))) {
+    return { job: null, completion: Promise.resolve(null) };
+  }
   const catalog = state.catalog.filter(v => !v.retired);
   const catalogVersions = catalogReferences(catalog);
   const job = { id: randomUUID(), purpose, status: 'running', scope: options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
+    ...(options.dailyActivity ? { dailyActivity: options.dailyActivity, countries: options.countries } : {}),
     sourceJobId: options.sourceJobId || null, scheduleDate: options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
     total: candidates.length * profiles.length, caseCount: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
     modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', executionOrder, concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
@@ -168,7 +181,13 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     const currentRegistry = registry.forState(draft);
     for (const profile of [...profiles, fallback].filter(Boolean)) currentRegistry.resolve(profile.id, profile);
     if (options.idempotencyKey && draft.jobs.some(j => j.idempotencyKey === options.idempotencyKey)) throw new AppError(409, 'Esta ejecución ya se registró. Consulta su progreso.', 'DUPLICATE_EXECUTION');
-    if (options.scheduleDate) {
+    if (options.dailyActivity) {
+      validateDailyActivityRequest(draft.settings, options);
+      const previous = draft.jobs.filter(j => sameDailyCohort(j, options));
+      if ((!candidates.length && previous.length) || previous.some(j => j.conversationIds.some(id => candidates.some(c => c.id === id)))) {
+        throw new AppError(409, 'Las conversaciones ya están asignadas a la ejecución diaria.', 'DAILY_ALREADY_STARTED');
+      }
+    } else if (options.scheduleDate) {
       if (!draft.settings.dailyEnabled || draft.settings.dailyStartedAt !== options.sourceChangedAfter) throw new AppError(409, 'La programación diaria cambió.', 'SCHEDULE_CHANGED');
       if (draft.jobs.some(j => j.scheduleDate === options.scheduleDate)) throw new AppError(409, 'La ejecución diaria ya se inició.', 'DAILY_ALREADY_STARTED');
     }
