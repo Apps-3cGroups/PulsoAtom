@@ -29,3 +29,14 @@ Las capturas corresponden a datos sintéticos de la rama integrada. No se ejecut
 - [Conversación](conversacion.png)
 - [Métricas diarias](metricas.png)
 - [Activas](activas.png)
+
+## Corrección de simbología
+
+Hoy y 3 días conservan los símbolos originales: círculos para flags y refutaciones, triángulos para revisión humana y signo positivo. Las celdas mantienen un ancho común de 56 px para que quepan las cinco figuras, sin contadores ni signos de admiración.
+
+En 30 días, cada figura se adapta al espacio disponible. Si su espacio mide al menos 6 × 6 px, se dibuja el símbolo original; por debajo de ese tamaño se mantiene la franja de su color para no ocultar flags ni desbordar la celda. No se modifica la agrupación mensual.
+
+Validación en navegador a 1280 × 720: Hoy muestra 54 conversaciones y 8 símbolos; 3 días, 162 conversaciones y 31 símbolos, sin franjas en ambos casos. En 30 días se muestran 216 conversaciones y los 44 símbolos visibles de la demo; todas sus celdas miden 11 px de ancho y el documento cabe en el viewport. Las 93 pruebas web y la compilación pasan.
+
+- [3 días con símbolos restaurados](resumen-3-dias-simbolos.png)
+- [30 días conservando la simbología](resumen-30-dias-simbolos.png)
