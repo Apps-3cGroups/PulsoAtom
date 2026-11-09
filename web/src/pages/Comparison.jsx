@@ -13,7 +13,7 @@ const readError = error => error?.code === 'TIMEOUT' ? { message: 'La consulta t
 const outcomeText = outcome => ({ present: 'Evento presente', absent: 'Evento ausente', insufficient: 'Contexto insuficiente', reverted: 'Dictamen revertido' }[outcome] || outcome);
 function Result({ cell, variable }) {
   if (!cell.result) return <Tag className="result-pending">{cell.status === 'failed' ? 'Error de evaluación' : jobStatus(cell.status)}</Tag>;
-  if (cell.result.status === 'no_evaluado') return <Tag className="result-pending">{cell.result.error ? 'Revisión pendiente' : 'Contexto insuficiente'}</Tag>;
+  if (cell.result.status === 'no_evaluado') return <Tag className="result-pending">{cell.result.unavailabilityCode ? 'No evaluada' : cell.result.error ? 'Revisión pendiente' : 'Contexto insuficiente'}</Tag>;
   return <span className={`comparison-result ${cell.result.value === 1 ? classificationOf(variable || {}) === 'positive' ? 'detected-positive' : 'detected' : 'not-detected'}`}><span className="result-figure">{cell.result.value === 1 ? classificationOf(variable || {}) === 'positive' ? '+' : '●' : '○'}</span>{cell.result.value === 1 ? 'Detectado' : 'No detectado'}{cell.result.codeRule && <Tooltip title="La regla de código modificó el resultado. No suma un voto independiente de IA."><CodeOutlined /></Tooltip>}</span>;
 }
 function Agreement({ row }) {

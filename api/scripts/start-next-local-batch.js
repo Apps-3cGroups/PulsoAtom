@@ -7,6 +7,7 @@ import { startEvaluationBatch, evaluationModelProgress } from '../src/evaluation
 import { persistBackfillManifest, acquireBackfillLock } from '../src/gemma-backfill.js';
 import { conversationView, viewContext } from '../src/domain.js';
 import { AppError } from '../src/errors.js';
+import { evaluationBatchAudit } from '../src/evaluation-batch-audit.js';
 
 // One authorized, append-only cohort. Repeated --start never creates another job.
 export const BATCH_ID = 'd530a03e-9182-47bf-8639-069f6f90e537';
@@ -129,6 +130,16 @@ export function batchStatus(state, manifest, workerAlive = alive(manifest.pid)) 
     originalRecordsPreserved: originalsPreserved(state, manifest.baseline), dailyPaused: state.settings.dailyEnabled === false,
     maintenanceActive: state.settings.evaluationMaintenance === BATCH_ID, errorCode: manifest.errorCode || null };
 }
+// Compatibility for the frozen historical cohort; the audit itself accepts any
+// existing dual operational batch and has no process or database mutations.
+export function localBatchAudit(state, manifest, observedAt) {
+  assertPlan(manifest);
+  const jobs = state.jobs.filter(j => j.idempotencyKey === BATCH_ID);
+  if (jobs.length > 1) fail('DUPLICATE_BATCH');
+  const { coverage, ...audit } = evaluationBatchAudit(state, { jobId: jobs[0]?.id || null,
+    conversationIds: manifest.conversations.map(c => c.id), profiles: manifest.profiles }, observedAt);
+  return { ...audit, newCohortCoverage: coverage };
+}
 const readManifest = async () => { const m = JSON.parse(await readFile(manifestFile, 'utf8')); assertPlan(m); return m; };
 async function optionalManifest() { try { return await readManifest(); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
 async function previousManifest() {
@@ -140,7 +151,7 @@ async function inspect(store, registry) {
   const state = await store.readWithConversations({ fresh: true });
   const previous = await previousManifest();
   const coverage = existingCohortCoverage(state, previous);
-  if (existing) return { readOnly: true, ...batchStatus(state, existing), existingCohortCoverage: coverage };
+  if (existing) return { readOnly: true, ...batchStatus(state, existing), existingCohortCoverage: coverage, ...localBatchAudit(state, existing) };
   assertPreviousFinished(state, previous, alive(previous?.pid));
   const plan = makePlan(state, registry);
   return { readOnly: true, ready: true, ...batchStatus(state, plan, false),

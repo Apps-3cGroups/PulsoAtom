@@ -9,9 +9,13 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
+      job_id:
+        description: 'UUID de un lote dual existente para auditarlo sin ejecutar IA (evaluation-batch-inspect)'
+        type: string
+        required: false
       expected_policy_version:
         description: 'Versión esperada de política (obligatoria para gemma-prepare y gemma-start)'
         type: string
@@ -59,7 +63,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -99,7 +103,7 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -108,6 +112,7 @@ jobs:
         env:
           TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
           GEMMA_OPERATION: ${{ inputs.operation }}
+          EVALUATION_JOB_ID: ${{ inputs.job_id }}
           EXPECTED_POLICY_VERSION: ${{ inputs.expected_policy_version }}
           EXPECTED_EVALUATIONS: ${{ inputs.expected_evaluations }}
           EXPECTED_CONFIGURATION_HASH: ${{ inputs.expected_configuration_hash }}
@@ -120,9 +125,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
+          if ($env:GEMMA_OPERATION -ceq 'evaluation-batch-inspect') {
+            if ($env:EVALUATION_JOB_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\s\S])') { throw 'Evaluation job ID must be a lowercase UUID.' }
+          }
           if ($env:GEMMA_OPERATION -cin @('gemma-prepare', 'gemma-start')) {
             if ($env:EXPECTED_POLICY_VERSION -cnotmatch '^[1-9][0-9]{0,15}$' -or [decimal]$env:EXPECTED_POLICY_VERSION -gt 9007199254740991) { throw 'Expected policy version must be a positive safe integer.' }
           }
@@ -145,6 +153,7 @@ jobs:
           }
           if ($env:GEMMA_OPERATION -cin @('gemma-status', 'gemma-extend') -and $env:MAINTENANCE_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$') { throw 'Maintenance ID must be a lowercase UUID.' }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'evaluation-batch-inspect' { $entryScript = 'scripts/inspect-evaluation-batch.js'; $scriptArguments = "--job-id $($env:EVALUATION_JOB_ID)" }
             'local-next500-inspect' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--inspect' }
             'local-next500-start' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--start' }
             'local-next500-status' { $entryScript = 'scripts/start-next-local-batch.js'; $scriptArguments = '--status' }
