@@ -1,71 +1,100 @@
-import ConversationMetrics from '../components/ConversationMetrics';
-import ConversationModelReviews from '../components/ConversationModelReviews';
-import { classificationOf, flagCount, flagVariables, unmarkedResultLabel, evaluationStatus } from '../services/flags';
-import { dailyMetricsView, withMetricDate } from '../services/dailyMetrics';
-import FlagModelComparison from '../components/FlagModelComparison';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Checkbox, Modal, Select, Tag, Timeline, Tooltip } from 'antd';
-import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, HistoryOutlined, MessageOutlined } from '@ant-design/icons';
+import { Alert, Button, Drawer, Tag, Timeline, Tooltip } from 'antd';
+import { ArrowLeftOutlined, BarChartOutlined, HistoryOutlined, ProfileOutlined, ReadOutlined } from '@ant-design/icons';
 import { useApi } from '../hooks';
-import ReviewModal, { reviewActions as actions, canReviewVariable, nextReviewAction } from '../components/ReviewModal';
-import { PageHeading, ErrorState, LoadingState, EmptyState, Mark, PriorityTag, FlagSymbol, dateText, timeText } from '../components/common';
+import ConversationMetrics from '../components/ConversationMetrics';
+import ConversationModelReviews from '../components/ConversationModelReviews';
+import ConversationTranscript from '../components/ConversationTranscript';
+import ConversationChecklist, { ConversationFlagDetails } from '../components/ConversationChecklist';
+import ReviewModal, { reviewActions, canReviewVariable, nextReviewAction } from '../components/ReviewModal';
+import { PageHeading, ErrorState, LoadingState, EmptyState, PriorityTag, dateText, timeText } from '../components/common';
+import { flagCount, flagVariables, evaluationStatus } from '../services/flags';
+import { dailyMetricsView, withMetricDate } from '../services/dailyMetrics';
+import { buildMessageFlags } from '../services/messageFlags';
+import '../conversation.css';
 
-const actorName = actor => ({ cliente: 'Cliente', humano: 'Asistente de venta', bot: 'Bot', sistema: 'Sistema' }[actor] || actor);
 export default function Conversation() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const requestPath = id ? `/conversations/${encodeURIComponent(id)}` : null;
   const request = useApi(requestPath);
-  const [family, setFamily] = useState();
-  const [priority, setPriority] = useState('all');
-  const [onlyMarked, setOnlyMarked] = useState(false);
-  const [includeUnevaluated, setIncludeUnevaluated] = useState(false);
-  const [highlight, setHighlight] = useState(params.get('message'));
+  const [filters, setFilters] = useState({ onlyMarked: false, variableId: null, classification: 'all' });
+  const [highlight, setHighlight] = useState({ id: params.get('message'), revision: 0 });
   const [editing, setEditing] = useState(null);
-  const [comparing, setComparing] = useState(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [inspector, setInspector] = useState(null);
+  const [selectedFlagId, setSelectedFlagId] = useState(null);
+  const [selectedMessageFlagId, setSelectedMessageFlagId] = useState(null);
+  const [checklistAll, setChecklistAll] = useState(false);
   const conversation = request.data?.conversation;
   const requestedMetricDate = params.get('metricDate');
   const metricSelection = useMemo(() => dailyMetricsView(conversation?.dailyMetrics, requestedMetricDate), [conversation?.dailyMetrics, requestedMetricDate]);
+  const messageFlags = useMemo(() => buildMessageFlags(conversation), [conversation]);
+  const eligibleFlags = useMemo(() => !conversation || conversation.rawModelView || conversation.evaluation?.sourceChanged ? []
+    : flagVariables(conversation.variables).filter(v => canReviewVariable(conversation, v) && nextReviewAction(v) === 'levantar'), [conversation]);
+  useEffect(() => {
+    setInspector(null); setSelectedFlagId(null); setSelectedMessageFlagId(null); setEditing(null);
+    setFilters({ onlyMarked: false, variableId: null, classification: 'all' });
+    setHighlight({ id: params.get('message'), revision: 0 });
+  }, [id]);
   useEffect(() => {
     if (!requestedMetricDate || request.loading || request.dataPath !== requestPath || !conversation?.dailyMetrics) return;
     if (requestedMetricDate !== metricSelection.selectedDate) setParams(current => withMetricDate(current, metricSelection.selectedDate), { replace: true, preventScrollReset: true });
   }, [requestedMetricDate, request.loading, request.dataPath, requestPath, conversation?.dailyMetrics, metricSelection.selectedDate, setParams]);
-  const changeMetricDate = date => setParams(current => withMetricDate(current, date), { replace: true, preventScrollReset: true });
-  useEffect(() => { setComparing(null); setFamily(undefined); setPriority('all'); setOnlyMarked(false); setIncludeUnevaluated(false); setHighlight(params.get('message')); }, [id]);
-  useEffect(() => { if (highlight && !request.loading) document.getElementById(highlight)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [highlight, request.loading]);
-  const variables = useMemo(() => flagVariables(conversation?.variables || []).filter(v => (!family || v.family === family) && (priority === 'all' || classificationOf(v) === priority) && (!onlyMarked || v.kind) && (conversation.evaluated ? includeUnevaluated || v.review || v.result.error || v.result.status !== 'no_evaluado' : includeUnevaluated || v.enabledInEvaluation)).sort((a, b) => ({ critical: 0, normal: 1, positive: 2 }[classificationOf(a)] ?? 3) - ({ critical: 0, normal: 1, positive: 2 }[classificationOf(b)] ?? 3) || Number(!!b.kind) - Number(!!a.kind) || a.order - b.order), [conversation, family, priority, onlyMarked, includeUnevaluated]);
-  const attentionVariables = variables.filter(v => classificationOf(v) !== 'positive');
-  const positiveVariables = variables.filter(v => classificationOf(v) === 'positive');
-  const groups = [...[...new Set(attentionVariables.map(v => v.family))].map(family => ({ title: family, variables: attentionVariables.filter(v => v.family === family) })), { title: 'Resultados positivos', variables: positiveVariables, positive: true }].filter(group => group.variables.length);
+  useEffect(() => {
+    if (highlight.id && !request.loading) document.getElementById(`message-${highlight.id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [highlight, request.loading]);
+  const showMessage = messageId => {
+    setSelectedMessageFlagId(null);
+    setInspector(null); setFilters({ onlyMarked: false, variableId: null, classification: 'all' });
+    setHighlight(value => ({ id: String(messageId), revision: value.revision + 1 }));
+  };
+  const selectMessageFlag = variableId => {
+    setSelectedMessageFlagId(variableId);
+    if (!variableId) { setHighlight(value => ({ id: null, revision: value.revision + 1 })); return; }
+    setFilters(value => ({ ...value, variableId: null, classification: 'all' }));
+    const message = conversation.messages.find(m => messageFlags.byMessage.get(String(m.id))?.some(v => v.id === variableId));
+    if (message) setHighlight(value => ({ id: String(message.id), revision: value.revision + 1 }));
+  };
+  const changeFilters = value => {
+    setFilters(value); setSelectedMessageFlagId(null);
+    setHighlight(current => ({ id: null, revision: current.revision + 1 }));
+  };
+  const showFlag = variableId => { setSelectedFlagId(variableId); setInspector('flag'); };
+  const showChecklist = (all = false) => { setChecklistAll(all); setInspector('checklist'); };
   if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Volver al histórico</Button><ErrorState error={request.error} retry={request.reload} /></>;
-  if (request.loading || !conversation) return <LoadingState />;
+  if (request.loading || !conversation || request.dataPath !== requestPath) return <LoadingState />;
   const c = conversation;
   const status = evaluationStatus(c);
-  return <div className="detail-page"><div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Histórico</Button><span>/</span><span>Conversación</span><span className="mono muted">{c.id}</span></div><PageHeading eyebrow="CONVERSACIÓN" title={<>{c.client.name}{c.client.phoneLast4 && <span className="heading-phone"> …{c.client.phoneLast4}</span>}</>} description={`${c.agent.name} · ${c.countryName} · ${dateText(c.date)} · ${c.channel}`} actions={<div className="conversation-heading-actions"><Button icon={<HistoryOutlined />} onClick={() => setHistoryOpen(true)}>Revisiones ({c.reviews.length})</Button></div>} /><div className="conversation-meta"><div className="topic-tags">{c.topics.map(topic => <Tag className="neutral-tag" key={topic}>{topic}</Tag>)}</div><span className="muted small">{c.evaluated ? `${c.evaluation.evaluatedCount} variables evaluadas · versión conservada por ítem` : 'Pendiente de evaluación'}</span><div className="priority-cell">{['critical', 'normal', 'positive'].map(kind => flagCount(c, kind) > 0 && <PriorityTag key={kind} priority={kind} count={flagCount(c, kind)} />)}</div></div>{!c.evaluated && <Alert className="detail-alert" showIcon type="info" message="Esta conversación todavía no está evaluada" description="La ausencia de resultados no significa que no existan flags. Puedes leer sus mensajes; los resultados aparecerán cuando se complete su evaluación." />}
-    {c.evaluated && ['partial', 'review_pending'].includes(status) && <Alert className="detail-alert" showIcon type="warning" message={status === 'review_pending' ? 'Falta una revisión de modelo' : 'Conversación evaluada con incidencias'} description={status === 'review_pending' ? 'Puedes consultar las respuestas ya guardadas de cada modelo. Los flags automáticos aparecerán únicamente cuando ambos detecten el mismo evento.' : 'La revisión terminó y los resultados válidos están guardados. Algunas variables presentan errores técnicos; se muestran por separado y no se interpretan como eventos ausentes.'} action={<Button size="small" onClick={() => { setIncludeUnevaluated(true); setOnlyMarked(false); setPriority('all'); setFamily(undefined); }}>Ver checklist</Button>} />}
-    {c.evaluated && c.unavailableFlags > 0 && <Alert className="detail-alert" showIcon type="info" message={`${c.unavailableFlags} variables sin datos o contexto suficientes`} description="Esto no significa que la ejecución siga pendiente. Consulta el motivo de cada variable en el checklist." action={<Button size="small" onClick={() => { setIncludeUnevaluated(true); setOnlyMarked(false); setPriority('all'); setFamily(undefined); }}>Ver variables</Button>} />}
-    {c.evaluation?.sourceChanged && <Alert className="detail-alert" showIcon type="warning" message="La conversación cambió desde la evaluación" description="Se necesita una nueva evaluación para revisar el contenido actualizado." />}<ConversationMetrics conversation={c} selectedDate={metricSelection.selectedDate} onDateChange={changeMetricDate} /><ConversationModelReviews key={c.id} conversation={c} /><ConversationDescriptors conversation={c} /><div className="detail-grid"><section className="transcript-panel"><div className="panel-heading"><h2><MessageOutlined /> Conversación</h2><span className="muted small">{c.messages.length} mensajes</span></div><div className="transcript-scroll">{c.messages.map(m => <article id={m.id} key={m.id} className={`chat-message actor-${m.actor} ${highlight === m.id ? 'highlighted-message' : ''}`}><div className="chat-meta"><strong>{actorName(m.actor)}</strong><span className="mono">{timeText(m.timestamp)}</span></div><p>{m.text}</p></article>)}{c.media.length > 0 && <div className="media-note"><Mark kind="media" /><div><b>Multimedia presente</b><p>{c.media.join(', ')} · El contenido multimedia no se evalúa en esta etapa.</p></div></div>}</div><div className="transcript-footer">{c.demo ? 'Transcripción sintética para demostración' : 'Mensajes de la conversación original'}</div></section>
-    <section className="checklist-panel"><div className="panel-heading"><h2><Tooltip title="Los flags automáticos requieren que dos modelos distintos detecten el evento. Las revisiones humanas conservan su identificación.">{c.evaluated ? 'Checklist de esta evaluación' : 'Checklist previsto para evaluar'}</Tooltip></h2><span className="muted small">{variables.length} variables visibles</span></div><div className="checklist-section-links"><button aria-pressed={priority !== 'positive'} onClick={() => setPriority('all')}>Checklist completo</button><button aria-pressed={priority === 'positive'} onClick={() => { setPriority('positive'); setFamily(undefined); }}><Mark kind="positive" />Resultados positivos · {flagCount(c, 'positive')}</button></div><div className="detail-filters"><Select aria-label="Familia del checklist" value={family} placeholder="Todas las familias" allowClear onChange={setFamily} options={[...new Set(flagVariables(c.variables).map(v => v.family))].map(v => ({ value: v, label: v }))} /><Select aria-label="Prioridad del checklist" value={priority} onChange={setPriority} options={[{ value: 'all', label: 'Todos los flags' }, { value: 'critical', label: 'Críticos' }, { value: 'normal', label: 'Normales' }, { value: 'positive', label: '+ Positivos' }]} /><Checkbox checked={onlyMarked} onChange={e => setOnlyMarked(e.target.checked)}>Con marca</Checkbox><Checkbox checked={includeUnevaluated} onChange={e => setIncludeUnevaluated(e.target.checked)}>{c.evaluated ? 'Mostrar no evaluadas' : 'Mostrar también inactivas'}</Checkbox></div><div className="checklist-scroll">{!variables.length ? <EmptyState title="No hay variables con estos filtros" description={!c.evaluated ? 'No hay variables activas con estos filtros. Consulta el catálogo o muestra también las inactivas.' : 'Prueba otra familia, prioridad o estado.'} /> : groups.map(group => <div key={group.title} className={`checklist-family ${group.positive ? 'positive-checklist-section' : ''}`}><h3>{group.positive && <Mark kind="positive" />}{group.title}<span>{group.variables.length}</span></h3>{group.variables.map(v => {
-      const evidence = v.review?.action === 'levantar' ? [v.review.evidence] : v.result.evidence;
-      const canReview = !c.rawModelView && !c.evaluation?.sourceChanged && canReviewVariable(c, v);
-      const action = nextReviewAction(v);
-      return <article key={v.id} className={`checklist-item ${v.kind ? `item-${v.kind}` : ''}`}><div className="checklist-item-top"><span className="variable-symbol">{v.kind ? <FlagSymbol mark={v} /> : <span className="empty-symbol" />}</span><b>{v.name}</b><PriorityTag priority={classificationOf(v)} /><span className="variable-version">v{v.version}</span>{canReview && <Tooltip title={actions[action]}><Button type="text" size="small" aria-label={`${actions[action]}: ${v.name}`} icon={<EditOutlined />} onClick={() => setEditing({ variable: v, action })} /></Tooltip>}</div>{v.result.comparison && !v.result.comparison.codeOnly && <Button type="link" className="flag-compare-button" onClick={() => setComparing(v.id)}>{v.result.comparison.agreement === 'agree-positive' ? 'Detectado por 2 modelos' : v.result.comparison.label} · Ver revisiones</Button>}<p className="variable-definition">{v.definition}</p>{v.result.status === 'no_evaluado' && !v.review ? <span className="result-label">{v.consensusPending ? 'Doble revisión pendiente' : v.result.error ? 'Revisión pendiente' : 'No evaluada'}{!v.enabledInEvaluation ? ' · Fuera del checklist de esta evaluación' : ''}{v.result.reason && <small className="unavailable-variable-reason">{v.result.reason}</small>}</span> : !v.kind ? <UnmarkedResult variable={v} onEvidence={setHighlight} /> : <><span className={`result-label label-${v.kind}`}>{v.kind === 'refuted' ? 'Refutado por humano' : v.kind === 'human' || v.origin === 'human' ? 'Levantado por humano' : classificationOf(v) === 'positive' ? 'Resultado positivo detectado' : 'Detectado por el sistema'}</span>{evidence?.map((ev, i) => <button className="evidence-quote" key={`${ev.messageId}-${i}`} onClick={() => setHighlight(ev.messageId)}><span>“{ev.quote}”</span><span className="evidence-meta">{c.channel} · {dateText(c.date, { year: undefined })} · {timeText(c.messages.find(m => m.id === ev.messageId)?.timestamp)}<ArrowRightOutlined /></span></button>)}{v.review && <div className="review-note"><b>{v.review.authorName}</b> · {v.review.comment}</div>}</>}{v.verdict && !c.rawModelView && <div className="review-note"><b>Dictamen común: {{ present: 'evento presente', absent: 'evento ausente', insufficient: 'contexto insuficiente', reverted: 'revertido' }[v.verdict.outcome]}</b><p>{v.verdict.comment}</p><small>{v.verdict.authorName} · {dateText(v.verdict.createdAt)} · {v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}</small></div>}</article>;
-    })}</div>)}</div></section></div>
-    <Modal open={!!comparing} title={c.variables.find(v => v.id === comparing)?.name} onCancel={() => setComparing(null)} width={900} footer={<Button onClick={() => setComparing(null)}>Cerrar</Button>}>{comparing && c.variables.find(v => v.id === comparing) && <FlagModelComparison variable={c.variables.find(v => v.id === comparing)} demo={c.demo} />}</Modal>
+  const selectedFlag = c.variables.find(v => v.id === selectedFlagId);
+  const titles = { checklist: 'Checklist de la evaluación', models: 'Evaluaciones de los modelos', metrics: 'Métricas de la conversación', history: 'Historial de revisiones', flag: selectedFlag?.name || 'Detalle del flag' };
+  return <div className="detail-page conversation-focus">
+    <div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Histórico</Button><span>/</span><span>Conversación</span><span className="mono muted">{c.id}</span></div>
+    <PageHeading eyebrow="CONVERSACIÓN" title={<>{c.client.name}{c.client.phoneLast4 && <span className="heading-phone"> …{c.client.phoneLast4}</span>}</>} description={`${c.agent.name} · ${c.countryName} · ${dateText(c.date)} · ${c.channel}`} actions={<div className="conversation-heading-actions">
+      <Button icon={<BarChartOutlined />} onClick={() => setInspector('metrics')}>Métricas</Button>
+      <Button icon={<ReadOutlined />} onClick={() => setInspector('models')}>Modelos</Button>
+      <Button icon={<ProfileOutlined />} onClick={() => showChecklist()}>Checklist</Button>
+      <Button icon={<HistoryOutlined />} onClick={() => setInspector('history')}>Revisiones ({c.reviews.length})</Button>
+    </div>} />
+    <div className="conversation-meta"><div className="topic-tags">{c.topics.map(topic => <Tag className="neutral-tag" key={topic}>{topic}</Tag>)}</div><span className="muted small">{c.evaluated ? `${c.evaluation.evaluatedCount} variables con resultado` : 'Pendiente de evaluación'}</span><div className="priority-cell">{['critical', 'normal', 'positive'].map(kind => flagCount(c, kind) > 0 && <PriorityTag key={kind} priority={kind} count={flagCount(c, kind)} />)}</div></div>
+    {!c.evaluated && <Alert className="detail-alert" showIcon type="info" message="Esta conversación todavía no está evaluada" description="Puedes leer todos los mensajes. Los flags aparecerán cuando se complete su evaluación." />}
+    {c.evaluated && ['partial', 'review_pending'].includes(status) && <Alert className="detail-alert" showIcon type="warning" message={status === 'review_pending' ? 'Falta una revisión de modelo' : 'Conversación evaluada con incidencias'} description={status === 'review_pending' ? 'Las respuestas guardadas están en Modelos. Los flags automáticos requieren coincidencia de ambos modelos.' : 'Los resultados válidos están guardados. Algunas variables tienen errores técnicos; no se interpretan como eventos ausentes.'} action={<Button size="small" onClick={() => showChecklist(true)}>Ver detalle</Button>} />}
+    {c.evaluated && c.unavailableFlags > 0 && <div className="conversation-context-note"><span>{c.unavailableFlags} variables sin datos o contexto suficientes</span><Button type="link" size="small" onClick={() => showChecklist(true)}>Consultar motivos</Button></div>}
+    {c.evaluation?.sourceChanged && <Alert className="detail-alert" showIcon type="warning" message="La conversación cambió desde la evaluación" description="Las marcas anteriores se conservan en el checklist. No se asocian a los mensajes actualizados hasta evaluar de nuevo." />}
+    <ConversationTranscript key={c.id} conversation={c} index={messageFlags} eligibleFlags={eligibleFlags} filters={filters} onFiltersChange={changeFilters} highlight={highlight.id} selectedFlagId={selectedMessageFlagId} onSelectFlag={selectMessageFlag} onFocusMessage={messageId => setHighlight(value => ({ id: String(messageId), revision: value.revision + 1 }))} onShowFlag={showFlag} onShowContext={showMessage} onAddFlag={(variable, messageId) => setEditing({ variable, action: 'levantar', messageId })} />
+    <Drawer open={!!inspector} title={titles[inspector]} onClose={() => setInspector(null)} width={inspector === 'metrics' ? 1120 : 960} className="conversation-inspector" destroyOnHidden>
+      {inspector === 'metrics' && <><ConversationMetrics conversation={c} selectedDate={metricSelection.selectedDate} onDateChange={date => setParams(current => withMetricDate(current, date), { replace: true, preventScrollReset: true })} /><ConversationDescriptors conversation={c} /></>}
+      {inspector === 'models' && (c.evaluation?.modelReviews?.length ? <ConversationModelReviews key={c.id} conversation={c} /> : <EmptyState title="Sin revisiones comparables" description="Aquí aparecerán las respuestas guardadas de cada modelo cuando estén disponibles." />)}
+      {inspector === 'checklist' && <ConversationChecklist conversation={c} includeAll={checklistAll} onShowFlag={showFlag} />}
+      {inspector === 'flag' && selectedFlag && <ConversationFlagDetails conversation={c} variable={selectedFlag} index={messageFlags} onShowMessage={showMessage} onReview={action => setEditing({ variable: selectedFlag, action })} onChecklist={() => showChecklist(true)} />}
+      {inspector === 'history' && (c.reviews.length ? <Timeline className="review-timeline" items={[...c.reviews].reverse().map(review => ({ color: review.action === 'refutar' ? 'blue' : review.action === 'levantar' ? 'purple' : 'gray', children: <div><b>{reviewActions[review.action]} · {c.variables.find(v => v.id === review.variableId)?.name}</b><p>{review.comment}</p><small className="muted">{review.authorName} · {dateText(review.createdAt)} {timeText(review.createdAt)}</small></div> }))} /> : <EmptyState title="Sin revisiones humanas" description="Aquí se conservarán las refutaciones, los flags humanos y las acciones de deshacer." />)}
+    </Drawer>
     {editing && <ReviewModal conversation={c} editing={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); request.reload(); }} />}
-    <Modal open={historyOpen} title="Historial de revisiones" onCancel={() => setHistoryOpen(false)} footer={<Button onClick={() => setHistoryOpen(false)}>Cerrar</Button>} width={640}>{c.reviews.length ? <Timeline className="review-timeline" items={[...c.reviews].reverse().map(review => ({ color: review.action === 'refutar' ? 'blue' : review.action === 'levantar' ? 'purple' : 'gray', children: <div><b>{actions[review.action]} · {c.variables.find(v => v.id === review.variableId)?.name}</b><p>{review.comment}</p><small className="muted">{review.authorName} · {dateText(review.createdAt)} {timeText(review.createdAt)}</small></div> }))} /> : <EmptyState title="Sin revisiones humanas" description="Las refutaciones, los flags humanos y las acciones de deshacer aparecerán aquí." />}</Modal>
   </div>;
 }
-
 function ConversationDescriptors({ conversation }) {
   const descriptors = conversation.variables.filter(v => v.type === 'Descriptor' && v.result.status === 'evaluado');
   if (!descriptors.length) return null;
   return <section className="conversation-descriptors" aria-label="Contexto de la conversación">{descriptors.map(v => <div key={v.id}><b>{v.name}</b><span>{Array.isArray(v.result.value) ? v.result.value.join(' · ') || 'Sin elementos' : String(v.result.value ?? 'No disponible')}</span><Tooltip title={v.result.reason}><span className="muted small">Contexto</span></Tooltip></div>)}</section>;
-}
-
-function UnmarkedResult({ variable, onEvidence }) {
-  return <div className="unpublished-result"><span className="result-label">{unmarkedResultLabel(variable)}</span>{variable.consensusSuppressed && <details><summary>Consultar resultado guardado</summary><p>{variable.result.reason || 'La detección se conserva para revisión, pero no cuenta como flag automático.'}</p>{variable.result.evidence?.map((e, i) => <button className="evidence-quote" key={`${e.messageId}-${i}`} onClick={() => onEvidence(e.messageId)}><span>“{e.quote}”</span><span className="evidence-meta">Ver mensaje <ArrowRightOutlined /></span></button>)}</details>}</div>;
 }
