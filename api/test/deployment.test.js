@@ -53,6 +53,32 @@ test('la API rechaza montar el portal en la raíz del dominio', () => {
 
 const workflowPath = new URL('../../.github/workflows/deploy-pulso-atom.yml', import.meta.url);
 
+test('la auditoría de un lote exige UUID y solo entra en la ruta explícita de lectura', async () => {
+  const workflow = await readFile(workflowPath, 'utf8');
+  const operation = 'evaluation-batch-inspect';
+  const options = workflow.match(/options: \[([^\]]+)\]/)?.[1];
+  const allowed = workflow.match(/\$env:GEMMA_OPERATION -cnotin @\(([^)]+)\)/)?.[1];
+  const checkoutOperations = workflow.match(/\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\(([^)]+)\)/)?.[1];
+  const checkoutCondition = workflow.match(/uses: actions\/checkout@v4\n\s+if: ([^\n]+)/)?.[1];
+  const jobCondition = workflow.match(/gemma-check:\n\s+if: ([^\n]+)/)?.[1];
+  for (const value of [options, allowed, checkoutOperations, checkoutCondition, jobCondition]) {
+    assert.ok(value?.includes(operation));
+  }
+  assert.match(jobCondition, /github\.event_name == 'workflow_dispatch'/);
+  const mapping = workflow.split('\n').find(line => line.trim().startsWith(`'${operation}' {`));
+  assert.equal(mapping.trim(), "'evaluation-batch-inspect' { $entryScript = 'scripts/inspect-evaluation-batch.js'; $scriptArguments = \"--job-id $($env:EVALUATION_JOB_ID)\" }");
+  const guard = workflow.match(/if \(\$env:GEMMA_OPERATION -ceq 'evaluation-batch-inspect'\) \{\s+if \(\$env:EVALUATION_JOB_ID -cnotmatch '([^']+)'/);
+  assert.ok(guard);
+  const uuid = new RegExp(guard[1]);
+  assert.equal(uuid.test('d530a03e-9182-47bf-8639-069f6f90e537'), true);
+  for (const value of ['', '../state', '$(id)', 'a; id', 'd530a03e-9182-47bf-8639-069f6f90e537 --start', 'd530a03e-9182-47bf-8639-069f6f90e537\n']) {
+    assert.equal(uuid.test(value), false);
+  }
+  assert.ok(workflow.indexOf(guard[0]) < workflow.indexOf('switch -CaseSensitive ($env:GEMMA_OPERATION)'));
+  const deployCondition = workflow.match(/\n  deploy:\n\s+if: ([^\n]+)/)?.[1];
+  assert.equal(deployCondition, "${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}");
+});
+
 test('ampliar Gemma admite 500 sin ampliar el límite del reinicio inicial ni aceptar argumentos inyectados', async () => {
   const workflow = await readFile(workflowPath, 'utf8');
   const guard = operation => {
