@@ -1,3 +1,4 @@
+import { messageCounts } from './message-counts.js';
 import { evaluateCodeVariables } from './code-evaluator.js';
 
 export const DAILY_METRICS_RULE_VERSION = 'pulso-daily-metrics-v1';
@@ -112,7 +113,7 @@ export function conversationDailyMetrics(conversation, { timezone = 'America/Teg
     } : null;
     return {
       date, firstMessageAt: daily[0].message.timestamp, lastMessageAt: daily.at(-1).message.timestamp,
-      messageCount: daily.length, metrics, pendingHumanWait, crossDayWaits: [],
+      messageCount: daily.length, messageCounts: invalidTimestampCount ? null : messageCounts(dailyMessages), metrics, pendingHumanWait, crossDayWaits: [],
     };
   });
 

@@ -25,9 +25,24 @@ const localDate = (value, timezone) => {
   const part = type => parts.find(item => item.type === type).value;
   return `${part('year')}-${part('month')}-${part('day')}`;
 };
-const actor = role => ({ CLIENTE: 'cliente', ASESOR: 'humano', BOT: 'bot' })[role] || 'sistema';
 const mediaType = type => ({ file: 'archivo', call: 'llamada', geopoint: 'ubicación' })[type] || null;
 const normalizeIdentity = value => String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+
+// Sender metadata, never the wording of a greeting, determines participation.
+// Atom uses ATOM for bot messages and SISTEMA/ATOM for automatic follow-ups.
+export function atomMessageActor(event, row = {}) {
+  const role = normalizeIdentity(event.RolEmisor);
+  const origin = normalizeIdentity(event.DeOrigen);
+  const direction = normalizeIdentity(event.Direccion);
+  if (['log', 'note'].includes(event.TipoOrigen)) return 'sistema';
+  if (direction === 'entrante' || role === 'cliente' || (origin && origin === normalizeIdentity(row.ClienteNombre))) return 'cliente';
+  if (['atom', 'bot', 'sistema', 'system', 'chatbot'].includes(role)) return 'bot';
+  if (['asesor', 'agente', 'humano'].includes(role) || event.IdAsesor != null) return 'humano';
+  if (origin && origin === normalizeIdentity(row.AsesorNombre)) return 'humano';
+  if (['atom', 'bot', 'sistema', 'system', 'api', 'agent_builder', 'flow builder'].includes(origin)
+    || /(?:^|[ _-])cortex(?:$|[ _-])/.test(origin) || /^flujo\b/.test(origin)) return 'bot';
+  return 'desconocido';
+}
 
 export function mapAtomConversation(row, events, country, timezone) {
   const startedAt = iso(row.FechaInicioUtc || row.FechaUltimaActividadUtc);
@@ -40,9 +55,7 @@ export function mapAtomConversation(row, events, country, timezone) {
     if (!['text', 'quickReply', 'interactive', 'template', 'file', 'call', 'geopoint'].includes(event.TipoOrigen)) continue;
     const text = String(event.Texto || '').trim() || (type ? `[${type}]` : '');
     if (!text) continue;
-    // Algunos eventos de Atom traen RolEmisor=ASESOR aunque DeOrigen sea el cliente.
-    const isClientOrigin = row.ClienteNombre && normalizeIdentity(event.DeOrigen) === normalizeIdentity(row.ClienteNombre);
-    messages.push({ id: String(event.IdEvento), actor: isClientOrigin ? 'cliente' : actor(event.RolEmisor), text, timestamp: iso(event.FechaHoraUtc) });
+    messages.push({ id: String(event.IdEvento), actor: atomMessageActor(event, row), text, timestamp: iso(event.FechaHoraUtc) });
   }
   // Navigation and date filters use the same activity basis as evaluation
   // selection. Preserve the original start and message timestamps: changing a
@@ -99,7 +112,7 @@ export class AtomReader {
     const ids = [...byDocument.keys()];
     for (let offset = 0; offset < ids.length; offset += READ_BATCH_SIZE) {
       const batch = ids.slice(offset, offset + READ_BATCH_SIZE);
-      const [eventRows] = await this.pool.query(`SELECT IdDocumento, IdEvento, FechaHoraUtc, Texto, TipoOrigen, RolEmisor, DeOrigen FROM ${e} WHERE IdDocumento IN (${batch.map(() => '?').join(',')}) ORDER BY FechaHoraUtc, NumeroFila`, batch);
+      const [eventRows] = await this.pool.query(`SELECT IdDocumento, IdEvento, FechaHoraUtc, Texto, TipoOrigen, RolEmisor, DeOrigen, Direccion, IdAsesor FROM ${e} WHERE IdDocumento IN (${batch.map(() => '?').join(',')}) ORDER BY FechaHoraUtc, NumeroFila`, batch);
       for (const row of eventRows) byDocument.get(String(row.IdDocumento))?.push(row);
     }
     const conversations = rows.map(row => {

@@ -1,88 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSummaryRange, summaryDayWindow } from '../src/services/summaryDates.js';
-
+import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../src/services/summaryDates.js';
 const now = new Date('2026-11-04T01:00:00Z');
 
-test('real summary uses the portal calendar today instead of stale activity data', () => {
+test('real periods end today in the portal timezone and default to three days', () => {
   assert.deepEqual(resolveSummaryRange({ mode: 'real', latest: '2026-10-20', timezone: 'America/Tegucigalpa', now }), {
-    from: '2026-10-28', to: '2026-11-03', preset: 7, totalDays: 7,
+    from: '2026-11-01', to: '2026-11-03', preset: 3, totalDays: 3,
   });
-  assert.equal(resolveSummaryRange({ mode: 'real', timezone: 'UTC', now }).to, '2026-11-04');
+  assert.equal(resolveSummaryRange({ timezone: 'UTC', now }).to, '2026-11-04');
 });
-
-test('demo stays anchored to its latest activity date and shortcuts cross years', () => {
-  assert.deepEqual(resolveSummaryRange({ mode: 'demo', latest: '2026-01-03', now }), {
-    from: '2025-12-28', to: '2026-01-03', preset: 7, totalDays: 7,
-  });
-  assert.deepEqual(resolveSummaryRange({ mode: 'demo', latest: '2026-01-03', days: '4', now }), {
-    from: '2025-12-31', to: '2026-01-03', preset: 4, totalDays: 4,
-  });
+test('only Hoy, 3 días and 30 días are accepted, including old saved links', () => {
+  assert.deepEqual(SUMMARY_PRESETS, [1, 3, 30]);
+  for (const days of SUMMARY_PRESETS) assert.equal(resolveSummaryRange({ days, now }).totalDays, days);
+  for (const days of [0, 2, 4, 7, 14, -7, 7.5, 'invalid', 999]) assert.equal(resolveSummaryRange({ days, now }).preset, 3);
+  assert.equal(resolveSummaryRange({ from: '2024-01-01', to: '2025-12-31', now }).totalDays, 3);
 });
-
-test('only the five shortcuts are accepted; invalid demo anchor falls back to today', () => {
-  for (const days of [1, 4, 7, 14, 30]) assert.equal(resolveSummaryRange({ days, now }).totalDays, days);
-  for (const days of [0, 2, -7, 7.5, 'invalid', 999]) assert.equal(resolveSummaryRange({ days, now }).preset, 7);
+test('demo periods remain deterministic, including leap dates and year boundaries', () => {
+  assert.deepEqual(resolveSummaryRange({ mode: 'demo', latest: '2026-01-02', days: 3, now }), {
+    from: '2025-12-31', to: '2026-01-02', preset: 3, totalDays: 3,
+  });
+  assert.equal(resolveSummaryRange({ mode: 'demo', latest: '2024-03-01', days: 3, now }).from, '2024-02-28');
   assert.equal(resolveSummaryRange({ mode: 'demo', latest: '2026-02-30', now }).to, '2026-11-03');
 });
-
-test('custom ranges preserve both endpoints, including one day and leap day', () => {
-  assert.deepEqual(resolveSummaryRange({ from: '2024-02-29', to: '2024-02-29', days: 30, now }), {
-    from: '2024-02-29', to: '2024-02-29', preset: null, totalDays: 1,
-  });
-  assert.deepEqual(resolveSummaryRange({ from: '2023-12-31', to: '2024-03-01', now }), {
-    from: '2023-12-31', to: '2024-03-01', preset: null, totalDays: 62,
-  });
+test('the monthly overview contains all thirty distinct days in one window, newest first', () => {
+  const range = resolveSummaryRange({ days: 30, now });
+  const window = summaryDayWindow(range);
+  assert.equal(window.pageCount, 1);
+  assert.equal(window.days.length, 30);
+  assert.equal(new Set(window.days).size, 30);
+  assert.equal(window.days[0], '2026-11-03');
+  assert.equal(window.days.at(-1), '2026-10-05');
 });
-
-test('invalid or incomplete custom dates fall back to seven days instead of silently widening the range', () => {
-  const expected = { from: '2026-10-28', to: '2026-11-03', preset: 7, totalDays: 7 };
-  for (const range of [
-    { from: '2026-02-29', to: '2026-03-04' },
-    { from: '2026-02-30', to: '2026-03-04' },
-    { from: '2026-11-04', to: '2026-11-03' },
-    { from: '2026-11-01' }, { to: '2026-11-03' },
-    { from: '2026-1-01', to: '2026-11-03' },
-    { from: '0000-01-01', to: '2026-11-03' },
-    { from: '2026-11-01', to: '10000-01-01' },
-  ]) assert.deepEqual(resolveSummaryRange({ ...range, days: 30, now }), expected);
-});
-
-test('a long range has at most 31 columns per window, newest first, without losing range totals', () => {
-  const range = { from: '2023-12-31', to: '2024-03-01' };
-  const first = summaryDayWindow(range);
-  const second = summaryDayWindow({ ...range, page: 2 });
-  assert.deepEqual({ totalDays: first.totalDays, page: first.page, pageCount: first.pageCount }, { totalDays: 62, page: 1, pageCount: 2 });
-  assert.equal(first.days.length, 31);
-  assert.equal(first.days[0], '2024-03-01');
-  assert.equal(first.days.at(-1), '2024-01-31');
-  assert.equal(second.days[0], '2024-01-30');
-  assert.equal(second.days.at(-1), '2023-12-31');
-  assert.equal(new Set([...first.days, ...second.days]).size, 62);
-});
-
-test('window clamps pages and caps the requested page size at 31', () => {
-  const range = { from: '2026-01-01', to: '2026-02-02' };
-  const last = summaryDayWindow({ ...range, page: 99 }, 100);
-  assert.deepEqual(last, { days: ['2026-01-02', '2026-01-01'], totalDays: 33, page: 2, pageCount: 2 });
-  for (const page of [0, -2, NaN, 1.5]) assert.equal(summaryDayWindow({ ...range, page }).page, 1);
-  assert.equal(summaryDayWindow({ ...range, page: '2' }).page, 2);
-  assert.equal(summaryDayWindow(range, 0).days.length, 31);
-  assert.equal(summaryDayWindow(range, 7).pageCount, 5);
-});
-
-test('calendar limits through year 9999 remain bounded without materializing the complete range', () => {
-  const range = resolveSummaryRange({ from: '0001-01-01', to: '9999-12-31', now });
-  const first = summaryDayWindow(range);
-  const last = summaryDayWindow({ ...range, page: first.pageCount });
-  assert.equal(range.totalDays, 3652059);
-  assert.equal(first.days[0], '9999-12-31');
-  assert.equal(first.days.length, 31);
-  assert.equal(last.days.at(-1), '0001-01-01');
-  assert.ok(last.days.length <= 31);
-});
-
-test('one-day windows and invalid windows have deterministic boundaries', () => {
-  assert.deepEqual(summaryDayWindow({ from: '2026-11-03', to: '2026-11-03' }), { days: ['2026-11-03'], totalDays: 1, page: 1, pageCount: 1 });
-  assert.deepEqual(summaryDayWindow({ from: '2026-02-30', to: '2026-03-04' }), { days: [], totalDays: 0, page: 1, pageCount: 0 });
+test('today has one column and invalid windows contain no dates', () => {
+  assert.deepEqual(summaryDayWindow(resolveSummaryRange({ days: 1, now })).days, ['2026-11-03']);
+  assert.deepEqual(summaryDayWindow({ from: '2026-02-30', to: '2026-03-04' }).days, []);
 });

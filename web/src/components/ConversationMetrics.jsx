@@ -22,18 +22,18 @@ function ResponseCard({ id, label, subtitle, variable }) {
     <p className="metric-card-caption">{value === null ? reason : subtitle}</p>
   </article>;
 }
-function Participation({ assistant, client, children }) {
+function Participation({ assistant, client, counts, children }) {
   const available = assistant !== null && client !== null;
   const total = available ? assistant + client : null;
   const teamShare = total > 0 ? assistant / total : 0;
   return <article className="metric-participation-card">
-    <div className="metric-participation-heading"><h3>Quién escribió</h3><Explain label="Mensajes del día">Cuenta los mensajes del cliente y del equipo (personas y bot). Excluye eventos del sistema. Las proporciones muestran participación, no calidad de atención.</Explain></div>
+    <div className="metric-participation-heading"><h3>Quién escribió</h3><Explain label="Mensajes del día">Cuenta los mensajes del cliente y del equipo (Agente humano + Bot). Excluye eventos técnicos y emisores sin identificar. Las proporciones muestran participación, no calidad de atención.</Explain></div>
     <div className="metric-participation-visual">
       <div className="metric-message-ring" role="img" aria-label={available ? `${numeric(total)} ${total === 1 ? 'mensaje' : 'mensajes'}: ${numeric(client)} del cliente y ${numeric(assistant)} del equipo` : 'Distribución de mensajes no disponible'}>
         <svg viewBox="0 0 132 132" aria-hidden="true"><circle cx="66" cy="66" r="55" className="metric-ring-base" />{total > 0 && <><circle cx="66" cy="66" r="55" pathLength="100" className="metric-ring-client" /><circle cx="66" cy="66" r="55" pathLength="100" strokeDasharray={`${teamShare * 100} 100`} className="metric-ring-team" /></>}</svg>
         <div><strong>{total === null ? '—' : numeric(total)}</strong><span>{total === 1 ? 'mensaje' : 'mensajes'}</span></div>
       </div>
-      <div className="metric-participation-legend"><div><i className="client-dot" /><span>Cliente</span><strong>{client === null ? '—' : numeric(client)}</strong></div><div><i className="team-dot" /><span>Equipo<small>Personas + bot</small></span><strong>{assistant === null ? '—' : numeric(assistant)}</strong></div></div>
+      <div className="metric-participation-legend"><div><i className="client-dot" /><span>Cliente</span><strong>{client === null ? '—' : numeric(client)}</strong></div>{[['Bot', counts?.bot], ['Agente humano', counts?.humano]].map(([label, count]) => <div key={label}><i className="team-dot" /><span>{label}</span><strong>{count == null ? '—' : numeric(count)}</strong></div>)}</div>
     </div>
     <p className="metric-participation-caption">{!available ? 'Faltan datos para mostrar la distribución.' : total === 0 ? 'Sin mensajes contabilizados.' : client > assistant ? 'El cliente envió más mensajes.' : assistant > client ? 'El equipo envió más mensajes.' : 'Cliente y equipo enviaron la misma cantidad.'}</p>
     {children}
@@ -69,7 +69,7 @@ export default function ConversationMetrics({ conversation, selectedDate, onDate
           </div>
           <MetricActivityTimeline conversation={conversation} day={day} timezone={view.timezone} firstResponse={get('min_primera_respuesta_humano')} />
         </div>
-        <Participation assistant={value('num_mensajes_asistente')} client={value('num_mensajes_cliente')}>
+        <Participation assistant={value('num_mensajes_asistente')} client={value('num_mensajes_cliente')} counts={day.messageCounts}>
       <div className="metric-rhythm-strip">
         <div><span className="metric-rhythm-icon"><CommentOutlined /></span><div><span className="metric-rhythm-label">Por cada mensaje del cliente</span><p><strong>{ratio === null ? '—' : numeric(ratio)}</strong><span>{ratio === null ? 'Relación no disponible' : 'mensajes del equipo'}</span></p></div><Explain label="Relación de mensajes">{get('ratio_mensajes_asistente_entre_cliente')?.result?.reason || 'Mensajes del equipo divididos entre mensajes del cliente. Si no hay mensajes del cliente, no se calcula.'}</Explain></div>
         <div><span className="metric-rhythm-icon"><MessageOutlined /></span><div><span className="metric-rhythm-label">En cada turno del equipo</span><p><strong>{turn === null ? '—' : numeric(turn)}</strong><span>{turn === null ? 'Promedio no disponible' : 'mensajes seguidos, en promedio'}</span></p></div><Explain label="Mensajes por turno">{get('num_mensajes_por_turno_asistente')?.result?.reason || 'Un turno reúne los mensajes seguidos del equipo antes de que vuelva a escribir el cliente.'}</Explain></div>

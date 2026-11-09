@@ -127,3 +127,32 @@ test('la lectura fresca de una muestra omite la caché de navegación', async ()
   assert.deepEqual((await reader.read({ fresh: true })).conversations, ['new']);
   assert.equal(reads, 1);
 });
+
+test('Atom, sistema y builders cuentan como bot; el saludo de un humano conserva su emisor', async () => {
+  const { atomMessageActor } = await import('../src/atom.js');
+  const { messageCounts } = await import('../src/message-counts.js');
+  const { evaluateCodeVariables } = await import('../src/code-evaluator.js');
+  const source = { ClienteNombre: 'Cliente Prueba', AsesorNombre: 'Asesor Prueba' };
+  const rows = [
+    { RolEmisor: 'ATOM', Direccion: 'SALIENTE' },
+    { RolEmisor: 'SISTEMA', DeOrigen: 'ATOM' },
+    { RolEmisor: ' bot ' },
+    { RolEmisor: null, DeOrigen: 'FLOW BUILDER' },
+    { RolEmisor: null, DeOrigen: 'API', TipoOrigen: 'template' },
+    { RolEmisor: null, DeOrigen: 'Fahorro_Cortex' },
+    { RolEmisor: 'ASESOR', DeOrigen: 'Cliente Prueba' },
+    { RolEmisor: 'ASESOR', Direccion: 'ENTRANTE' },
+    { RolEmisor: 'ASESOR' },
+    { RolEmisor: null, IdAsesor: 42 },
+    { RolEmisor: null, DeOrigen: 'Asesor Prueba' },
+    { RolEmisor: 'SISTEMA', Direccion: 'SISTEMA' },
+    { RolEmisor: 'BOT', TipoOrigen: 'log' },
+    { RolEmisor: null, DeOrigen: 'Nombre sin referencia' },
+  ];
+  const messages = rows.map((r, i) => ({ id: String(i), actor: atomMessageActor({ TipoOrigen: 'text', ...r }, source), text: '¡Hola! Gracias por escribir.', timestamp: '2026-11-09T16:00:00Z' }));
+  assert.deepEqual(messages.map(m => m.actor), ['bot','bot','bot','bot','bot','bot','cliente','cliente','humano','humano','humano','bot','sistema','desconocido']);
+  assert.deepEqual(messageCounts(messages), { bot: 7, humano: 3, cliente: 2, sistema: 1, desconocido: 1, asistente: 10, total: 14 });
+  const result = evaluateCodeVariables({ messages }, [{ id: 'num_mensajes_asistente', type: 'Métrica', method: 'Código' }, { id: 'num_mensajes_cliente', type: 'Métrica', method: 'Código' }]);
+  assert.equal(result.find(r => r.variableId === 'num_mensajes_asistente').value, 10);
+  assert.equal(result.find(r => r.variableId === 'num_mensajes_cliente').value, 2);
+});

@@ -1,6 +1,6 @@
 import { defaultDateRange, previousDate } from './dateRange.js';
 
-const PRESETS = [1, 4, 7, 14, 30];
+export const SUMMARY_PRESETS = [1, 3, 30];
 const DAY_MS = 86_400_000;
 const FIRST_DATE = '0001-01-01';
 
@@ -12,14 +12,9 @@ function validDate(value) {
 
 const inclusiveDays = (from, to) => Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / DAY_MS) + 1;
 
-/** A saved custom range is independent of the anchor used by the shortcuts. */
-export function resolveSummaryRange({ from, to, days, latest, mode, timezone = 'America/Tegucigalpa', now = new Date() } = {}) {
-  const customRequested = (from != null && from !== '') || (to != null && to !== '');
-  if (validDate(from) && validDate(to) && from <= to) {
-    return { from, to, preset: null, totalDays: inclusiveDays(from, to) };
-  }
-
-  const preset = !customRequested && PRESETS.includes(Number(days)) ? Number(days) : 7;
+/** Dashboard periods are deliberately limited to today, three and thirty days. */
+export function resolveSummaryRange({ days, latest, mode, timezone = 'America/Tegucigalpa', now = new Date() } = {}) {
+  const preset = SUMMARY_PRESETS.includes(Number(days)) ? Number(days) : 3;
   // Real operation always ends today in the portal's timezone. Only a demo
   // anchors its shortcuts to the fixed activity date of the synthetic data.
   const anchor = mode === 'demo' && validDate(latest) ? latest : undefined;

@@ -1,3 +1,4 @@
+import { actorName } from '../services/participants';
 import { Fragment, useMemo, useState } from 'react';
 import { Button, Checkbox, Popover, Select, Tooltip } from 'antd';
 import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, FlagOutlined, MessageOutlined } from '@ant-design/icons';
@@ -5,7 +6,6 @@ import { classificationOf, flagLabel } from '../services/flags';
 import { filterMessageRows, groupFlagOptions } from '../services/messageFlags';
 import { EmptyState, FlagSymbol, dateText, timeText } from './common';
 
-const actorName = actor => ({ cliente: 'Cliente', humano: 'Asistente de venta', bot: 'Bot', sistema: 'Sistema' }[actor] || 'Participante');
 const hasTime = value => !!value && Number.isFinite(Date.parse(value));
 const messageDate = value => hasTime(value) ? dateText(value) : 'Fecha no disponible';
 const messageTime = value => hasTime(value) ? timeText(value) : '—';
@@ -30,7 +30,7 @@ function MarkCard({ variable, messageCount, selected, onSelectFlag, onShowFlag }
   const classification = classificationOf(variable);
   const source = variable.kind === 'refuted' ? 'Refutado por humano'
     : variable.kind === 'human' || variable.origin === 'human' ? 'Flag humano'
-      : variable.dualDetected ? 'Detectado por ambos modelos' : 'Detectado por el sistema';
+      : variable.dualDetected ? 'Detectado por ambos modelos' : 'Detectado por la IA';
   return <div className={`message-sidebar-flag${selected ? ' message-sidebar-flag-selected' : ''}`}>
     <button type="button"
       className={`message-flag-card mark-card-${classification}${variable.kind === 'refuted' ? ' mark-card-refuted' : ''}`}

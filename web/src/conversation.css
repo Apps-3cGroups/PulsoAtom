@@ -31,8 +31,15 @@
 .message-day-divider > span { background: #f3f6f1; border: 1px solid var(--border); padding: 4px 12px; border-radius: 20px; }
 .message-evidence-row { padding: 7px 10px; margin: 0 -10px 10px; border: 1px solid transparent; border-radius: 10px; scroll-margin-block: 28px; }
 .message-bubble { padding: 15px 18px; border: 1px solid #e0e7dd; background: #f2f5ee; border-radius: 2px 12px 12px 12px; max-width: 88%; }
-.message-bubble.actor-humano { margin-left: auto; background: #eaf5ef; border-color: #cce1d5; border-radius: 12px 2px 12px 12px; }
-.message-bubble.actor-bot, .message-bubble.actor-sistema { background: #f7f8f6; border-color: #e3e8df; }
+.message-bubble.actor-bot, .message-bubble.actor-humano { margin-left: auto; background: #dfe5ff; border-color: #bac5f2; border-radius: 14px 14px 4px 14px; color: #263359; }
+.message-bubble.actor-cliente { background: #fff; border-color: #d8dee9; color: #30394a; }
+.message-bubble.actor-sistema, .message-bubble.actor-desconocido { background: #f0f1ef; border: 1px dashed #7a8279; }
+.message-bubble:is(.actor-bot, .actor-humano) .message-bubble-meta { color: #3e4f91; }
+.message-bubble:is(.actor-bot, .actor-humano) .message-bubble-meta time { color: #59658b; }
+.message-bubble.actor-cliente .message-bubble-meta { color: #49566e; }
+.message-bubble.actor-cliente .message-bubble-meta time { color: #667187; }
+.message-bubble { box-shadow: 0 2px 5px #25315c06; }
+.message-workspace-scroll { background: #f8f9fc; }
 .message-bubble-meta { display: flex; align-items: center; gap: 7px; color: var(--secondary); font-size: 12px; margin-bottom: 8px; }
 .message-bubble-meta strong { font-weight: 600; }
 .message-bubble-meta time { margin-left: auto; color: var(--muted); font: 11px 'JetBrains Mono', monospace; }
