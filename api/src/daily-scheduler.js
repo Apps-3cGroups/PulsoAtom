@@ -1,5 +1,6 @@
-import { startEvaluationBatch } from './evaluation-service.js';
+import { startEvaluationBatch, recoverEvaluationJobs, resumeEvaluationBatch } from './evaluation-service.js';
 import { asRegistry } from './model-registry.js';
+import { DAILY_ACTIVITY_MODE, dailyActivityRequest } from './daily-activity.js';
 
 export function scheduleClock(now, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -15,9 +16,35 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
   const { settings, jobs } = state;
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
   const registry = asRegistry(evaluator).forState(state);
-  if (!registry.policyAvailable(state)) return null;
   const clock = scheduleClock(now, settings.timezone);
-  if (clock.time < settings.dailyTime || jobs.some(job => job.scheduleDate === clock.date)) return null;
+  if (clock.time < settings.dailyTime) return null;
+  if (settings.dailyMode === DAILY_ACTIVITY_MODE) {
+    if (clock.date < settings.dailyStartDate) return null;
+    const options = dailyActivityRequest(settings, clock.date);
+    for (const id of options.modelIds) registry.resolve(id);
+    await recoverEvaluationJobs(store);
+    const current = await store.read();
+    if (current.jobs.some(job => job.status === 'running')) return null;
+    const interrupted = current.jobs.find(job => job.dailyActivity?.configurationHash === options.dailyActivity.configurationHash && job.status === 'interrupted' && !job.dailyResumeError);
+    let execution;
+    try {
+      execution = interrupted ? await resumeEvaluationBatch(store, evaluator, interrupted.id)
+        : await startEvaluationBatch(store, evaluator, options);
+    } catch (error) {
+      if (interrupted && ['SOURCE_CHANGED', 'CATALOG_CHANGED', 'PROMPT_CHANGED', 'MODEL_CHANGED', 'SUPERSEDED_JOB'].includes(error.code)) {
+        await store.transaction(draft => {
+          const job = draft.jobs.find(j => j.id === interrupted.id);
+          job.dailyResumeError = { code: error.code, message: error.message };
+          job.errors = [...(job.errors || []), job.dailyResumeError];
+        });
+      }
+      throw error;
+    }
+    const { job, completion } = execution;
+    completion.catch(error => console.error('Error en evaluación diaria de Pulso:', error.code || error.name));
+    return job;
+  }
+  if (!registry.policyAvailable(state) || jobs.some(job => job.scheduleDate === clock.date)) return null;
   const { job, completion } = await startEvaluationBatch(store, evaluator, {
     pendingOnly: true, max: 100, sourceChangedAfter: settings.dailyStartedAt, scheduleDate: clock.date,
   });
@@ -26,11 +53,16 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
 }
 
 export function startDailyScheduler(store, evaluator) {
-  const tick = () => runDailyTick(store, evaluator).catch(error => {
-    if (!['DAILY_ALREADY_STARTED', 'EVALUATION_RUNNING', 'SCHEDULE_CHANGED'].includes(error.code)) {
-      console.error('Error al iniciar evaluación diaria de Pulso:', error.code || error.name);
-    }
-  });
+  let busy = false;
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try { await runDailyTick(store, evaluator); } catch (error) {
+      if (!['DAILY_ALREADY_STARTED', 'EVALUATION_RUNNING', 'SCHEDULE_CHANGED'].includes(error.code)) {
+        console.error('Error al iniciar evaluación diaria de Pulso:', error.code || error.name);
+      }
+    } finally { busy = false; }
+  };
   const timer = setInterval(tick, 60_000);
   timer.unref();
   tick();

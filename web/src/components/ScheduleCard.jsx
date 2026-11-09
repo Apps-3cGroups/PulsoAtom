@@ -13,6 +13,7 @@ export default function ScheduleCard({ data, isAdmin, onSaved }) {
   const { message } = App.useApp();
   const ready = data.mode === 'real' && data.status.ready;
   const dirty = !sameSchedule(draft, saved);
+  const previousDay = saved.dailyMode === 'previous-day-activity';
 
   useEffect(() => {
     if (data.settings.version <= saved.version || saving || pending) return;
@@ -55,7 +56,8 @@ export default function ScheduleCard({ data, isAdmin, onSaved }) {
   return <section className="evaluation-card">
     <div className="evaluation-icon"><ClockCircleOutlined /></div>
     <h2>Evaluación diaria</h2>
-    <p>Procesa hasta 100 conversaciones nuevas y pendientes cada día, después de la carga de Atom.</p>
+    <p>{previousDay ? 'Evalúa todas las conversaciones con actividad el día anterior, abiertas o cerradas, con Clef y Gemma.' : 'Procesa hasta 100 conversaciones nuevas y pendientes cada día, después de la carga de Atom.'}</p>
+    {previousDay && <Alert type="info" message="Honduras y Panamá · Clef y Gemma" description={`Inicio: ${saved.dailyStartDate}. El día se calcula en la zona horaria indicada. También se recogen nuevas cargas de Atom durante la jornada.`} />}
     {notice && <Alert {...notice} showIcon />}
     <Form form={form} layout="vertical" onFinish={save} initialValues={scheduleValues(data.settings)}
       onValuesChange={(_, values) => setDraft(scheduleValues(values))} disabled={!isAdmin || saving || !!pending}>
@@ -69,7 +71,7 @@ export default function ScheduleCard({ data, isAdmin, onSaved }) {
         <Form.Item name="dailyTime" label="Hora de inicio" rules={[{ required: true, pattern: /^([01]\d|2[0-3]):[0-5]\d$/, message: 'Selecciona una hora válida.' }]}><Input type="time" aria-label="Hora de evaluación diaria" /></Form.Item>
         <Form.Item name="timezone" label="Zona horaria" rules={[{ required: true }]}><Select aria-label="Zona horaria de evaluación" options={['America/Tegucigalpa', 'America/Mexico_City', 'America/Guatemala', 'America/Costa_Rica', 'UTC'].map(value => ({ value, label: value.replace('America/', '').replaceAll('_', ' ') }))} /></Form.Item>
       </div>
-      <div className="schedule-hint"><ClockCircleOutlined /><span>Al activar, el histórico anterior queda fuera de la programación. Los lotes a demanda pueden evaluarlo.</span></div>
+      <div className="schedule-hint"><ClockCircleOutlined /><span>{previousDay ? 'Cada conversación recibe dos revisiones independientes. Los fallos quedan visibles en el historial de ejecuciones.' : 'Al activar, el histórico anterior queda fuera de la programación. Los lotes a demanda pueden evaluarlo.'}</span></div>
       <div className="evaluation-card-bottom">{isAdmin ? pending
         ? <Button block onClick={verify} loading={saving} disabled={false}>Comprobar estado guardado</Button>
         : <Button htmlType="submit" block loading={saving} disabled={!dirty || saving}>Guardar programación</Button>
