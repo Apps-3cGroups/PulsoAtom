@@ -6,7 +6,7 @@ import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { runDailyTick } from '../src/daily-scheduler.js';
 import { activityOnDate, previousDate, dailyActivityRequest } from '../src/daily-activity.js';
-import { configureDailyActivity } from '../src/configure-daily-activity.js';
+import { configureDailyActivity, requestYesterdayActivity } from '../src/configure-daily-activity.js';
 import { startEvaluationBatch } from '../src/evaluation-service.js';
 
 function fixture() {
@@ -76,6 +76,41 @@ test('un día sin datos queda registrado una vez y acepta una carga posterior', 
   state.conversations.push(conversation('late'));
   assert.equal((await runDailyTick(store, registry, new Date('2026-11-10T08:01:00Z'))).total, 2);
   await idle(state);
+});
+
+test('la revisión puntual de ayer no adelanta ni altera la programación futura, ni duplica conversaciones', async () => {
+  const { state, store, registry, calls } = fixture();
+  const original = structuredClone(state.settings);
+  state.conversations = Array.from({ length: 114 }, (_, i) => conversation(`ayer-${i}`, 'PA', '2026-11-08T15:00:00Z'));
+  state.conversations.push(conversation('hoy'), conversation('otro-pais', 'MX', '2026-11-08T15:00:00Z'));
+  const options = { activityDate: '2026-11-08', expectedVersion: 14, now: new Date('2026-11-09T23:00:00Z') };
+  await requestYesterdayActivity(store, registry, options);
+  for (const key of ['dailyTime', 'dailyStartDate', 'dailyStartedAt', 'dailyEnabled', 'dailyCountries', 'dailyModelIds', 'aiPolicy']) assert.deepEqual(state.settings[key], original[key]);
+  assert.equal(state.settings.dailyManualRunDate, '2026-11-09');
+  assert.equal(calls.length, 0);
+  assert.equal((await requestYesterdayActivity(store, registry, { ...options, expectedVersion: 15 })).alreadyRequested, true);
+  const job = await runDailyTick(store, registry, options.now);
+  assert.equal(job.caseCount, 114); assert.equal(job.total, 228); assert.equal(job.dailyActivity.date, '2026-11-08');
+  await idle(state);
+  assert.equal(calls.length, 228);
+  assert.equal(await runDailyTick(store, registry, options.now), null);
+  assert.equal(await runDailyTick(store, registry, new Date('2026-11-10T06:00:00Z')), null);
+  const tomorrow = await runDailyTick(store, registry, new Date('2026-11-10T06:01:00Z'));
+  assert.deepEqual(tomorrow.conversationIds, ['hoy']);
+  await idle(state);
+});
+
+test('la solicitud puntual exige ayer, versión vigente, alcance guardado y ningún lote activo', async () => {
+  const { state, store, registry } = fixture();
+  const options = { activityDate: '2026-11-08', expectedVersion: 14, now: new Date('2026-11-09T23:00:00Z') };
+  await assert.rejects(requestYesterdayActivity(store, registry, { ...options, activityDate: '2026-11-09' }), { code: 'INVALID_ACTIVITY_DATE' });
+  await assert.rejects(requestYesterdayActivity(store, registry, { ...options, expectedVersion: 13 }), { code: 'VERSION_CONFLICT' });
+  state.settings.dailyCountries = ['HN', 'MX'];
+  await assert.rejects(requestYesterdayActivity(store, registry, options), { code: 'SCHEDULE_CHANGED' });
+  state.settings.dailyCountries = ['HN', 'PA'];
+  state.jobs.push({ status: 'running' });
+  await assert.rejects(requestYesterdayActivity(store, registry, options), { code: 'EVALUATION_RUNNING' });
+  assert.equal(state.settings.version, 14); assert.equal(state.settings.dailyManualRunDate, undefined);
 });
 
 test('la transacción impide duplicar la cohorte en dos procesos y detecta cambios de horario', async () => {
