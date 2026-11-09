@@ -60,6 +60,7 @@ El proyecto está vinculado a [PulsoAtom](https://github.com/Apps-3cGroups/Pulso
 - **Conversación:** transcripción, checklist utilizado, evidencia, refutación, flags humanos y reversión con auditoría. Un ítem no evaluado no se presenta como un cero.
 - **Catálogo:** 130 variables, 17 familias y 12 variables P1/P2 de fase 1 activas inicialmente. Permite agregar, editar, activar e inactivar individualmente o por lotes. No hay borrado destructivo.
 - **Evaluaciones:** lotes a demanda de 20, 50 o 100 conversaciones desde el portal, con progreso por modelo y fallos visibles. Programación diaria de hasta 100 conversaciones nuevas o con contenido nuevo, según la política de la instalación.
+- **Modelos:** dashboard ejecutivo de Clef y Gemma en `/pulsoAtom/modelos`, para administradores. Compara tiempos, cobertura de evaluación y ejecuciones completas e incompletas con barras por modelo. Incluye filtros por período y país. Consulta [las reglas del comparativo](docs/DASHBOARD_MODELOS.md).
 - Tema claro en todas las pantallas. Tipografías locales; no se envía contenido a servicios de fuentes.
 
 Los códigos, familias, definiciones, métodos, fases y condiciones provienen del Excel. El HTML aporta polaridades, nombres cortos y el lenguaje visual. `catalog-labels.json` completa nombres legibles sin cambiar los códigos. Las tres variables `guion_[punto]_*` se conservan como plantillas no activables; requieren definir un punto concreto antes de usarlas.

@@ -11,7 +11,11 @@ const validateConversationIds = ids => {
   return [...new Set(ids.map(String))];
 };
 
-const iso = value => value instanceof Date ? value.toISOString() : new Date(`${value}Z`).toISOString();
+const iso = value => {
+  if (value instanceof Date) return value.toISOString();
+  const text = String(value).trim();
+  return new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`).toISOString();
+};
 const optionalIso = value => {
   if (value == null || value === '') return null;
   try { return iso(value); } catch { return null; }
@@ -51,8 +55,9 @@ export function mapAtomConversation(row, events, country, timezone) {
     country: country.code, countryName: country.name, sourceCountryCode: Number(row.CodigoPais),
     agent: { id: row.IdAsesorActual == null ? 'sin-asesor' : String(row.IdAsesorActual), name: row.AsesorNombre || 'Sin asesor asignado' },
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
-    date: localDate(activityAt, timezone), startedAt,
-    lastActivityAt,
+    date: localDate(activityAt, timezone), activityDate: localDate(activityAt, timezone),
+    startedDate: localDate(startedAt, timezone), startedAt,
+    lastActivityAt, activityAt,
     sourceCreatedAt: row.FechaCreacionUtc ? iso(row.FechaCreacionUtc) : startedAt,
     sourceUpdatedAt: row.FechaActualizacionUtc ? iso(row.FechaActualizacionUtc) : startedAt,
     endedAt: row.FechaFinUtc ? iso(row.FechaFinUtc) : activityAt,

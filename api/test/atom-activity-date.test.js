@@ -15,6 +15,8 @@ const event = (id, timestamp) => ({ IdEvento: id, TipoOrigen: 'text', RolEmisor:
 test('a chat started in October appears on its November activity day without changing its evaluated content', () => {
   const conversation = mapAtomConversation(source(), [event(1, '2026-10-31T15:00:00Z'), event(2, '2026-11-06T15:00:00Z')], country, timezone);
   assert.equal(conversation.date, '2026-11-06');
+  assert.equal(conversation.activityDate, '2026-11-06');
+  assert.equal(conversation.startedDate, '2026-10-31');
   assert.equal(conversation.startedAt, '2026-10-31T15:00:00.000Z');
   assert.equal(conversation.lastActivityAt, '2026-11-06T16:00:00.000Z');
   assert.deepEqual(conversation.messages.map(m => m.timestamp), ['2026-10-31T15:00:00.000Z', '2026-11-06T15:00:00.000Z']);
@@ -39,11 +41,17 @@ test('missing or invalid activity metadata falls back to the latest message, not
       [event(2, '2026-11-06T15:00:00Z'), event(1, '2026-10-31T15:00:00Z')], country, timezone);
     assert.equal(conversation.date, '2026-11-06');
     assert.equal(conversation.lastActivityAt, null);
+    assert.equal(conversation.activityAt, '2026-11-06T15:00:00.000Z');
     assert.equal(conversation.startedAt, '2026-10-31T15:00:00.000Z');
     assert.deepEqual(conversation.messages.map(m => m.id), ['2', '1']);
+    const state = createState(false); state.conversations = [conversation];
+    const filtered = filteredConversations(state, { dateBasis: 'activity', from: '2026-11-06', to: '2026-11-06' });
+    assert.equal(filtered.length, 1);
+    assert.equal(filtered[0].displayAt, conversation.activityAt);
   }
   const empty = mapAtomConversation(source({ FechaUltimaActividadUtc: null }), [], country, timezone);
   assert.equal(empty.date, '2026-10-31');
+  assert.equal(empty.activityAt, empty.startedAt);
   assert.equal(empty.endedAt, empty.startedAt);
 });
 

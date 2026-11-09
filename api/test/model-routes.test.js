@@ -121,7 +121,7 @@ test('consultar una predicción heredada marca la revisión posterior como asist
 
 
 test('supervisión consulta el resultado oficial y revisa, pero no accede a herramientas de modelos', async () => {
-  for (const route of ['/models', '/comparisons', `/comparisons/${sampleId}?reveal=true`, '/comparison-candidates', '/evaluations', `/evaluations/${sampleId}/attempts`]) {
+  for (const route of ['/models', '/model-dashboard', '/comparisons', `/comparisons/${sampleId}?reveal=true`, '/comparison-candidates', '/evaluations', `/evaluations/${sampleId}/attempts`]) {
     await supervisor.get(`/pulso/api${route}`).expect(403);
   }
   for (const route of ['/summary', '/conversations', '/search', `/conversations/${caseIds[0]}`]) {
@@ -150,4 +150,31 @@ test('política dual persiste, conserva histórico y supervisión consulta ambas
   const variable=view.variables.find(v=>v.result.comparison?.cells.length);
   assert.deepEqual(variable.result.comparison.cells.map(c=>c.label),['GPT · demo','Gemini · demo']);
   assert.doesNotMatch(JSON.stringify(view),/apiKey|Authorization|password/);
+});
+
+test('dashboard compara ejecuciones operativas sin ejecutar IA ni modificar resultados', async () => {
+  await request(app).get('/pulso/api/model-dashboard').expect(401);
+  const before = await store.read(), count = calls;
+  const result = (await admin.get('/pulso/api/model-dashboard').expect(200)).body;
+  assert.ok(result.cohort.conversations > 0);
+  assert.equal(result.metrics.length, 2);
+  const pairedJob = before.jobs.filter(j => j.purpose === 'operational' && j.mode === 'dual').at(-1);
+  const flagCount = pairedJob.catalogVersions.filter(ref => ref.active && before.catalogVersions.some(v => v.itemId === ref.id
+    && v.version === ref.version && v.snapshot.type === 'Flag' && ['IA', 'IA + código'].includes(v.snapshot.method))).length;
+  assert.ok(flagCount > 0);
+  assert.equal(result.cohort.flagsMin, flagCount);
+  assert.equal(result.metrics[0].total, flagCount * result.cohort.conversations);
+  assert.doesNotMatch(JSON.stringify(result), /"(?:messages|evidence|reason|apiKey|Authorization|password)":/);
+  assert.equal(calls, count);
+  const after = await store.read();
+  assert.deepEqual(after.evaluations, before.evaluations);
+  assert.deepEqual(after.tasks, before.tasks);
+  assert.deepEqual(after.operationalRefs, before.operationalRefs);
+  assert.equal(result.exposureContexts, undefined);
+  const again = await store.read();
+  await admin.get('/pulso/api/model-dashboard').expect(200);
+  assert.deepEqual(await store.read(), again);
+  for (const query of ['from=2026-02-30', 'from=2026-11-10&to=2026-11-09', 'left=unknown', 'jobId=unknown']) {
+    await admin.get(`/pulso/api/model-dashboard?${query}`).expect(422);
+  }
 });
