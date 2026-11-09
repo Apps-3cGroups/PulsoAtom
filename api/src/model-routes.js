@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { ensureEvaluationState, exposeEvaluation, historicalProfileId } from './evaluation-context.js';
+import { digest, ensureEvaluationState, exposeEvaluation, historicalProfileId } from './evaluation-context.js';
 import { comparisonRows, findComparison, qualityMetrics, sampleSummary, saveValidation, validationView } from './comparisons.js';
 import { startEvaluationBatch, resumeEvaluationBatch, recoverEvaluationJobs } from './evaluation-service.js';
+import { modelDashboard } from './model-dashboard.js';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
 const sampleSchema = z.object({ name: z.string().trim().min(3).max(100), modelIds: z.array(z.string().max(80)).min(2).max(3),
@@ -14,6 +15,16 @@ const reportFailure = completion => completion.catch(error => console.error('Err
 
 export function mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory }) {
   const ready = () => { if (!config.demo && !store.readWithConversations) throw new AppError(409, 'Configura la lectura de Atom.', 'INTEGRATION_PENDING'); };
+  app.get(`${prefix}/model-dashboard`, requireAdmin, async (req, res) => {
+    const query = z.object({ from: date.optional(), to: date.optional(), country: z.string().max(10).optional(),
+      jobId: z.string().max(200).optional(), left: z.string().max(200).optional(), right: z.string().max(200).optional() }).strict()
+      .refine(v => !v.from || !v.to || v.from <= v.to, 'Período inválido').parse(req.query);
+    const state = await readHistory();
+    const { exposureContexts, ...dashboard } = modelDashboard(state, registry, query, config.timezone);
+    const exposures = exposureContexts.filter(e => !(state.exposures || []).some(x => x.id === digest([req.user.id, e.conversationId, e.sourceHash, e.catalogHash])));
+    if (exposures.length) await store.transaction(draft => { for (const e of exposures) exposeEvaluation(draft, req.user.id, e); });
+    res.json(dashboard);
+  });
   app.get(`${prefix}/comparison-candidates`, requireAdmin, async (req, res) => {
     const query = z.object({ q: z.string().max(200).optional(), country: z.string().max(10).optional(), from: date.optional(), to: date.optional() }).parse(req.query);
     const state = await readHistory();
