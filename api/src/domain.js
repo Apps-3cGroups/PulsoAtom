@@ -1,3 +1,4 @@
+import { messageCounts } from './message-counts.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
@@ -108,7 +109,7 @@ export function conversationView(state, conversation, context = viewContext(stat
     activityDate: conversation.activityDate || conversation.date, startedDate: conversation.startedDate,
     activityAt: conversation.activityAt, lastActivityAt: conversation.lastActivityAt || null,
     p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
-  return detail ? { ...base, messages: conversation.messages, sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: evaluationStatus === 'review_pending', modelReviews: evaluation.modelReviews || [], provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
+  return detail ? { ...base, messages: conversation.messages, messageCounts: messageCounts(conversation.messages), sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: evaluationStatus === 'review_pending', modelReviews: evaluation.modelReviews || [], provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
     metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : base;
 }
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
@@ -180,7 +181,7 @@ export function recordReview(state, conversationId, body, user) {
   const history = view.reviews.filter(r => r.variableId === body.variableId);
   const last = history.at(-1);
   if ((last?.id || null) !== body.expectedReviewId) throw new AppError(409, 'La revisión cambió. Recarga antes de registrar otra.', 'VERSION_CONFLICT');
-  if (body.action === 'refutar' && (!variable.automaticFlagVisible || variable.review)) throw new AppError(422, 'Solo puedes refutar un flag vigente del sistema.');
+  if (body.action === 'refutar' && (!variable.automaticFlagVisible || variable.review)) throw new AppError(422, 'Solo puedes refutar un flag vigente de la IA.');
   if (body.action === 'levantar' && (variable.automaticFlagVisible || variable.review || ![0, 1].includes(variable.result.value))) throw new AppError(422, 'Solo puedes levantar un evento que no tenga un flag automático vigente.');
   if (body.action === 'deshacer' && !variable.review) throw new AppError(422, 'No existe una revisión vigente para deshacer.');
   const message = conversation.messages.find(m => m.id === body.messageId);

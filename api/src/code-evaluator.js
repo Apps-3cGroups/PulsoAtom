@@ -1,3 +1,4 @@
+import { messageCounts } from './message-counts.js';
 import { AppError } from './errors.js';
 
 export const CODE_RULES_VERSION = 'pulso-code-v5-2026-11-03';
@@ -82,6 +83,7 @@ export function evaluateCodeVariables(conversation, variables) {
   const messages = (conversation.messages || []).filter(m => ['cliente', 'humano', 'bot'].includes(m.actor));
   const timestampsValid = messages.every(m => m.timestamp != null && m.timestamp !== '' && Number.isFinite(Date.parse(m.timestamp)));
   const ordered = timestampsValid ? messages.toSorted((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)) : messages;
+  const counts = messageCounts(conversation.messages);
   const memo = new Map();
   const minutes = (a, b) => (Date.parse(b.timestamp) - Date.parse(a.timestamp)) / 60000;
   const validTime = fn => !ordered.length ? unavailable('No hay mensajes para calcular el tiempo.', 'NO_MESSAGES')
@@ -93,8 +95,8 @@ export function evaluateCodeVariables(conversation, variables) {
     return result(value, `${description}: ${metric.value} minutos; umbral estrictamente mayor a ${threshold} minutos.`, { dependencies: [id], inputs: { [id]: metric.value }, evidence: value ? metric.evidence : [] });
   };
   const rules = {
-    num_mensajes_cliente: () => result(messages.filter(m => m.actor === 'cliente').length, 'Conteo de mensajes del cliente; se excluyen eventos del sistema.'),
-    num_mensajes_asistente: () => result(messages.filter(assistant).length, 'Conteo de mensajes del bot y de asistentes humanos; se excluyen eventos del sistema.'),
+    num_mensajes_cliente: () => result(counts.cliente, 'Conteo de mensajes del cliente; se excluyen eventos técnicos y emisores no identificados.'),
+    num_mensajes_asistente: () => result(counts.asistente, 'Conteo de mensajes del bot y de asistentes humanos; se excluyen eventos técnicos y emisores no identificados.'),
     min_primera_respuesta_humano: () => validTime(() => {
       const start = ordered.findIndex(m => m.actor === 'cliente');
       if (start < 0) return unavailable('No hay un mensaje del cliente que inicie la espera.', 'NO_CLIENT_MESSAGE');

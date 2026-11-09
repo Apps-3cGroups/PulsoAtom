@@ -1,7 +1,9 @@
-import { classificationOf, flagCount, markKind, evaluationNeedsAttention, evaluationPending } from './flags.js';
+import { flagCount, markKind, evaluationNeedsAttention, evaluationPending } from './flags.js';
 const markOrder = { critical: 0, p1: 0, normal: 1, p2: 1, human: 2, positive: 3, refuted: 4 };
 export const visibleBoardMarks = conversation => conversation.marks.filter(mark => Object.hasOwn(markOrder, mark.kind) && mark.kind !== 'coaching').sort((a, b) => (markOrder[markKind(a)] ?? 4) - (markOrder[markKind(b)] ?? 4));
 const rank = c => flagCount(c, 'critical') > 0 ? 0 : flagCount(c, 'normal') > 0 ? 1 : evaluationNeedsAttention(c) ? 2 : 3;
+
+export const compareActiveConversations = (a, b) => rank(a) - rank(b) || b.startedAt.localeCompare(a.startedAt) || String(a.id).localeCompare(String(b.id));
 
 // One box per assistant ID; names are not unique. Never merge across countries.
 export function buildActiveBoard(conversations, country) {
@@ -14,6 +16,6 @@ export function buildActiveBoard(conversations, country) {
     if (flagCount(conversation, 'critical') || flagCount(conversation, 'normal') || conversation.human && !flagCount(conversation, 'positive')) group.flagged++;
     if (evaluationPending(conversation)) group.pending++;
   }
-  for (const group of groups.values()) group.conversations.sort((a, b) => rank(a) - rank(b) || b.startedAt.localeCompare(a.startedAt) || String(a.id).localeCompare(String(b.id)));
+  for (const group of groups.values()) group.conversations.sort(compareActiveConversations);
   return [...groups.values()].sort((a, b) => rank(a.conversations[0]) - rank(b.conversations[0]) || a.agent.name.localeCompare(b.agent.name, 'es'));
 }

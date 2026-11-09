@@ -1,3 +1,4 @@
+import { actorName } from '../services/participants';
 import { useState } from 'react';
 import { App, Alert, Form, Input, Modal, Select } from 'antd';
 import { api } from '../services/api';
@@ -13,7 +14,6 @@ export const reviewReasons = {
   validacion_humana: 'Validación humana del checklist',
 };
 export const reviewActions = { refutar: 'Refutar flag', levantar: 'Levantar flag', deshacer: 'Deshacer revisión' };
-const actorName = actor => ({ cliente: 'Cliente', humano: 'Asistente de venta', bot: 'Bot', sistema: 'Sistema' }[actor] || actor);
 
 export default function ReviewModal({ conversation, editing, onClose, onSaved }) {
   // A different message/variable is a new review draft. Remount the form so an
@@ -41,7 +41,7 @@ function ReviewForm({ conversation, editing, onClose, onSaved }) {
     } catch (reason) { setError(reason); } finally { setSaving(false); }
   };
   return <Modal open title={reviewActions[action]} zIndex={1100} onCancel={() => { if (!saving) onClose(); }} onOk={submit} confirmLoading={saving} okText="Guardar revisión" cancelText="Cancelar" cancelButtonProps={{ disabled: saving }} maskClosable={!saving} width={620}>
-    <div className="modal-intro"><b>{variable.name}</b><p>{action === 'deshacer' ? 'El resultado volverá al valor original del sistema. El historial conservará ambas acciones.' : action === 'levantar' ? 'Revisa el mensaje que demuestra el evento y explica tu criterio.' : 'Explica por qué la evidencia no sustenta este flag.'}</p></div>
+    <div className="modal-intro"><b>{variable.name}</b><p>{action === 'deshacer' ? 'El resultado volverá al valor original de la IA. El historial conservará ambas acciones.' : action === 'levantar' ? 'Revisa el mensaje que demuestra el evento y explica tu criterio.' : 'Explica por qué la evidencia no sustenta este flag.'}</p></div>
     {error && <Alert showIcon type="error" message={error.message} />}
     <Form form={form} layout="vertical" initialValues={{ reason: action === 'levantar' ? 'omision_del_modelo' : action === 'refutar' ? 'falso_positivo' : 'otro', messageId: initialMessageId }}>
       <Form.Item name="reason" label="Motivo" rules={[{ required: true, message: 'Selecciona un motivo.' }]}><Select options={Object.entries(reviewReasons).filter(([key]) => key !== 'validacion_humana').map(([value, label]) => ({ value, label }))} /></Form.Item>

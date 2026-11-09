@@ -21,6 +21,8 @@ test('all seven metrics share one local day; days descend and the latest actual 
   assert.deepEqual(daily.days.map(day => day.date), ['2026-11-04', '2026-11-01']);
   const [latest, older] = daily.days;
   assert.equal(latest.messageCount, 2);
+  assert.deepEqual(latest.messageCounts, { cliente: 1, bot: 0, humano: 1, sistema: 0, desconocido: 0, asistente: 1, total: 2 });
+  assert.deepEqual(older.messageCounts, { cliente: 1, bot: 1, humano: 1, sistema: 0, desconocido: 0, asistente: 2, total: 3 });
   assert.equal(latest.firstMessageAt, at('04', '15:00'));
   assert.equal(latest.lastMessageAt, at('04', '15:02'));
   assert.deepEqual(latest.metrics.map(metric => metric.result.value), [2, 2, 2, 1, 1, 1, 1]);
@@ -115,6 +117,7 @@ test('unassignable dates preserve valid days but make every metric unavailable w
   assert.deepEqual(daily.days.map(day => day.date), ['2026-11-04', '2026-11-01']);
   for (const day of daily.days) {
     assert.equal(day.messageCount, 1);
+    assert.equal(day.messageCounts, null);
     assert.equal(day.pendingHumanWait, null);
     assert.deepEqual(day.crossDayWaits, []);
     assert.equal(day.metrics.length, 7);
