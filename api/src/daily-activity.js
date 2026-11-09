@@ -19,7 +19,8 @@ export function activityOnDate(conversation, date, timezone) {
 }
 export function dailyActivityRequest(settings, runDate) {
   if (!settings.dailyEnabled || settings.dailyMode !== DAILY_ACTIVITY_MODE || !settings.dailyStartDate
-    || runDate < settings.dailyStartDate || !settings.dailyCountries?.length || settings.dailyModelIds?.length !== 2) {
+    || (runDate < settings.dailyStartDate && settings.dailyManualRunDate !== runDate)
+    || !settings.dailyCountries?.length || settings.dailyModelIds?.length !== 2) {
     throw new AppError(409, 'La programación diaria cambió o todavía no inicia.', 'SCHEDULE_CHANGED');
   }
   const snapshot = { mode: settings.dailyMode, enabled: settings.dailyEnabled, startedAt: settings.dailyStartedAt,

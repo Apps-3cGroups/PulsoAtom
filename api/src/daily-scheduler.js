@@ -17,9 +17,10 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
   const registry = asRegistry(evaluator).forState(state);
   const clock = scheduleClock(now, settings.timezone);
-  if (clock.time < settings.dailyTime) return null;
+  const manualRun = settings.dailyMode === DAILY_ACTIVITY_MODE && settings.dailyManualRunDate === clock.date;
+  if (!manualRun && clock.time < settings.dailyTime) return null;
   if (settings.dailyMode === DAILY_ACTIVITY_MODE) {
-    if (clock.date < settings.dailyStartDate) return null;
+    if (!manualRun && clock.date < settings.dailyStartDate) return null;
     const options = dailyActivityRequest(settings, clock.date);
     for (const id of options.modelIds) registry.resolve(id);
     await recoverEvaluationJobs(store);

@@ -9,11 +9,15 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, daily-activity-inspect, daily-activity-enable, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, daily-activity-inspect, daily-activity-enable, daily-activity-run-yesterday, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       first_run_date:
         description: 'Primer día de la programación diaria HN/PA, YYYY-MM-DD (daily-activity-enable)'
+        type: string
+        required: false
+      activity_date:
+        description: 'Día de actividad a evaluar: debe ser ayer en Honduras (daily-activity-run-yesterday)'
         type: string
         required: false
       expected_settings_version:
@@ -71,7 +75,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'daily-activity-enable' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'daily-activity-enable' || inputs.operation == 'daily-activity-run-yesterday' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -121,6 +125,7 @@ jobs:
           TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
           GEMMA_OPERATION: ${{ inputs.operation }}
           FIRST_RUN_DATE: ${{ inputs.first_run_date }}
+          ACTIVITY_DATE: ${{ inputs.activity_date }}
           EXPECTED_SETTINGS_VERSION: ${{ inputs.expected_settings_version }}
           EVALUATION_JOB_ID: ${{ inputs.job_id }}
           EXPECTED_POLICY_VERSION: ${{ inputs.expected_policy_version }}
@@ -135,7 +140,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('daily-activity-enable', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
+          if ($env:GEMMA_OPERATION -cnotin @('daily-activity-enable', 'daily-activity-run-yesterday', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
           $useCheckoutSource = $env:GEMMA_OPERATION -cin @('daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -ceq 'evaluation-batch-inspect') {
@@ -165,7 +170,11 @@ jobs:
           if ($env:GEMMA_OPERATION -ceq 'daily-activity-enable') {
             if ($env:FIRST_RUN_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\s\S])' -or $env:EXPECTED_SETTINGS_VERSION -cnotmatch '^[1-9][0-9]{0,14}(?![\s\S])') { throw 'Daily setup requires a date and a positive settings version.' }
           }
+          if ($env:GEMMA_OPERATION -ceq 'daily-activity-run-yesterday') {
+            if ($env:ACTIVITY_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\s\S])' -or $env:EXPECTED_SETTINGS_VERSION -cnotmatch '^[1-9][0-9]{0,14}(?![\s\S])') { throw 'Manual daily run requires yesterday and a positive settings version.' }
+          }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'daily-activity-run-yesterday' { $entryScript = 'scripts/configure-daily-activity.js'; $scriptArguments = "--run-yesterday --date $($env:ACTIVITY_DATE) --expected-version $($env:EXPECTED_SETTINGS_VERSION)" }
             'daily-activity-inspect' { $entryScript = 'scripts/configure-daily-activity.js'; $scriptArguments = '--inspect' }
             'daily-activity-enable' { $entryScript = 'scripts/configure-daily-activity.js'; $scriptArguments = "--enable --start-date $($env:FIRST_RUN_DATE) --expected-version $($env:EXPECTED_SETTINGS_VERSION)" }
 
