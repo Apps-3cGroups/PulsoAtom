@@ -7,7 +7,12 @@ export function previousDate(date) {
 }
 export function activityOnDate(conversation, date, timezone) {
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
-  const matches = value => value && Number.isFinite(Date.parse(value)) && formatter.format(new Date(value)) === date;
+  const matches = value => {
+    if (!value || !Number.isFinite(Date.parse(value))) return false;
+    const parts = formatter.formatToParts(new Date(value));
+    const part = type => parts.find(p => p.type === type).value;
+    return `${part('year')}-${part('month')}-${part('day')}` === date;
+  };
   // A chat continuing today still belongs to yesterday's cohort if a message
   // was exchanged yesterday. Ingestion timestamps are never chat activity.
   return matches(conversation.lastActivityAt) || conversation.messages.some(message => matches(message.timestamp));

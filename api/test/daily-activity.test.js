@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setImmediate } from 'node:timers/promises';
+import { AppError } from '../src/errors.js';
+import { setTimeout as wait } from 'node:timers/promises';
 import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { runDailyTick } from '../src/daily-scheduler.js';
@@ -28,7 +29,8 @@ const conversation = (id, country = 'HN', timestamp = '2026-11-09T06:00:00Z') =>
   startedAt: '2026-10-01T12:00:00Z', lastActivityAt: timestamp,
   messages: [{ id: `${id}-m`, actor: 'cliente', text: 'Hola', timestamp }] });
 async function idle(state) {
-  for (let i = 0; i < 2000 && state.jobs.some(j => j.status === 'running'); i++) await setImmediate();
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline && state.jobs.some(j => j.status === 'running')) await wait(10);
   assert.ok(state.jobs.every(j => j.status !== 'running'));
 }
 
@@ -97,4 +99,34 @@ test('la activación guarda el alcance sin ejecutar IA, requiere versión y fech
   assert.equal(state.settings.aiPolicy.primaryId, 'gemma-local'); assert.equal(state.jobs.length, 0); assert.equal(calls.length, 0);
   await assert.rejects(configureDailyActivity(store, registry, options), { code: 'VERSION_CONFLICT' });
   await assert.rejects(configureDailyActivity(store, registry, { ...options, startDate: '2026-11-09' }), { code: 'INVALID_START_DATE' });
+});
+
+
+test('reanudar una interrupción conserva el primer modelo completado', async () => {
+  const { state, store, registry, calls } = fixture(); state.conversations = [conversation('c')];
+  const gemma = registry.profiles[1].evaluator, success = gemma.evaluate;
+  gemma.evaluate = async () => { throw new AppError(502, 'No disponible', 'AI_UNAVAILABLE'); };
+  const job = await runDailyTick(store, registry, new Date('2026-11-10T06:01:00Z'));
+  await idle(state);
+  assert.equal(state.jobs[0].status, 'partial');
+  state.jobs[0].status = 'interrupted';
+  gemma.evaluate = success;
+  assert.equal((await runDailyTick(store, registry, new Date('2026-11-10T07:01:00Z'))).id, job.id);
+  await idle(state);
+  assert.deepEqual(calls, [['c', 'clef-local'], ['c', 'gemma-local']]);
+  assert.equal(state.jobs[0].completed, 2);
+});
+
+test('un contenido cambiado al reanudar queda visible y no bloquea los casos siguientes', async () => {
+  const { state, store, registry } = fixture(); state.conversations = [conversation('c')];
+  const gemma = registry.profiles[1].evaluator, success = gemma.evaluate;
+  gemma.evaluate = async () => { throw new AppError(502, 'No disponible', 'AI_UNAVAILABLE'); };
+  await runDailyTick(store, registry, new Date('2026-11-10T06:01:00Z')); await idle(state);
+  state.jobs[0].status = 'interrupted'; gemma.evaluate = success;
+  state.conversations[0].messages[0].text = 'Contenido actualizado';
+  await assert.rejects(runDailyTick(store, registry, new Date('2026-11-10T07:01:00Z')), { code: 'SOURCE_CHANGED' });
+  assert.equal(state.jobs[0].dailyResumeError.code, 'SOURCE_CHANGED');
+  state.conversations.push(conversation('next'));
+  assert.deepEqual((await runDailyTick(store, registry, new Date('2026-11-10T08:01:00Z'))).conversationIds, ['next']);
+  await idle(state);
 });
