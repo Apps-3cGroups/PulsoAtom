@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSummaryLanes } from '../src/services/summaryMap.js';
+import { buildSummaryLanes, compactDaySlots, groupCompactDay, compactMarks } from '../src/services/summaryMap.js';
 import { resolveSummaryRange, summaryDayWindow } from '../src/services/summaryDates.js';
 
 test('a dense month preserves every conversation once, including last-day and pending cases', () => {
@@ -20,4 +20,32 @@ test('a dense month preserves every conversation once, including last-day and pe
   assert.deepEqual(conversations, original);
   assert.ok(groups.every(g => g.agents.every(a => a.byDay[days.at(-1)].length === 5)));
   assert.ok(groups[0].agents[0].byDay[days[0]][0].displayAt.endsWith('16:16:00Z'));
+});
+
+test('busy days group without losing or duplicating conversations; quiet days keep the same slot width', () => {
+  const slots = compactDaySlots(1080, 30);
+  assert.equal(slots, 3);
+  const conversations = Array.from({ length: 391 }, (_, i) => ({ id: String(i) }));
+  const groups = groupCompactDay(conversations, slots);
+  assert.equal(groups.length, slots);
+  assert.deepEqual(groups.flat(), conversations);
+  assert.ok(Math.max(...groups.map(g => g.length)) - Math.min(...groups.map(g => g.length)) <= 1);
+  assert.deepEqual(groupCompactDay(conversations.slice(0, 2), slots), [[conversations[0]], [conversations[1]]]);
+  assert.deepEqual(groupCompactDay([], slots), []);
+  assert.equal(compactDaySlots(250, 30), 1);
+});
+
+test('a grouped cell preserves every visible symbol, including rare human and refuted flags', () => {
+  const conversations = [
+    { marks: [{ id: 'a', name: 'Crítico', classification: 'critical', effective: true }] },
+    { marks: [{ id: 'b', name: 'Humano', classification: 'normal', kind: 'human', origin: 'human', effective: true }] },
+    { marks: [{ id: 'c', name: 'Refutado', classification: 'critical', kind: 'refuted', effective: false }] },
+    { marks: [{ id: 'd', name: 'Positivo', classification: 'positive', effective: true }] },
+  ];
+  const filters = { visible: ['critical', 'normal', 'positive', 'refuted', 'human'], classification: 'all' };
+  assert.deepEqual(compactMarks(conversations, filters).kinds, ['critical', 'normal', 'refuted', 'human', 'positive']);
+  assert.deepEqual(compactMarks(conversations, { ...filters, variable: 'c' }).kinds, ['refuted']);
+  assert.deepEqual(compactMarks(conversations, { ...filters, visible: ['human'] }).kinds, ['human']);
+  assert.deepEqual(compactMarks(conversations, { ...filters, classification: 'positive' }).kinds, ['positive']);
+  assert.deepEqual(compactMarks(conversations, { ...filters, visible: [] }).kinds, []);
 });
