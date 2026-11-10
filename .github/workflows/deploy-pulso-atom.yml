@@ -419,8 +419,14 @@ jobs:
           WEB_APP="__PM2_WEB_APP__"
           TOKEN_FILE="${1:-}"
           ASKPASS=""
+          MONITOR_BACKUP=""
 
           cleanup() {
+            if [ -n "${MONITOR_BACKUP:-}" ] && [ -d "$MONITOR_BACKUP/monitor-evaluaciones" ]; then
+              mkdir -p "$WEB/dist"
+              cp -a "$MONITOR_BACKUP/monitor-evaluaciones" "$WEB/dist/"
+              rm -rf "$MONITOR_BACKUP"
+            fi
             if [ -n "${ASKPASS:-}" ] && [ -f "$ASKPASS" ]; then
               rm -f "$ASKPASS"
             fi
@@ -439,7 +445,7 @@ jobs:
           echo "Deploy target: $(hostname)"
           echo "Deploy user: $(id -un)"
           echo "Repository: $REPO"
-          echo "Database scripts: skipped by design."
+          echo "Database scripts: versioned additive migrations."
 
           [ "$(id -un)" = "td" ] || fail "Remote deploy must run as td."
           [ -n "$TOKEN_FILE" ] || fail "Token file argument is required."
@@ -493,7 +499,14 @@ jobs:
           npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
 
           echo "Building web"
+          if [ -d "$WEB/dist/monitor-evaluaciones" ]; then
+            MONITOR_BACKUP="$(mktemp -d /tmp/pulso-monitor-backup.XXXXXX)"
+            cp -a "$WEB/dist/monitor-evaluaciones" "$MONITOR_BACKUP/"
+          fi
           npm run build --prefix "$WEB"
+          if [ -n "$MONITOR_BACKUP" ]; then
+            cp -a "$MONITOR_BACKUP/monitor-evaluaciones" "$WEB/dist/"
+          fi
 
           echo "Restarting PM2 targets"
           export PM2_HOME=/home/td/.pm2
