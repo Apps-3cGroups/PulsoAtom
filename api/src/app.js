@@ -1,3 +1,4 @@
+import { sendNavigationJson } from './navigation-response.js';
 import { activeReason, publicOneOffRuns } from './one-off-evaluations.js';
 import express from 'express';
 import helmet from 'helmet';
@@ -54,6 +55,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = (fresh = false) => store.readWithConversations ? store.readWithConversations({ fresh }) : store.read();
+  const authenticationTransaction = fn => store.authenticationTransaction ? store.authenticationTransaction(fn) : store.transaction(fn);
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
@@ -98,7 +100,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: config.secureCookie, path: basePath, maxAge: config.sessionHours * 3600000 };
   async function signIn(req, res, user) {
     const token = newToken();
-    await store.transaction(state => {
+    await authenticationTransaction(state => {
       state.sessions = state.sessions.filter(s => Date.parse(s.expiresAt) > Date.now() && s.id !== req.sessionId);
       state.sessions.push({ id: tokenHash(token), userId: user.id, expiresAt: new Date(Date.now() + cookieOptions.maxAge).toISOString() });
     });
@@ -121,7 +123,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       if (!source || !matchesSomos3cPassword(source.passwordHash, input.password)) throw new AppError(401, 'Usuario o contraseña incorrectos.', 'INVALID_CREDENTIALS');
       if (!source.active || source.blocked) throw new AppError(403, 'La cuenta de origen está inactiva o bloqueada.', 'SOURCE_ACCOUNT_BLOCKED');
       if (source.changeRequired) throw new AppError(403, 'Debes actualizar tu contraseña en el portal de origen antes de entrar a Pulso.', 'PASSWORD_CHANGE_REQUIRED');
-      const user = await store.transaction(state => {
+      const user = await authenticationTransaction(state => {
         const id = externalUserId(source.id);
         let current = state.users.find(item => item.id === id);
         const sourceAdmin = source.sourceRoles.includes('super_admin');
@@ -137,14 +139,14 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       return signIn(req, res, user);
     }
     const input = loginSchema.parse(req.body);
-    const state = await store.read();
-    const user = state.users.find(u => u.email.toLowerCase() === input.email.toLowerCase() && u.active);
+    const candidate = store.readUserByEmail ? await store.readUserByEmail(input.email) : (await store.read()).users.find(u => u.email.toLowerCase() === input.email.toLowerCase());
+    const user = candidate?.active ? candidate : null;
     if (!verifyPassword(input.password, user?.passwordHash)) throw new AppError(401, 'Correo o contraseña incorrectos.', 'INVALID_CREDENTIALS');
     await signIn(req, res, user);
   });
   app.get(`${prefix}/auth/me`, requireUser, (req, res) => res.json({ user: req.user, mode: config.demo ? 'demo' : 'real' }));
   app.post(`${prefix}/auth/logout`, async (req, res) => {
-    if (req.sessionId) await store.transaction(state => { state.sessions = state.sessions.filter(s => s.id !== req.sessionId); return null; });
+    if (req.sessionId) await authenticationTransaction(state => { state.sessions = state.sessions.filter(s => s.id !== req.sessionId); return null; });
     res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
@@ -285,7 +287,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       .map(c => ({ ...c, activeReason: reasons.get(c.id) }));
     const ids = new Set(items.map(c => c.id));
     await expose(state, req.user.id, state.conversations.filter(c => ids.has(c.id)), query.modelProfileId);
-    res.json({ items, total: conversations.length, metrics: summarize(conversations),
+    await sendNavigationJson(req, res, { items, total: conversations.length, metrics: summarize(conversations),
       pending: conversations.filter(c => c.evaluationStatus !== 'evaluated' || c.sourceChanged).length,
       page: query.page, pageSize: query.pageSize, runs: publicOneOffRuns(state) });
   });
@@ -297,7 +299,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const visibleIds = new Set(conversations.map(c => c.id));
     await expose(state, req.user.id, state.conversations.filter(c => visibleIds.has(c.id)), query.modelProfileId);
     const priority = conversations.filter(c => c.p1 || c.p2).sort(priorityOrder);
-    res.json({ metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
+    await sendNavigationJson(req, res, { metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
   });
   const list = (search = false) => async (req, res) => {
     const query = listQuerySchema.parse(req.query);

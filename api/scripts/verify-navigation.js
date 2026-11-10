@@ -15,10 +15,12 @@ const base = new MysqlStore(databaseConfig()), reader = new AtomReader(atomDatab
 const store = new AtomHistoryStore(base, reader), connection = await base.pool.getConnection();
 let failures = 0;
 try {
+ await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
  await connection.beginTransaction();
  const [full, source] = await Promise.all([base.load(connection), reader.fetch()]);
  const frozenConnection = new Proxy(connection, { get(target, name) {
   if (['beginTransaction','commit','rollback','release'].includes(name)) return async () => {};
+  if (name === 'query') return (sql, ...args) => sql === 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ' ? Promise.resolve([[]]) : target.query(sql, ...args);
   return typeof target[name] === 'function' ? target[name].bind(target) : target[name];
  }});
  const scoped = Object.create(MysqlStore.prototype);

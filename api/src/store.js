@@ -112,6 +112,11 @@ export class MysqlStore {
     const [users] = await this.pool.execute('SELECT payload FROM users WHERE id = ?', [session.userId]);
     return { sessions: [session], users: users.map(row => decode(row.payload)) };
   }
+  async readUserByEmail(email) {
+    const [rows] = await this.pool.execute('SELECT payload FROM users WHERE email = ?', [email.toLowerCase()]);
+    return rows[0] && decode(rows[0].payload);
+  }
+  async authenticationTransaction(fn) { return this.transaction(fn, ['users', 'sessions']); }
   async readSchedulerState() {
     const [jobs, settings, policies] = await Promise.all([
       this.pool.query('SELECT payload FROM evaluation_jobs ORDER BY sequence_id'),
@@ -129,6 +134,7 @@ export class MysqlStore {
     }
     const connection = await this.pool.getConnection();
     try {
+      await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       await connection.beginTransaction();
       const state = emptyState();
       const read = async (key, column, ids) => {
@@ -196,9 +202,10 @@ export class MysqlStore {
         batch.filter(item => !existing.has(item.id)).map(item => [item.id, JSON.stringify(item)]));
     }
   }
-  async load(connection) {
+  async load(connection, keys = Object.keys(tables)) {
     const state = emptyState();
-    for (const [key, table] of Object.entries(tables)) {
+    for (const key of keys) {
+      const table = tables[key];
       const [rows] = await connection.query(`SELECT payload FROM ${table} ORDER BY sequence_id`);
       state[key] = rows.map(row => decode(row.payload));
     }
@@ -215,15 +222,16 @@ export class MysqlStore {
     } catch (error) { await connection.rollback(); throw error; }
     finally { connection.release(); }
   }
-  async transaction(fn) {
+  async transaction(fn, keys = Object.keys(tables)) {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
       await connection.query('SELECT id FROM app_lock WHERE id = 1 FOR UPDATE');
-      const previous = await this.load(connection);
+      const previous = await this.load(connection, keys);
       const draft = structuredClone(previous);
       const result = await fn(draft);
-      for (const [key, table] of Object.entries(tables)) {
+      for (const key of keys) {
+        const table = tables[key];
         const before = new Map(previous[key].map(item => [item.id, JSON.stringify(item)]));
         const after = new Set(draft[key].map(item => item.id));
         for (const item of draft[key]) {
@@ -248,6 +256,8 @@ export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
   async readAuthentication(id) { return this.base.readAuthentication ? this.base.readAuthentication(id) : this.base.read(); }
+  async readUserByEmail(email) { return this.base.readUserByEmail ? this.base.readUserByEmail(email) : (await this.base.read()).users.find(u => u.email.toLowerCase() === email.toLowerCase()); }
+  async authenticationTransaction(fn) { return this.base.authenticationTransaction ? this.base.authenticationTransaction(fn) : this.base.transaction(fn); }
   async readSchedulerState() { return this.base.readSchedulerState ? this.base.readSchedulerState() : this.base.read(); }
   async recordExposures(exposures) {
     if (this.base.recordExposures) return this.base.recordExposures(exposures);

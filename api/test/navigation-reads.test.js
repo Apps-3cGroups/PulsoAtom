@@ -99,3 +99,28 @@ test('exposure recording skips existing records and preserves the original audit
  await store.recordExposures([{id:'old',createdAt:'later'},{id:'new',createdAt:'later'}]);
  assert.equal(inserted,1);assert.equal(existing.get('old').createdAt,'original');assert.equal(existing.get('new').createdAt,'now');
 });
+
+test('large navigation responses use negotiated gzip without changing JSON; other clients receive JSON',async()=>{
+ const {sendNavigationJson}=await import('../src/navigation-response.js');const {gunzipSync}=await import('node:zlib');
+ const value={items:Array.from({length:50},(_,i)=>({id:String(i),label:'Conversación con revisión humana'}))};
+ for(const accepted of ['gzip','identity',null]){
+  const headers={};let body;
+  const req={get:()=>accepted,acceptsEncodings:()=>accepted};
+  const res={vary:()=>res,set:(k,v)=>{headers[k]=v;return res;},type:()=>res,send:v=>{body=v;},json:v=>{body=v;}};
+  await sendNavigationJson(req,res,value);
+  assert.equal(headers['Cache-Control'],'private, no-store');
+  if(accepted==='gzip'){assert.equal(headers['Content-Encoding'],'gzip');assert.deepEqual(JSON.parse(gunzipSync(body).toString()),value);assert.ok(body.length<JSON.stringify(value).length/2);}
+  else{assert.equal(headers['Content-Encoding'],undefined);assert.deepEqual(body,value);}
+ }
+});
+
+test('login session updates keep the shared write lock but never load evaluator tables',async()=>{
+ const calls=[];const connection={beginTransaction:async()=>{},commit:async()=>{},rollback:async()=>{},release:()=>{},
+  query:async(sql)=>{calls.push(sql);if(sql.includes('FROM sessions'))return[[{payload:{id:'old',userId:'u'}}]];return[[]];},
+  execute:async(sql)=>{calls.push(sql);return[{}];}};
+ const store=Object.create(MysqlStore.prototype);store.pool={getConnection:async()=>connection};
+ await store.authenticationTransaction(state=>{state.sessions=[{id:'new',userId:'u'}];return true;});
+ assert.ok(calls.some(sql=>sql.includes('app_lock')&&sql.includes('FOR UPDATE')));
+ assert.ok(calls.some(sql=>sql.startsWith('INSERT INTO sessions')));assert.ok(calls.some(sql=>sql.startsWith('DELETE FROM sessions')));
+ assert.ok(calls.every(sql=>!sql.includes('evaluations')&&!sql.includes('evaluation_tasks')&&!sql.includes('evaluation_attempts')));
+});
