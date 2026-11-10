@@ -1,6 +1,7 @@
+import { conversationLink } from '../services/conversationNavigation';
 import { selectedCountries, selectedFigures, filterSummaryConversations, summaryMetrics } from '../services/summaryFilters';
 import { useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, ConfigProvider, Select, Tooltip } from 'antd';
 import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
@@ -26,6 +27,7 @@ const variableOptions = catalog => [
 export default function Summary() {
   const { bootstrap } = usePortal();
   const navigate = useNavigate();
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const mapRef = useRef(null);
   const countries = selectedCountries(params, bootstrap.countries);
@@ -59,7 +61,7 @@ export default function Summary() {
       return next;
     }, { replace: true });
   };
-  const open = c => navigate(`/conversacion/${encodeURIComponent(c.id)}`);
+  const open = c => navigate(conversationLink(c.id, `${location.pathname}${location.search}`));
   const openHistory = code => navigate(`/historico?${queryString({ from, to, country: code, dateBasis: 'activity' })}`);
   const toggle = kind => patchFilters({ figures: (visible.includes(kind) ? visible.filter(v => v !== kind) : [...visible, kind]).join(',') });
   const filtered = useMemo(() => filterSummaryConversations(current?.conversations || [], visible, variable), [current, visible.join(','), variable]);
