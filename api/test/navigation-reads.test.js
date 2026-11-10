@@ -70,3 +70,32 @@ test('scheduler and health retain persisted model policy without loading evaluat
  const state=await store.readSchedulerState();assert.equal(state.modelPolicies[0].id,'policy');
  assert.ok(calls.every(sql=>!sql.includes('evaluation_tasks')&&!sql.includes('FROM evaluations')&&!sql.includes('evaluation_attempts')));
 });
+
+test('derived summary cache invalidates reviews, model output and source and keeps URL fields out', async () => {
+ const {enableNavigationSummaryCache} = await import('../src/navigation-cache.js');
+ const {conversationView,filteredConversations} = await import('../src/domain.js');
+ const state=createState(true), cache=new Map();const c=state.conversations[0];
+ const check=()=>{enableNavigationSummaryCache(state,cache);return conversationView(state,c);};
+ const first=check();const match=check();assert.deepEqual(match,first);
+ filteredConversations(state,{q:c.client.name,dateBasis:'activity'});
+ assert.equal(check().excerpt,undefined);assert.equal(check().displayDate,undefined);
+ const evaluation=state.evaluations.find(e=>e.id===c.evaluationId);evaluation.sourceHash=sourceFingerprint(c);
+ assert.equal(check().sourceChanged,false);c.messages[0].text+=' change';assert.equal(check().sourceChanged,true);
+ const variable=evaluation.results.find(r=>state.catalogVersions.some(v=>v.itemId===r.variableId&&v.version===1&&v.snapshot.type==='Flag')).variableId;
+ state.reviews.push({id:'review',conversationId:c.id,evaluationId:evaluation.id,variableId:variable,action:'levantar',createdAt:'2026-11-10T12:00:00Z'});
+ assert.ok(check().human>first.human);
+ const result=evaluation.results.find(r=>r.variableId===variable);result.error={code:'AI_INCOMPLETE'};
+ assert.ok(check().evaluationErrors>0);
+});
+
+test('exposure recording skips existing records and preserves the original audit row',async()=>{
+ const store=Object.create(MysqlStore.prototype);const existing=new Map([['old',{id:'old',createdAt:'original'}]]);let inserted=0;
+ store.pool={execute:async(sql,values)=>{
+  if(sql.startsWith('SELECT id'))return[[...existing.keys()].filter(id=>values.includes(id)).map(id=>({id}))];
+  for(let i=0;i<values.length;i+=2){if(!existing.has(values[i])){existing.set(values[i],JSON.parse(values[i+1]));inserted++;}}
+  return[{}];
+ }};
+ await store.recordExposures([{id:'old',createdAt:'new'},{id:'new',createdAt:'now'}]);
+ await store.recordExposures([{id:'old',createdAt:'later'},{id:'new',createdAt:'later'}]);
+ assert.equal(inserted,1);assert.equal(existing.get('old').createdAt,'original');assert.equal(existing.get('new').createdAt,'now');
+});

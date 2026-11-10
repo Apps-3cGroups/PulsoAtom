@@ -5,6 +5,7 @@ import { createState } from './data/seed.js';
 import { missingDatabase } from './errors.js';
 import { copySourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { migrateCatalogV5 } from './catalog-v5.js';
+import { enableNavigationSummaryCache } from './navigation-cache.js';
 
 export class DemoStore {
   constructor(filename) { this.filename = filename; this.queue = Promise.resolve(); }
@@ -154,6 +155,7 @@ export class MysqlStore {
               const revisions = new Map(missing.map(row => [row.id, row]));
               for (const row of fresh) {
                 const value = decode(row.payload), bytes = Buffer.byteLength(JSON.stringify(value));
+                this.navigationRevisions ||= new WeakMap(); this.navigationRevisions.set(value, revisions.get(row.id).revision);
                 values.set(row.id, value);
                 const id = cacheKey(revisions.get(row.id));
                 if (!this.navigationCache.has(id)) { this.navigationCache.set(id, { value, bytes }); this.navigationCacheBytes += bytes; }
@@ -185,8 +187,14 @@ export class MysqlStore {
     finally { connection.release(); }
   }
   async recordExposures(exposures) {
-    await insertRows(this.pool, 'INSERT IGNORE INTO evaluation_exposures (id, payload)',
-      exposures.map(item => [item.id, JSON.stringify(item)]));
+    const unique = [...new Map(exposures.map(item => [item.id, item])).values()];
+    for (let offset = 0; offset < unique.length; offset += 10000) {
+      const batch = unique.slice(offset, offset + 10000);
+      const [rows] = await this.pool.execute(`SELECT id FROM evaluation_exposures WHERE id IN (${batch.map(() => '?').join(',')})`, batch.map(item => item.id));
+      const existing = new Set(rows.map(row => row.id));
+      await insertRows(this.pool, 'INSERT IGNORE INTO evaluation_exposures (id, payload)',
+        batch.filter(item => !existing.has(item.id)).map(item => [item.id, JSON.stringify(item)]));
+    }
   }
   async load(connection) {
     const state = emptyState();
@@ -258,7 +266,10 @@ export class AtomHistoryStore {
     const evaluatedIds = new Set(state.evaluations.map(e => e.conversationId));
     source.conversations = await this.reader.hydrateOverview(source.conversations, evaluatedIds);
     if (activeOnly) state.jobs = [...new Map([...state.jobs, ...scheduling.jobs].map(j => [j.id, j])).values()];
-    return this.attach(state, source);
+    const attached = this.attach(state, source);
+    this.navigationViewCache ||= new Map();
+    enableNavigationSummaryCache(attached, this.navigationViewCache, this.base.navigationRevisions);
+    return attached;
   }
   async readIngestionSnapshot(run) { return this.reader.readIngestionSnapshot(run); }
   async readWithConversations({ fresh = false, conversationIds } = {}) {
