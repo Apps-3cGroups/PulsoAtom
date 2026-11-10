@@ -486,6 +486,9 @@ jobs:
           echo "Installing API dependencies"
           npm ci --prefix "$API" --omit=dev --ignore-scripts --no-audit --no-fund
 
+          echo "Applying additive API migrations"
+          npm run db:migrate --prefix "$API"
+
           echo "Installing web dependencies"
           npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
 

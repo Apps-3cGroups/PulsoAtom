@@ -1,3 +1,4 @@
+import { validateOneOffRequest } from './one-off-evaluations.js';
 import { needsEvaluation, currentEvaluation } from './source-state.js';
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
@@ -130,7 +131,8 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     || !options.maintenanceId || state.settings.evaluationMaintenance !== options.maintenanceId)) {
     throw new AppError(422, 'Los lotes ampliados requieren un mantenimiento explícito y coincidente.', 'INVALID_LARGE_BATCH');
   }
-  const limit = purpose === 'comparison' ? 20 : options.largeBatch ? 500 : 100;
+  if (options.oneOffRun) validateOneOffRequest(state, options);
+  const limit = purpose === 'comparison' ? 20 : options.oneOffRun ? 400 : options.largeBatch ? 500 : 100;
   if (options.max != null && (!Number.isInteger(options.max) || options.max < 1 || options.max > limit)) throw new AppError(422, `El máximo de esta ejecución es ${limit} conversaciones.`, 'INVALID_BATCH_SIZE');
   const requestHash = digest({ ...options, onProgress: undefined, author: undefined });
   if (options.idempotencyKey) {
@@ -155,6 +157,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   if (fallback && fallback.provider === profiles[0].provider && fallback.model === profiles[0].model) throw new AppError(422, 'El respaldo debe ser un modelo diferente.', 'DUPLICATE_MODEL');
   const pendingOnly = purpose === 'comparison' ? false : options.pendingOnly !== false;
   const candidates = pickCandidates(state, { ...options, pendingOnly });
+  if (options.oneOffRun) validateOneOffRequest(state, options, candidates);
   if (!candidates.length && purpose === 'comparison') throw new AppError(422, 'No hay conversaciones disponibles con estos filtros.', 'EMPTY_SAMPLE');
   // Record the first empty run, then keep checking for delayed Atom imports
   // without creating empty jobs every minute. Every new case gets both models.
@@ -166,6 +169,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   const job = { id: randomUUID(), purpose, status: 'running', scope: options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
     ...(options.dailyActivity ? { dailyActivity: options.dailyActivity, countries: options.countries,
       conversationCountries: Object.fromEntries(candidates.map(c => [c.id, c.country])), limitPerCountry: options.limitPerCountry ?? null } : {}),
+    ...(options.oneOffRun ? { oneOffRun: structuredClone(options.oneOffRun) } : {}),
     sourceJobId: options.sourceJobId || null, scheduleDate: options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
     total: candidates.length * profiles.length, caseCount: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
     modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', executionOrder, concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
@@ -192,6 +196,10 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     } else if (options.scheduleDate) {
       if (!draft.settings.dailyEnabled || draft.settings.dailyStartedAt !== options.sourceChangedAfter) throw new AppError(409, 'La programación diaria cambió.', 'SCHEDULE_CHANGED');
       if (draft.jobs.some(j => j.scheduleDate === options.scheduleDate)) throw new AppError(409, 'La ejecución diaria ya se inició.', 'DAILY_ALREADY_STARTED');
+    }
+    if (options.oneOffRun) {
+      const run = validateOneOffRequest(draft, options, candidates);
+      Object.assign(run, { status: 'running', reason: null, jobId: job.id, manifest: structuredClone(options.oneOffRun.manifest), startedAt: job.createdAt });
     }
     if (draft.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
     draft.jobs.push(job); draft.tasks.push(...tasks);

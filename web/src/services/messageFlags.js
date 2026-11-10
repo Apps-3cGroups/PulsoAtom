@@ -70,7 +70,7 @@ export function filterMessageRows(messages = [], index, { onlyMarked = false, va
 export function groupFlagOptions(variables = []) {
   const groups = [
     { key: 'critical', label: 'Flag crítico' },
-    { key: 'normal', label: 'Flag normal' },
+    { key: 'normal', label: 'Flag menor' },
     { key: 'positive', label: '+ Positivo' },
     { key: 'refuted', label: 'Refutados' },
   ];

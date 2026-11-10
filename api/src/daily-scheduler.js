@@ -1,3 +1,4 @@
+import { runOneOffTick } from './one-off-scheduler.js';
 import { startEvaluationBatch, recoverEvaluationJobs, resumeEvaluationBatch } from './evaluation-service.js';
 import { asRegistry } from './model-registry.js';
 import { DAILY_ACTIVITY_MODE, dailyActivityRequest } from './daily-activity.js';
@@ -61,7 +62,7 @@ export function startDailyScheduler(store, evaluator) {
   const tick = async () => {
     if (busy) return;
     busy = true;
-    try { await runDailyTick(store, evaluator); } catch (error) {
+    try { if (!await runOneOffTick(store, evaluator)) await runDailyTick(store, evaluator); } catch (error) {
       if (!['DAILY_ALREADY_STARTED', 'EVALUATION_RUNNING', 'SCHEDULE_CHANGED'].includes(error.code)) {
         console.error('Error al iniciar evaluación diaria de Pulso:', error.code || error.name);
       }

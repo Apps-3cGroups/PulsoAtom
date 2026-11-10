@@ -1,3 +1,4 @@
+import { activeReason, publicOneOffRuns } from './one-off-evaluations.js';
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -266,6 +267,21 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     }).filter(Boolean);
     if (evaluations.length) await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
   };
+  app.get(`${prefix}/active`, async (req, res) => {
+    const query = listQuerySchema.parse({ ...req.query, pageSize: req.query.pageSize || 12 });
+    if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
+    const state = await readHistory();
+    const reasons = new Map(state.conversations.map(c => [c.id, activeReason(c, state.settings)]));
+    const active = { ...state, conversations: state.conversations.filter(c => reasons.get(c.id)) };
+    const conversations = filteredConversations(active, query).sort(priorityOrder);
+    const items = conversations.slice((query.page - 1) * query.pageSize, query.page * query.pageSize)
+      .map(c => ({ ...c, activeReason: reasons.get(c.id) }));
+    const ids = new Set(items.map(c => c.id));
+    await expose(state, req.user.id, state.conversations.filter(c => ids.has(c.id)), query.modelProfileId);
+    res.json({ items, total: conversations.length, metrics: summarize(conversations),
+      pending: conversations.filter(c => c.evaluationStatus !== 'evaluated' || c.sourceChanged).length,
+      page: query.page, pageSize: query.pageSize, runs: publicOneOffRuns(state) });
+  });
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');

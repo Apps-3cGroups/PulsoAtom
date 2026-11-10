@@ -6,7 +6,7 @@ import { compactDaySlots, groupCompactDay, compactMarks } from '../services/summ
 import { classificationOf, dualMarks, evaluationStatus, evaluationStatusLabel } from '../services/flags';
 import './CompactSummaryMap.css';
 
-const labels = { critical: 'Crítico', normal: 'Normal', refuted: 'Refutado', human: 'Humano', positive: 'Positivo' };
+const labels = { critical: 'Crítico', normal: 'Menor', refuted: 'Refutado', human: 'Humano', positive: 'Positivo' };
 
 export default function CompactSummaryMap({ groups, days, visible, variable, classification, onOpen, onHistory }) {
   const map = useRef(null), timeline = useRef(null);
