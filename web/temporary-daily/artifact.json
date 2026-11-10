@@ -1,0 +1,29 @@
+{
+  "format": "pulso-daily-monitor-v1",
+  "files": [
+    {
+      "path": "assets/bricolage-grotesque-latin-600-normal-nxTgbNFE.woff2",
+      "sha256": "b34fc8c1ef0ac8798455ac2979eae4b4f90f0d327e3584d1032fa77a8a9a66ca"
+    },
+    {
+      "path": "assets/index-2Ou8_vt_.js",
+      "sha256": "e988c00441b2b0ed7e37426c4a9185be996650cef9e2242200423c00f85d48b0"
+    },
+    {
+      "path": "assets/index-DpltSnC9.css",
+      "sha256": "504cb88fcc4dcf5433d4f951fd74cd724af864e7c314bba5ec3fa2fd0e9deccf"
+    },
+    {
+      "path": "assets/instrument-sans-latin-400-normal-DRC__1Mx.woff2",
+      "sha256": "9a91efaa3599a6ef01b2f49e9ec670e3a2f39baeef09c73198f1052cf3bb0850"
+    },
+    {
+      "path": "assets/instrument-sans-latin-600-normal-B7fBEWYG.woff2",
+      "sha256": "efb770916eda95a0e31d80cccde9651d4e8617010b21220e9f227c4820d675da"
+    },
+    {
+      "path": "index.html",
+      "sha256": "6e381f6f18a805ac58e8e66d72102389f3dbc9c6abe687aa8831d2409aacbb97"
+    }
+  ]
+}
