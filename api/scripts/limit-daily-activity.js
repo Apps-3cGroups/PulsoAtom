@@ -1,6 +1,5 @@
 import { config, databaseConfig, atomDatabaseConfig } from '../src/config.js';
-import { AtomHistoryStore, MysqlStore } from '../src/store.js';
-import { AtomReader } from '../src/atom.js';
+import { DailyLimitStore } from '../src/daily-limit-store.js';
 import { prepareDailyLimit, applyDailyLimit } from '../src/daily-limit.js';
 import { AppError } from '../src/errors.js';
 
@@ -12,7 +11,7 @@ try {
     throw new AppError(422, 'Usa --prepare YYYY-MM-DD VERSION o --apply UUID VERSION.', 'INVALID_ARGUMENTS');
   }
   if (config.demo || !databaseConfig() || !atomDatabaseConfig()) throw new AppError(409, 'Se requiere el origen real.', 'REAL_MODE_REQUIRED');
-  store = new AtomHistoryStore(new MysqlStore(databaseConfig()), new AtomReader(atomDatabaseConfig(), config.timezone));
+  store = new DailyLimitStore(databaseConfig(), atomDatabaseConfig());
   const result = operation === '--prepare'
     ? await prepareDailyLimit(store, { activityDate: target, expectedVersion: Number(version) })
     : await applyDailyLimit(store, { requestId: target, expectedVersion: Number(version) });
