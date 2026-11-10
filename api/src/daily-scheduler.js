@@ -21,7 +21,7 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
   if (!manualRun && clock.time < settings.dailyTime) return null;
   if (settings.dailyMode === DAILY_ACTIVITY_MODE) {
     if (!manualRun && clock.date < settings.dailyStartDate) return null;
-    const options = dailyActivityRequest(settings, clock.date);
+    const options = dailyActivityRequest(settings, settings.dailyCatchupRunDate || clock.date);
     for (const id of options.modelIds) registry.resolve(id);
     await recoverEvaluationJobs(store);
     const current = await store.read();
@@ -29,7 +29,7 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
     const interrupted = current.jobs.find(job => job.dailyActivity?.configurationHash === options.dailyActivity.configurationHash && job.status === 'interrupted' && !job.dailyResumeError);
     let execution;
     try {
-      execution = interrupted ? await resumeEvaluationBatch(store, evaluator, interrupted.id)
+      execution = interrupted ? await resumeEvaluationBatch(store, evaluator, interrupted.id, { unfinishedOnly: !!interrupted.dailyLimitAdjustment })
         : await startEvaluationBatch(store, evaluator, options);
     } catch (error) {
       if (interrupted && ['SOURCE_CHANGED', 'CATALOG_CHANGED', 'PROMPT_CHANGED', 'MODEL_CHANGED', 'SUPERSEDED_JOB'].includes(error.code)) {
@@ -42,6 +42,9 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
       throw error;
     }
     const { job, completion } = execution;
+    if (!job && settings.dailyCatchupRunDate) await store.transaction(draft => {
+      if (draft.settings.dailyCatchupRunDate === settings.dailyCatchupRunDate) delete draft.settings.dailyCatchupRunDate;
+    });
     completion.catch(error => console.error('Error en evaluación diaria de Pulso:', error.code || error.name));
     return job;
   }
