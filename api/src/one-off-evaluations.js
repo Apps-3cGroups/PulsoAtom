@@ -35,6 +35,8 @@ export function validateOneOffRequest(state, options, candidates) {
   const request = options.oneOffRun;
   const run = oneOffRuns(state.settings).find(r => r.id === request?.id);
   const invalid = () => { throw new AppError(409, 'La corrida excepcional cambió o su selección no es válida.', 'ONE_OFF_CHANGED'); };
+  const currentTime = (options.oneOffClock || (() => new Date()))().toISOString();
+  if (run && currentTime >= run.expiresAt) throw new AppError(409, 'La jornada terminó antes de que pudiera iniciar.', 'ONE_OFF_EXPIRED');
   if (!run?.enabled || !request.requestedAt || request.requestedAt < run.notBefore || request.requestedAt >= run.expiresAt
     || options.purpose && options.purpose !== 'operational' || options.dailyActivity || options.scheduleDate || options.largeBatch
     || options.pendingOnly !== false || options.includeOpen !== true || options.executionOrder !== 'model-first'

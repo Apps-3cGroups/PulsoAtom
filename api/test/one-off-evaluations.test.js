@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { fridayRun, activeReason, selectOneOffConversations, ingestionReadiness } from '../src/one-off-evaluations.js';
-import { runOneOffTick } from '../src/one-off-scheduler.js';
+import { runOneOffTick as tick } from '../src/one-off-scheduler.js';
 import { listQuerySchema, filteredConversations } from '../src/domain.js';
 const when = value => new Date(`2026-11-13T${value}Z`);
+const runOneOffTick = (store, registry, at, operations = {}) => tick(store, registry, at, { now: () => at, ...operations });
 const chat = (id, country = 'HN') => ({ id, country, sourceDocumentId: `doc-${id}`, ingestionBatchId: country, ingestionStartedAt: '2026-11-13T16:00:00.000Z',
   sourceState: 'CERRADO', completed: true, sourceClosedAt: '2026-11-12T12:00:00.000Z', activityAt: '2026-11-12T12:00:00.000Z',
   date: '2026-11-12', startedAt: '2026-11-12T12:00:00.000Z', lastActivityAt: '2026-11-12T12:00:00.000Z',
@@ -75,6 +76,11 @@ test('a restarted one-off job resumes pending work after midnight, never selects
   assert.equal(id, 'interrupted'); assert.equal(options.unfinishedOnly, true); resumed++; return { completion: Promise.resolve() };
  } });
  assert.equal(resumed, 1); assert.equal(state.jobs.length, 1);
+});
+test('a selection that reaches midnight while waiting for storage never starts', async () => {
+ const {state,store,registry,calls}=fixture();
+ await runOneOffTick(store,registry,when('23:59:00'),{now:()=>new Date(fridayRun.expiresAt)});
+ assert.equal(state.jobs.length,0);assert.equal(calls.length,0);assert.equal(state.settings.oneOffEvaluations[0].status,'not_started');
 });
 test('country multi selection and legacy single country return the same intended chats', () => {
  const { state } = fixture(); state.conversations.push(chat('mx', 'MX'));

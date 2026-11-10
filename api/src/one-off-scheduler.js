@@ -51,13 +51,15 @@ export async function runOneOffTick(store, evaluator, at = new Date(), operation
     }
     const options = { oneOffRun: { id: run.id, requestedAt: at.toISOString(), manifest: selected.map(c => ({ id: c.id, country: c.country, documentId: c.sourceDocumentId, batchId: c.ingestionBatchId })) },
       conversationIds: selected.map(c => c.id), modelIds: run.modelIds, max: selected.length, pendingOnly: false, includeOpen: true,
-      executionOrder: 'model-first', concurrency: run.concurrency, idempotencyKey: `one-off:${run.id}` };
+      executionOrder: 'model-first', concurrency: run.concurrency, idempotencyKey: `one-off:${run.id}`,
+      ...(operations.now ? { oneOffClock: operations.now } : {}) };
     try {
       const execution = await start(store, evaluator, options);
       execution.completion.catch(() => {});
       await updateRun(store, run.id, 'running');
     } catch (error) {
-      if (['EVALUATION_RUNNING', 'DUPLICATE_EXECUTION'].includes(error.code)) await updateRun(store, run.id, 'waiting_evaluation', 'El evaluador está ocupado. Se verificará nuevamente.');
+      if (error.code === 'ONE_OFF_EXPIRED') await updateRun(store, run.id, 'not_started', 'La jornada terminó antes de que pudiera iniciar.');
+      else if (['EVALUATION_RUNNING', 'DUPLICATE_EXECUTION'].includes(error.code)) await updateRun(store, run.id, 'waiting_evaluation', 'El evaluador está ocupado. Se verificará nuevamente.');
       else await updateRun(store, run.id, 'blocked', `No se pudo iniciar (${error.code || 'EVALUATION_FAILED'}). Revisa la carga y los modelos.`);
     }
     return true;
