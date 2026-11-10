@@ -2,7 +2,7 @@ import { startEvaluationBatch, recoverEvaluationJobs, resumeEvaluationBatch } fr
 import { oneOffRuns, ingestionReadiness, selectOneOffConversations } from './one-off-evaluations.js';
 
 async function updateRun(store, id, status, reason = null) {
-  const current = oneOffRuns((await store.read()).settings).find(r => r.id === id);
+  const current = oneOffRuns((await (store.readSchedulerState ? store.readSchedulerState() : store.read())).settings).find(r => r.id === id);
   if (!current || current.status === status && current.reason === reason) return;
   await store.transaction(state => {
     const run = oneOffRuns(state.settings).find(r => r.id === id);
@@ -12,7 +12,7 @@ async function updateRun(store, id, status, reason = null) {
 export async function runOneOffTick(store, evaluator, at = new Date(), operations = {}) {
   const start = operations.start || startEvaluationBatch, resume = operations.resume || resumeEvaluationBatch;
   await recoverEvaluationJobs(store);
-  const state = await store.read();
+  const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   for (const run of oneOffRuns(state.settings).filter(r => r.enabled)) {
     const job = state.jobs.find(j => j.oneOffRun?.id === run.id);
     if (job) {

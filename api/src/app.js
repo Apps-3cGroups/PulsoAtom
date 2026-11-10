@@ -13,7 +13,7 @@ import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
 import { registryFromEnv, asRegistry } from './model-registry.js';
 import { mountModelRoutes } from './model-routes.js';
-import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
+import { selectedEvaluation, evaluationSelectionContext, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { conversationDailyMetrics } from './daily-metrics.js';
@@ -74,14 +74,14 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   });
   app.get(`${prefix}/health`, async (_req, res) => {
     let storageReady = true, state;
-    try { state = await store.read(); } catch { storageReady = false; }
+    try { state = await (store.readSchedulerState ? store.readSchedulerState() : store.read()); } catch { storageReady = false; }
     res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: storageReady && status(state).ready });
   });
   app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
     const token = req.cookies[cookieName];
     if (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token)) {
-      const state = await store.read();
+      const state = store.readAuthentication ? await store.readAuthentication(tokenHash(token)) : await store.read();
       const session = state.sessions.find(s => s.id === tokenHash(token) && Date.parse(s.expiresAt) > Date.now());
       const user = session && state.users.find(u => u.id === session.userId && u.active);
       if (user) {
@@ -190,7 +190,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ grant });
   });
   app.get(`${prefix}/bootstrap`, async (_req, res) => {
-    const state = await readHistory();
+    const state = store.readBootstrap ? await store.readBootstrap() : await readHistory();
     const dates = state.conversations.map(c => c.date).sort();
     const activityDates = state.conversations.map(c => c.activityDate || c.date).sort();
     res.json({
@@ -256,8 +256,9 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ item });
   });
   const expose = async (state, userId, conversations, profileId) => {
+    const selection = evaluationSelectionContext(state);
     const evaluations = conversations.map(c => {
-      const e = selectedEvaluation(state, c, profileId);
+      const e = selectedEvaluation(state, c, profileId, selection);
       if (!e) return null;
       // Viewing a legacy prediction can bias a later review even when its original
       // input cannot be proven equivalent. Track exposure conservatively, without
@@ -265,12 +266,18 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       return e.sourceHash ? e : { ...e, sourceHash: sourceFingerprint(c),
         catalogVersions: e.catalogVersions.map(v => ({ ...v, active: e.results.some(r => r.variableId === v.id) })) };
     }).filter(Boolean);
-    if (evaluations.length) await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
+    if (evaluations.length) {
+      if (store.recordExposures) {
+        const exposureState = { ...state, exposures: [] };
+        evaluations.forEach(e => exposeEvaluation(exposureState, userId, e));
+        await store.recordExposures(exposureState.exposures);
+      } else await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
+    }
   };
   app.get(`${prefix}/active`, async (req, res) => {
     const query = listQuerySchema.parse({ ...req.query, pageSize: req.query.pageSize || 12 });
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
-    const state = await readHistory();
+    const state = store.readForNavigation ? await store.readForNavigation(query, { activeOnly: true }) : await readHistory();
     const reasons = new Map(state.conversations.map(c => [c.id, activeReason(c, state.settings)]));
     const active = { ...state, conversations: state.conversations.filter(c => reasons.get(c.id)) };
     const conversations = filteredConversations(active, query).sort(priorityOrder);
@@ -285,9 +292,10 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
-    const state = await readHistory();
+    const state = store.readForNavigation ? await store.readForNavigation(query) : await readHistory();
     const conversations = filteredConversations(state, query);
-    await expose(state, req.user.id, state.conversations.filter(c => conversations.some(v => v.id === c.id)), query.modelProfileId);
+    const visibleIds = new Set(conversations.map(c => c.id));
+    await expose(state, req.user.id, state.conversations.filter(c => visibleIds.has(c.id)), query.modelProfileId);
     const priority = conversations.filter(c => c.p1 || c.p2).sort(priorityOrder);
     res.json({ metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
   });

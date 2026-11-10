@@ -1,3 +1,6 @@
+import { digest, sourceFingerprint, rememberSourceFingerprint } from './evaluation-context.js';
+import { localMidnight, nextDate } from './overview-query.js';
+import { oneOffRuns } from './one-off-evaluations.js';
 import mysql from 'mysql2/promise';
 import { AppError } from './errors.js';
 
@@ -20,8 +23,10 @@ const optionalIso = value => {
   if (value == null || value === '') return null;
   try { return iso(value); } catch { return null; }
 };
+const dateFormats = new Map();
 const localDate = (value, timezone) => {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+  if (!dateFormats.has(timezone)) dateFormats.set(timezone, new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }));
+  const parts = dateFormats.get(timezone).formatToParts(new Date(value));
   const part = type => parts.find(item => item.type === type).value;
   return `${part('year')}-${part('month')}-${part('day')}`;
 };
@@ -61,10 +66,11 @@ export function mapAtomConversation(row, events, country, timezone) {
   // selection. Preserve the original start and message timestamps: changing a
   // display date must not invalidate saved model answers or their evidence.
   const latestMessageTime = messages.reduce((latest, message) => Math.max(latest, Date.parse(message.timestamp)), -Infinity);
-  const activityAt = lastActivityAt || (Number.isFinite(latestMessageTime) ? new Date(latestMessageTime).toISOString() : startedAt);
+  const activityAt = lastActivityAt || optionalIso(row.ResumenActividadUtc) || (Number.isFinite(latestMessageTime) ? new Date(latestMessageTime).toISOString() : startedAt);
   return {
     id: String(row.IdConversacion), sourceId: row.IdExternoAtom,
     sourceDocumentId: row.IdDocumentoVigente == null ? null : String(row.IdDocumentoVigente), demo: false,
+    sourceDocumentHash: row.DocumentoSha256 || null,
     sourceState: String(row.EstadoOrigen || '').trim().toUpperCase(), sourceClosedAt: optionalIso(row.FechaFinUtc),
     ingestionBatchId: row.IdLoteIngesta == null ? null : String(row.IdLoteIngesta),
     ingestionStartedAt: optionalIso(row.IngestaInicioUtc),
@@ -89,6 +95,7 @@ export class AtomReader {
     this.tables = Object.fromEntries(Object.entries(options.tables).map(([key, value]) => [key, mysql.escapeId(value)]));
     this.tables.batches ||= mysql.escapeId(options.tables.documents.includes('.') ? `${options.tables.documents.split('.')[0]}.tblLotesIngesta` : 'tblLotesIngesta');
     this.timezone = timezone;
+    this.overviewCache = new Map();
     this.cache = null;
     this.pending = null;
   }
@@ -101,7 +108,7 @@ export class AtomReader {
       const where = batch ? ` WHERE c.IdConversacion IN (${batch.map(() => '?').join(',')})` : '';
       const [countries] = await this.pool.query(`SELECT DISTINCT p.CodigoPais AS code, p.ISO_Code2 AS iso2, p.NombrePais AS name FROM ${p} p INNER JOIN ${c} c ON c.CodigoPais = p.CodigoPais INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO'${where} ORDER BY p.NombrePais`, batch);
       for (const country of countries) countryMap.set(String(country.code), country);
-      const [conversations] = await this.pool.query(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual, c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.FechaCreacionUtc, c.FechaActualizacionUtc, c.IdDocumentoVigente, c.EstadoOrigen, d.IdLoteIngesta, l.FechaInicioUtc AS IngestaInicioUtc, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' LEFT JOIN ${this.tables.batches} l ON l.IdLoteIngesta = d.IdLoteIngesta LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal${where} ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`, batch);
+      const [conversations] = await this.pool.query(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual, c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.FechaCreacionUtc, c.FechaActualizacionUtc, c.IdDocumentoVigente, c.EstadoOrigen, d.IdLoteIngesta, d.Sha256 AS DocumentoSha256, l.FechaInicioUtc AS IngestaInicioUtc, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' LEFT JOIN ${this.tables.batches} l ON l.IdLoteIngesta = d.IdLoteIngesta LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal${where} ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`, batch);
       rows.push(...conversations);
     }
     const countryRows = [...countryMap.values()];
@@ -125,6 +132,89 @@ export class AtomReader {
       return mapAtomConversation(row, byDocument.get(String(row.IdDocumentoVigente)) || [], country, this.timezone);
     });
     return { conversations, countries, loadedAt: new Date().toISOString() };
+  }
+  async readOverview(query = {}, { activeOnly = false, settings, now = new Date(), metadataOnly = false } = {}) {
+    const { conversations: c, documents: d, countries: p, agents: a, channels: ch, batches: b, events: e } = this.tables;
+    const where = [], values = [];
+    const countries = query.countries || (query.country ? [query.country] : []);
+    if (countries.length) { where.push(`p.ISO_Code2 IN (${countries.map(() => '?').join(',')})`); values.push(...countries); }
+    const dateColumn = query.dateBasis === 'started' ? 'c.FechaInicioUtc' : 'c.FechaUltimaActividadUtc';
+    // Null source dates retain their original message/start-date fallback; final
+    // domain filtering applies the exact same semantics as the legacy route.
+    if (query.from) { where.push(`(${dateColumn} >= ? OR ${dateColumn} IS NULL)`); values.push(localMidnight(query.from, this.timezone)); }
+    if (query.to) { where.push(`(${dateColumn} < ? OR ${dateColumn} IS NULL)`); values.push(localMidnight(nextDate(query.to), this.timezone)); }
+    if (query.agent) { where.push('c.IdAsesorActual = ?'); values.push(query.agent); }
+    if (activeOnly) {
+      const conditions = ["(c.FechaFinUtc IS NULL AND UPPER(TRIM(c.EstadoOrigen)) IN ('ABIERTO','REASIGNADO','REINGRESO'))"];
+      for (const run of oneOffRuns(settings).filter(r => r.enabled && now.toISOString() >= r.ingestionFrom && now.toISOString() < r.expiresAt)) {
+        conditions.push(`(l.FechaInicioUtc >= ? AND l.FechaInicioUtc < ? AND p.ISO_Code2 IN (${run.countries.map(() => '?').join(',')}))`);
+        values.push(new Date(run.ingestionFrom), new Date(run.expiresAt), ...run.countries);
+      }
+      where.push(`(${conditions.join(' OR ')})`);
+    }
+    const [rows] = await this.pool.execute(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual,
+      c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.FechaCreacionUtc,
+      c.FechaActualizacionUtc, c.IdDocumentoVigente, c.EstadoOrigen, d.IdLoteIngesta, d.Sha256 AS DocumentoSha256,
+      l.FechaInicioUtc AS IngestaInicioUtc, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre,
+      p.ISO_Code2 AS CountryCode, p.NombrePais AS CountryName,
+      CASE WHEN c.FechaUltimaActividadUtc IS NULL THEN (SELECT MAX(e.FechaHoraUtc) FROM ${e} e
+        WHERE e.IdDocumento = c.IdDocumentoVigente AND e.TipoOrigen IN ('text','quickReply','interactive','template','file','call','geopoint')
+        AND (e.TipoOrigen IN ('file','call','geopoint') OR LENGTH(TRIM(COALESCE(e.Texto,''))) > 0)) ELSE NULL END AS ResumenActividadUtc
+      FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO'
+      INNER JOIN ${p} p ON p.CodigoPais = c.CodigoPais
+      LEFT JOIN ${b} l ON l.IdLoteIngesta = d.IdLoteIngesta
+      LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`, values);
+    const countriesById = new Map(rows.map(row => [row.CountryCode, { code: row.CountryCode, name: row.CountryName, sourceCode: row.CodigoPais }]));
+    const conversations = rows.map(row => mapAtomConversation(row, [], countriesById.get(row.CountryCode), this.timezone));
+    if (!metadataOnly) {
+      const byDocument = new Map(conversations.map(conversation => [conversation.sourceDocumentId, conversation]));
+      const ids = [...byDocument.keys()];
+      for (let offset = 0; offset < ids.length; offset += 10000) {
+        const batch = ids.slice(offset, offset + 10000);
+        const [media] = await this.pool.execute(`SELECT IdDocumento, TipoOrigen FROM ${e}
+          WHERE IdDocumento IN (${batch.map(() => '?').join(',')}) AND TipoOrigen IN ('file','call','geopoint')
+          ORDER BY FechaHoraUtc, NumeroFila`, batch);
+        for (const row of media) {
+          const conversation = byDocument.get(String(row.IdDocumento)), type = mediaType(row.TipoOrigen);
+          if (conversation && !conversation.media.includes(type)) conversation.media.push(type);
+        }
+      }
+    }
+    return { conversations, countries: [...countriesById.values()].sort((a, b) => a.name.localeCompare(b.name, 'es')), loadedAt: new Date().toISOString() };
+  }
+  async hydrateOverview(conversations, evaluatedIds) {
+    const missing = [], keys = new Map();
+    for (const c of conversations.filter(c => evaluatedIds.has(c.id))) {
+      const key = c.sourceDocumentHash && digest([c.id, c.sourceDocumentId, c.sourceDocumentHash, c.country, c.completed, c.client.name, c.agent.id, c.agent.name]);
+      keys.set(c.id, key);
+      if (!key || !this.overviewCache.has(key)) missing.push(c.id);
+    }
+    const fresh = new Map();
+    for (let offset = 0; offset < missing.length; offset += READ_BATCH_SIZE) {
+      const source = await this.fetch({ conversationIds: missing.slice(offset, offset + READ_BATCH_SIZE) });
+      for (const c of source.conversations) fresh.set(c.id, c);
+    }
+    return conversations.map(c => {
+      if (!evaluatedIds.has(c.id)) return c;
+      const key = keys.get(c.id);
+      let cached = key && this.overviewCache.get(key);
+      if (!cached) {
+        const complete = fresh.get(c.id);
+        if (!complete) throw new AppError(409, 'El origen cambió durante la lectura. Actualiza la pantalla.', 'SOURCE_CHANGED');
+        // Do not attach messages from a different document than the selected metadata.
+        if (complete.sourceDocumentId !== c.sourceDocumentId || complete.sourceDocumentHash !== c.sourceDocumentHash || complete.country !== c.country || complete.completed !== c.completed || complete.client.name !== c.client.name || complete.agent.name !== c.agent.name || complete.agent.id !== c.agent.id) throw new AppError(409, 'El documento cambió durante la lectura. Actualiza la pantalla.', 'SOURCE_CHANGED');
+        cached = { media: complete.media, fingerprint: sourceFingerprint(complete) };
+        if (key) {
+          this.overviewCache.set(key, cached);
+          while (this.overviewCache.size > 10000) this.overviewCache.delete(this.overviewCache.keys().next().value);
+        }
+      }
+      const hydrated = { ...c, media: cached.media };
+      rememberSourceFingerprint(hydrated, cached.fingerprint);
+      return hydrated;
+    });
   }
   async readIngestionSnapshot(run) {
     const { batches: b, documents: d, conversations: c, countries: p } = this.tables;

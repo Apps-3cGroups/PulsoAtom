@@ -3,7 +3,7 @@ import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { createState } from './data/seed.js';
 import { missingDatabase } from './errors.js';
-import { ensureEvaluationState } from './evaluation-context.js';
+import { copySourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { migrateCatalogV5 } from './catalog-v5.js';
 
 export class DemoStore {
@@ -104,6 +104,90 @@ function emptyState() {
 }
 export class MysqlStore {
   constructor(options) { this.pool = mysql.createPool(options); }
+  async readAuthentication(sessionId) {
+    const [sessions] = await this.pool.execute('SELECT payload FROM sessions WHERE id = ?', [sessionId]);
+    const session = sessions[0] && decode(sessions[0].payload);
+    if (!session) return { sessions: [], users: [] };
+    const [users] = await this.pool.execute('SELECT payload FROM users WHERE id = ?', [session.userId]);
+    return { sessions: [session], users: users.map(row => decode(row.payload)) };
+  }
+  async readSchedulerState() {
+    const [jobs, settings, policies] = await Promise.all([
+      this.pool.query('SELECT payload FROM evaluation_jobs ORDER BY sequence_id'),
+      this.pool.query('SELECT id, payload FROM portal_settings'),
+      this.pool.query('SELECT payload FROM model_policies ORDER BY sequence_id'),
+    ]);
+    return { jobs: jobs[0].map(row => decode(row.payload)), modelPolicies: policies[0].map(row => decode(row.payload)), ...Object.fromEntries(settings[0].map(row => [row.id, decode(row.payload)])) };
+  }
+  async readNavigation(conversationIds = []) {
+    // During an online rollout an index may still be waiting for a source transaction.
+    // The JSON predicate is equivalent and keeps navigation available until it exists.
+    if (!this.navigationColumns || Date.now() - this.navigationColumnsAt > 60000) {
+      const [columns] = await this.pool.query("SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('evaluations','evaluation_tasks') AND COLUMN_NAME='conversation_key'");
+      this.navigationColumns = new Set(columns.map(row => row.TABLE_NAME)); this.navigationColumnsAt = Date.now();
+    }
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const state = emptyState();
+      const read = async (key, column, ids) => {
+        if (!ids) {
+          const [rows] = await connection.query(`SELECT payload FROM ${tables[key]} ORDER BY sequence_id`);
+          state[key] = rows.map(row => decode(row.payload)); return;
+        }
+        for (let offset = 0; offset < ids.length; offset += 10000) {
+          const batch = ids.slice(offset, offset + 10000);
+          const predicate = column === 'conversation_key' && !this.navigationColumns.has(tables[key]) ? "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.conversationId'))" : column;
+          const projection = key === 'tasks' ? "JSON_REMOVE(payload, '$.codeResults')" : 'payload';
+          const cacheable = ['evaluations', 'tasks', 'comparisons', 'jobs'].includes(key);
+          const fields = cacheable ? 'id, sequence_id, SHA2(CAST(payload AS CHAR), 256) AS revision' : 'sequence_id, payload';
+          const [rows] = await connection.query(`SELECT ${fields} FROM ${tables[key]} WHERE ${predicate} IN (${batch.map(() => '?').join(',')}) ORDER BY sequence_id`, batch);
+          if (cacheable) {
+            this.navigationCache ||= new Map(); this.navigationCacheBytes ||= 0;
+            const cacheKey = row => `${key}:${row.id}:${row.revision}`;
+            const values = new Map(rows.flatMap(row => this.navigationCache.has(cacheKey(row)) ? [[row.id, this.navigationCache.get(cacheKey(row)).value]] : []));
+            const missing = rows.filter(row => !values.has(row.id));
+            if (missing.length) {
+              // Same repeatable-read snapshot as the revision query, including updates
+              // to existing task/evaluation IDs. Never trust age or sequence alone.
+              const [fresh] = await connection.query(`SELECT id, ${projection} AS payload FROM ${tables[key]} WHERE id IN (${missing.map(() => '?').join(',')})`, missing.map(row => row.id));
+              const revisions = new Map(missing.map(row => [row.id, row]));
+              for (const row of fresh) {
+                const value = decode(row.payload), bytes = Buffer.byteLength(JSON.stringify(value));
+                values.set(row.id, value);
+                const id = cacheKey(revisions.get(row.id));
+                if (!this.navigationCache.has(id)) { this.navigationCache.set(id, { value, bytes }); this.navigationCacheBytes += bytes; }
+              }
+              while (this.navigationCacheBytes > 128 * 1024 * 1024) {
+                const first = this.navigationCache.keys().next().value;
+                this.navigationCacheBytes -= this.navigationCache.get(first).bytes; this.navigationCache.delete(first);
+              }
+            }
+            state[key].push(...rows.map(row => ({ sequence: row.sequence_id, value: values.get(row.id) })));
+          } else state[key].push(...rows.map(row => ({ sequence: row.sequence_id, value: decode(row.payload) })));
+        }
+        state[key] = state[key].sort((a, b) => a.sequence - b.sequence).map(row => row.value);
+      };
+      for (const key of ['catalog', 'catalogVersions', 'modelPolicies']) await read(key);
+      const [settings] = await connection.query('SELECT id, payload FROM portal_settings');
+      for (const row of settings) state[row.id] = decode(row.payload);
+      const ids = [...new Set(conversationIds)];
+      await read('evaluations', 'conversation_key', ids);
+      await read('tasks', 'conversation_key', ids);
+      await read('operationalRefs', 'id', ids);
+      for (const key of ['reviews', 'verdicts']) await read(key, "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.conversationId'))", ids);
+      const jobIds = [...new Set([...state.tasks, ...state.evaluations].map(item => item.jobId).filter(Boolean))];
+      await read('jobs', 'id', jobIds);
+      await read('comparisons', 'id', jobIds);
+      await connection.commit();
+      return state;
+    } catch (error) { await connection.rollback(); throw error; }
+    finally { connection.release(); }
+  }
+  async recordExposures(exposures) {
+    await insertRows(this.pool, 'INSERT IGNORE INTO evaluation_exposures (id, payload)',
+      exposures.map(item => [item.id, JSON.stringify(item)]));
+  }
   async load(connection) {
     const state = emptyState();
     for (const [key, table] of Object.entries(tables)) {
@@ -155,6 +239,27 @@ export class MysqlStore {
 export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
+  async readAuthentication(id) { return this.base.readAuthentication ? this.base.readAuthentication(id) : this.base.read(); }
+  async readSchedulerState() { return this.base.readSchedulerState ? this.base.readSchedulerState() : this.base.read(); }
+  async recordExposures(exposures) {
+    if (this.base.recordExposures) return this.base.recordExposures(exposures);
+    return this.base.transaction(state => { for (const item of exposures) if (!state.exposures.some(e => e.id === item.id)) state.exposures.push(item); });
+  }
+  async readBootstrap() {
+    if (!this.base.readNavigation || !this.reader.readOverview) return this.readWithConversations();
+    const [state, source] = await Promise.all([this.base.readNavigation([]), this.reader.readOverview({}, { metadataOnly: true })]);
+    return this.attach(state, source);
+  }
+  async readForNavigation(query, { activeOnly = false, now = new Date() } = {}) {
+    if (!this.base.readNavigation || !this.reader.readOverview) return this.readWithConversations();
+    const scheduling = activeOnly ? await this.readSchedulerState() : null;
+    const source = await this.reader.readOverview(query, { activeOnly, settings: scheduling?.settings, now });
+    const state = await this.base.readNavigation(source.conversations.map(c => c.id));
+    const evaluatedIds = new Set(state.evaluations.map(e => e.conversationId));
+    source.conversations = await this.reader.hydrateOverview(source.conversations, evaluatedIds);
+    if (activeOnly) state.jobs = [...new Map([...state.jobs, ...scheduling.jobs].map(j => [j.id, j])).values()];
+    return this.attach(state, source);
+  }
   async readIngestionSnapshot(run) { return this.reader.readIngestionSnapshot(run); }
   async readWithConversations({ fresh = false, conversationIds } = {}) {
     const [state, source] = await Promise.all([this.base.read(), this.reader.read({ fresh, ...(conversationIds !== undefined ? { conversationIds } : {}) })]);
@@ -167,7 +272,11 @@ export class AtomHistoryStore {
       const previous = latest.get(evaluation.conversationId);
       if (!previous || evaluation.createdAt >= previous.createdAt) latest.set(evaluation.conversationId, evaluation);
     }
-    state.conversations = source.conversations.map(conversation => ({ ...conversation, evaluationId: state.operationalRefs.find(r => r.id === conversation.id)?.evaluationId || latest.get(conversation.id)?.id || null }));
+    const references = new Map(state.operationalRefs.map(r => [r.id, r.evaluationId]));
+    state.conversations = source.conversations.map(conversation => {
+      const attached = { ...conversation, evaluationId: references.get(conversation.id) || latest.get(conversation.id)?.id || null };
+      copySourceFingerprint(conversation, attached); return attached;
+    });
     state.countries = source.countries;
     state.metadata = { ...state.metadata, source: 'Atom', lastLoadedAt: source.loadedAt };
     return state;

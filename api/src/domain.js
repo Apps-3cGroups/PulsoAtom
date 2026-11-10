@@ -2,7 +2,7 @@ import { messageCounts } from './message-counts.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { selectedEvaluation, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
+import { selectedEvaluation, evaluationSelectionContext, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { classificationOf, catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { operationalConsensus } from './operational-evaluation.js';
 
@@ -37,6 +37,8 @@ export function ensureVersion(item, expected) {
 export function viewContext(state, profileId) {
   return {
     profileId,
+    selection: evaluationSelectionContext(state),
+    currentScope: currentCatalog(state).map(v => ({ id: v.id, version: v.version, active: v.active })),
     versions: new Map(state.catalogVersions.map(v => [v.id, v.snapshot])),
     evaluations: new Map(state.evaluations.map(e => [e.id, e])),
     reviews: Map.groupBy ? Map.groupBy(state.reviews, r => r.conversationId) : state.reviews.reduce((m, r) => m.set(r.conversationId, [...(m.get(r.conversationId) || []), r]), new Map()),
@@ -57,13 +59,17 @@ export function evaluationCompletion(evaluation, variables, profileView = false)
   return 'evaluated';
 }
 export function conversationView(state, conversation, context = viewContext(state), detail = false) {
-  const evaluation = selectedEvaluation(state, conversation, context.profileId);
+  const evaluation = selectedEvaluation(state, conversation, context.profileId, context.selection);
   const reviews = (context.profileId ? [] : context.reviews.get(conversation.id) || []).filter(r => r.evaluationId === evaluation?.id);
   const latest = new Map();
   for (const review of reviews) latest.set(review.variableId, review.action === 'deshacer' ? null : review);
   const resultMap = new Map((evaluation?.results || []).map(r => [r.variableId, r]));
-  const scope = evaluation?.catalogVersions || currentCatalog(state).map(v => ({ id: v.id, version: v.version, active: v.active }));
-  const variables = scope.map(ref => {
+  const scope = evaluation?.catalogVersions || context.currentScope;
+  if (!evaluation && !detail && !context.pendingCatalogValidated) {
+    if (scope.some(ref => !context.versions.has(`${ref.id}:${ref.version}`))) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
+    context.pendingCatalogValidated = true;
+  }
+  const variables = (!evaluation && !detail ? [] : scope).map(ref => {
     const definition = context.versions.get(`${ref.id}:${ref.version}`);
     if (!definition) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
     const result = resultMap.get(ref.id) || { variableId: ref.id, status: 'no_evaluado', value: null, evidence: [] };
@@ -87,7 +93,9 @@ export function conversationView(state, conversation, context = viewContext(stat
     const priority = classification === 'critical' ? 'Crítico' : classification === 'normal' ? 'Normal' : null;
     const effective = !!kind && kind !== 'refuted';
     const dualDetected = effective && consensus?.detected === true;
-    return { ...definition, availability: catalogAvailability(definition), enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, consensusSuppressed, consensusPending };
+    return { ...(detail ? { ...definition, availability: catalogAvailability(definition) }
+      : { id: definition.id, name: definition.name, type: definition.type, method: definition.method }),
+      enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, consensusSuppressed, consensusPending };
   });
   const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, classification: v.classification, origin: v.origin, effective: v.effective, dualDetected: v.dualDetected,
     comparison: v.result.comparison ? Object.fromEntries(['agreement', 'detections', 'votes', 'expected', 'missing', 'label'].map(k => [k, v.result.comparison[k]])) : null }));

@@ -80,7 +80,7 @@ function recoverInterrupted(state) {
   }
 }
 export async function recoverEvaluationJobs(store) {
-  const state = await store.read();
+  const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   if (state.jobs.some(j => j.status === 'running' && Date.parse(j.updatedAt || j.createdAt) < Date.now() - 10 * 60_000)) await store.transaction(recoverInterrupted);
 }
 function pickCandidates(state, options) {
