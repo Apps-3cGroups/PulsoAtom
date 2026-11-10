@@ -17,18 +17,18 @@ Se ejecutaron lecturas y serialización desde el servidor, sin invocar modelos, 
 
 | Escenario | Conversaciones | p95 anterior | p95 optimizado | Reducción |
 |---|---:|---:|---:|---:|
-| 30 días, todos | 6,740 | 11.188 s | 2.770 s | 75.2 % |
-| 30 días, HN + PA | 4,145 | 7.891 s | 1.984 s | 74.9 % |
-| Activas, HN + PA | 306 | 3.212 s | 0.311 s | 90.3 % |
+| 30 días, todos | 6,740 | 11.188 s | 2.443 s | 78.2 % |
+| 30 días, HN + PA | 4,145 | 7.891 s | 1.249 s | 84.2 % |
+| Activas, HN + PA | 306 | 3.212 s | 0.293 s | 90.9 % |
 
-La referencia usa cinco repeticiones después del primer acceso; la versión optimizada usa diecinueve. Ambos caminos recuperan el mismo universo con los mismos filtros. La comparación de equivalencia se realizó además bajo una misma instantánea del portal: cero diferencias en los tres escenarios, incluidas las respuestas reutilizadas. Los resultados de modelos pueden seguir llegando durante las mediciones.
+La referencia usa cinco repeticiones después del primer acceso; la versión optimizada usa veinte. Ambos caminos recuperan el mismo universo con los mismos filtros. La comparación de equivalencia se realizó además bajo una misma instantánea del portal: cero diferencias en los tres escenarios, incluidas las respuestas reutilizadas. Los resultados de modelos pueden seguir llegando durante las mediciones.
 
-Evidencias: [comparación inicial](https://github.com/Apps-3cGroups/PulsoAtom/actions/runs/42921680971), [medición final](https://github.com/Apps-3cGroups/PulsoAtom/actions/runs/42923019837).
+Evidencias: [comparación inicial](https://github.com/Apps-3cGroups/PulsoAtom/actions/runs/42921680971), [medición final](https://github.com/Apps-3cGroups/PulsoAtom/actions/runs/42925067723).
 
-El primer acceso de 30 días tras iniciar el proceso, sin caché, tardó 16.184 s. El objetivo de p95 se cumple para consultas repetidas; no se afirma que el primer acceso o la carga visual completa estén por debajo de tres segundos. Los índices nuevos aún no estaban disponibles en estas mediciones.
+El primer acceso de 30 días tras iniciar el proceso, sin caché, tardó 15.605 s. El objetivo de p95 se cumple para consultas repetidas; no se afirma que el primer acceso o la carga visual completa estén por debajo de tres segundos. Los índices nuevos aún no estaban disponibles en estas mediciones.
 
 ```sh
-node --env-file=api/.env api/scripts/benchmark-navigation.js --iterations=20 --trace
+node --env-file=api/.env api/scripts/benchmark-navigation.js --iterations=21 --trace
 node --env-file=api/.env api/scripts/benchmark-navigation.js --paired --baseline-root=/ruta/entrega-funcional
 node --env-file=api/.env api/scripts/verify-navigation.js --baseline-root=/ruta/entrega-funcional
 ```
