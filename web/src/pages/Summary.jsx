@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, ConfigProvider, Select, Tooltip, theme } from 'antd';
+import { Button, ConfigProvider, Select, Tooltip } from 'antd';
 import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
@@ -70,7 +70,7 @@ export default function Summary() {
       <Metric value={current ? current.conversations.filter(c => c.human > 0).length : '—'} label="Con revisión humana" detail="Conversaciones con flags humanos" />
       <Metric value={metrics?.withPositives ?? '—'} label="+ Con positivos" detail="Conversaciones con buenos resultados" positive />
     </div>
-    <ConfigProvider theme={preset === 30 ? { algorithm: theme.darkAlgorithm, token: { colorBgBase: '#111820', colorBgContainer: '#19232d', colorTextBase: '#edf1f5', colorPrimary: '#8eabef', colorBorder: '#34414d', colorTextPlaceholder: '#adb8c3', controlHeight: 30 } } : undefined}><section className="overview-panel"><div className="overview-header"><div><div className="eyebrow">MAPA DE CONVERSACIONES</div><h2>La atención, en perspectiva</h2></div><span className="muted small"><AppstoreOutlined /> Cada rectángulo es una conversación</span></div><div className="overview-controls">
+    <ConfigProvider theme={preset === 30 ? { token: { colorBgBase: '#f8fafc', colorBgContainer: '#ffffff', colorTextBase: '#243449', colorPrimary: '#5267a3', colorBorder: '#d5dde7', colorTextPlaceholder: '#69788a', controlHeight: 30 } } : undefined}><section className="overview-panel"><div className="overview-header"><div><div className="eyebrow">MAPA DE CONVERSACIONES</div><h2>La atención, en perspectiva</h2></div><span className="muted small"><AppstoreOutlined /> Cada rectángulo es una conversación</span></div><div className="overview-controls">
       <div className="control-group"><span className="control-label">PERÍODO</span><div className="segmented-range">{SUMMARY_PRESETS.map(value => <button key={value} aria-pressed={preset === value} onClick={() => changeRange({ days: value })}>{value === 1 ? 'Hoy' : `${value} días`}</button>)}</div></div>
       <Select aria-label="País del resumen" value={country || 'all'} onChange={value => setCountry(value === 'all' ? undefined : value)} options={[{ label: 'Todos los países', value: 'all' }, ...bootstrap.countries.map(c => ({ label: c.name, value: c.code }))]} style={{ minWidth: 170 }} />
       <Select aria-label="Variable visible en el mapa" value={variable || 'all'} onChange={value => setVariable(value === 'all' ? undefined : value)} showSearch optionFilterProp="label" options={variableOptions(bootstrap.catalog)} className="map-variable" classNames={{ popup: { root: 'summary-variable-menu' } }} />
