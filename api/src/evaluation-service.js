@@ -7,7 +7,7 @@ import { catalogAvailability } from './catalog-presentation.js';
 import { asRegistry } from './model-registry.js';
 import { catalogReferences, digest, ensureEvaluationState, evaluationContext, selectedEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { startEvaluationHeartbeat } from './evaluation-heartbeat.js';
-import { activityOnDate, validateDailyActivityRequest, sameDailyCohort } from './daily-activity.js';
+import { activityOnDate, validateDailyActivityRequest, sameDailyCohort, withinDailyLimit } from './daily-activity.js';
 
 const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE'].includes(error.code);
 const running = new Map();
@@ -117,7 +117,7 @@ function pickCandidates(state, options) {
     candidates.sort((a, b) => activityTime(b) - activityTime(a)
       || String(b.id).localeCompare(String(a.id), 'en', { numeric: true }));
   }
-  return options.dailyActivity ? candidates : candidates.slice(0, options.max ?? 20);
+  return options.dailyActivity ? withinDailyLimit(state, candidates, options) : candidates.slice(0, options.max ?? 20);
 }
 export async function startEvaluationBatch(store, evaluator, options = {}) {
   const state = ensureEvaluationState(await readHistory(store, options.conversationIds));
@@ -164,7 +164,8 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   const catalog = state.catalog.filter(v => !v.retired);
   const catalogVersions = catalogReferences(catalog);
   const job = { id: randomUUID(), purpose, status: 'running', scope: options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
-    ...(options.dailyActivity ? { dailyActivity: options.dailyActivity, countries: options.countries } : {}),
+    ...(options.dailyActivity ? { dailyActivity: options.dailyActivity, countries: options.countries,
+      conversationCountries: Object.fromEntries(candidates.map(c => [c.id, c.country])), limitPerCountry: options.limitPerCountry ?? null } : {}),
     sourceJobId: options.sourceJobId || null, scheduleDate: options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
     total: candidates.length * profiles.length, caseCount: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
     modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', executionOrder, concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
@@ -183,6 +184,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     if (options.idempotencyKey && draft.jobs.some(j => j.idempotencyKey === options.idempotencyKey)) throw new AppError(409, 'Esta ejecución ya se registró. Consulta su progreso.', 'DUPLICATE_EXECUTION');
     if (options.dailyActivity) {
       validateDailyActivityRequest(draft.settings, options);
+      if (withinDailyLimit(draft, candidates, options).length !== candidates.length) throw new AppError(409, 'El cupo diario ya fue asignado.', 'DAILY_ALREADY_STARTED');
       const previous = draft.jobs.filter(j => sameDailyCohort(j, options));
       if ((!candidates.length && previous.length) || previous.some(j => j.conversationIds.some(id => candidates.some(c => c.id === id)))) {
         throw new AppError(409, 'Las conversaciones ya están asignadas a la ejecución diaria.', 'DAILY_ALREADY_STARTED');
@@ -212,7 +214,7 @@ async function processJob(store, registry, job, catalog, onProgress, selectedTas
     if (current?.status === 'running') current.updatedAt = now();
   }));
   try {
-    const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && t.status !== 'completed' && (!selectedTaskIds || selectedTaskIds.includes(t.id)));
+    const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && !['completed', 'deferred'].includes(t.status) && (!selectedTaskIds || selectedTaskIds.includes(t.id)));
     const runTasks = async phaseTasks => {
       const cases = [...new Set(phaseTasks.map(t => t.conversationId))];
       const worker = async () => {
@@ -249,7 +251,7 @@ async function processJob(store, registry, job, catalog, onProgress, selectedTas
 }
 export function evaluationModelProgress(state, job) {
   return (job.modelProfiles || []).map(profile => {
-    const tasks = (state.tasks || []).filter(t => t.jobId === job.id && t.profile.id === profile.id);
+    const tasks = (state.tasks || []).filter(t => t.jobId === job.id && t.status !== 'deferred' && t.profile.id === profile.id);
     const count = status => tasks.filter(t => t.status === status).length;
     return { profileId: profile.id, label: profile.label, total: tasks.length,
       completed: count('completed'), partial: count('partial'), failed: count('failed'), running: count('running'),
@@ -257,7 +259,7 @@ export function evaluationModelProgress(state, job) {
   });
 }
 function updateJob(state, id, finished, selectedTaskIds) {
-  const job = state.jobs.find(j => j.id === id), tasks = state.tasks.filter(t => t.jobId === id);
+  const job = state.jobs.find(j => j.id === id), tasks = state.tasks.filter(t => t.jobId === id && t.status !== 'deferred');
   job.completed = tasks.filter(t => t.status === 'completed').length;
   job.failed = tasks.filter(t => ['failed', 'partial'].includes(t.status)).length;
   job.partial = tasks.filter(t => t.status === 'partial').length;
@@ -274,7 +276,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
   if (!conversation || task.context.sourceHash !== sourceFingerprint(conversation)) throw new AppError(409, 'El contenido de Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
   const currentContext = evaluationContext(conversation, catalog);
   if (currentContext.promptHash !== task.context.promptHash || currentContext.rulesVersion !== task.context.rulesVersion) throw new AppError(409, 'Las instrucciones cambiaron. Crea una nueva ejecución.', 'PROMPT_CHANGED');
-  const claimed = await store.transaction(s => { const t = s.tasks.find(t => t.id === task.id); if (t.status === 'completed' || t.round !== task.round) return false; t.status = 'running'; t.error = null; return true; });
+  const claimed = await store.transaction(s => { const t = s.tasks.find(t => t.id === task.id); if (['completed', 'deferred'].includes(t.status) || t.round !== task.round) return false; t.status = 'running'; t.error = null; return true; });
   if (!claimed) return;
   const aiVariables = catalog.filter(v => v.active && supportsAiVariable(v));
   const codeResults = task.codeResults || evaluateCodeVariables(conversation, catalog.filter(v => v.active && supportsCodeVariable(v)));
@@ -401,7 +403,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     Object.assign(current, { status: partial ? 'partial' : 'completed', evaluationId: evaluation.id, error: failure ? safeError(failure) : null });
   });
 }
-export async function resumeEvaluationBatch(store, evaluator, jobId, { conversationIds } = {}) {
+export async function resumeEvaluationBatch(store, evaluator, jobId, { conversationIds, unfinishedOnly = false } = {}) {
   const storedState = await store.read();
   const storedJob = storedState.jobs?.find(j => j.id === jobId);
   if (!storedJob?.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
@@ -420,7 +422,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
   if (digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
   if (state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.some(id => job.conversationIds.includes(id)))) throw new AppError(409, 'Existe una ejecución operativa posterior. Consulta el resultado vigente.', 'SUPERSEDED_JOB');
   const candidates = job.conversationIds.map(id => state.conversations.find(c => c.id === id)).filter(Boolean);
-  const pending = state.tasks.filter(t => t.jobId === jobId && t.status !== 'completed' && (!scoped || conversationIds.includes(t.conversationId)));
+  const pending = state.tasks.filter(t => t.jobId === jobId && !['completed', 'deferred', ...(unfinishedOnly ? ['partial', 'failed'] : [])].includes(t.status) && (!scoped || conversationIds.includes(t.conversationId)));
   if (!pending.length) throw new AppError(409, 'La ejecución ya está completa.', 'ALREADY_COMPLETED');
   for (const task of pending) {
     const c = candidates.find(c => c.id === task.conversationId);
@@ -444,7 +446,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
     for (const t of s.tasks.filter(t => selectedIds.has(t.id) && t.status !== 'completed')) { t.status = 'pending'; t.round++; t.error = null; }
   });
   const resumedJob = (await store.read()).jobs.find(j => j.id === jobId);
-  return { job: resumedJob, completion: launch(store, registry, resumedJob, catalog, undefined, scoped ? pending.map(t => t.id) : undefined) };
+  return { job: resumedJob, completion: launch(store, registry, resumedJob, catalog, undefined, scoped || unfinishedOnly ? pending.map(t => t.id) : undefined) };
 }
 export async function runEvaluationBatch(store, evaluator, options) { return (await startEvaluationBatch(store, evaluator, options)).completion; }
 export async function evaluateConversation(store, evaluator, conversation, catalog, { replace = false } = {}) {

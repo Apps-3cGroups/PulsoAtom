@@ -25,10 +25,13 @@ export function dailyActivityRequest(settings, runDate) {
   }
   const snapshot = { mode: settings.dailyMode, enabled: settings.dailyEnabled, startedAt: settings.dailyStartedAt,
     startDate: settings.dailyStartDate, time: settings.dailyTime, timezone: settings.timezone,
-    countries: settings.dailyCountries, modelIds: settings.dailyModelIds };
+    countries: settings.dailyCountries, modelIds: settings.dailyModelIds,
+    ...(settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}),
+    ...(settings.dailyConcurrency != null ? { concurrency: settings.dailyConcurrency } : {}) };
   return { scheduleDate: runDate, dailyActivity: { date: previousDate(runDate), timezone: settings.timezone, configurationHash: digest(snapshot) },
     countries: [...settings.dailyCountries], modelIds: [...settings.dailyModelIds], pendingOnly: false, includeOpen: true,
-    executionOrder: 'model-first', concurrency: 1 };
+    executionOrder: 'model-first', concurrency: settings.dailyConcurrency ?? 1,
+    ...(settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}) };
 }
 export function validateDailyActivityRequest(settings, options) {
   const expected = dailyActivityRequest(settings, options.scheduleDate);
@@ -42,4 +45,32 @@ export function sameDailyCohort(job, options) {
   return job.scheduleDate === options.scheduleDate
     && job.dailyActivity?.timezone === options.dailyActivity?.timezone
     && digest((job.modelProfiles || []).map(p => p.id).sort()) === digest([...options.modelIds].sort());
+}
+
+// Count unique conversations across all imports for the same activity day.
+// Freeze the country on jobs so later source changes cannot replenish a quota.
+export function dailyAssignedCounts(state, options) {
+  const countries = new Map(state.conversations.map(c => [c.id, c.country]));
+  const assigned = new Map();
+  for (const job of state.jobs.filter(j => j.dailyActivity?.date === options.dailyActivity.date
+    && j.dailyActivity.timezone === options.dailyActivity.timezone)) {
+    for (const id of job.conversationIds) {
+      const country = job.conversationCountries?.[id] || countries.get(id);
+      if (!country) throw new AppError(409, 'No se pudo verificar el país de una conversación ya asignada.', 'DAILY_COUNTRY_UNKNOWN');
+      assigned.set(id, country);
+    }
+  }
+  return [...assigned.values()].reduce((counts, country) => ({ ...counts, [country]: (counts[country] || 0) + 1 }), {});
+}
+export function withinDailyLimit(state, candidates, options) {
+  if (options.limitPerCountry == null) return candidates;
+  if (!Number.isInteger(options.limitPerCountry) || options.limitPerCountry < 1 || options.limitPerCountry > 1000) {
+    throw new AppError(422, 'El límite por país es inválido.', 'INVALID_DAILY_LIMIT');
+  }
+  const used = dailyAssignedCounts(state, options);
+  return candidates.filter(c => {
+    if ((used[c.country] || 0) >= options.limitPerCountry) return false;
+    used[c.country] = (used[c.country] || 0) + 1;
+    return true;
+  });
 }

@@ -56,7 +56,7 @@ export default function ScheduleCard({ data, isAdmin, onSaved }) {
   return <section className="evaluation-card">
     <div className="evaluation-icon"><ClockCircleOutlined /></div>
     <h2>Evaluación diaria</h2>
-    <p>{previousDay ? 'Evalúa todas las conversaciones con actividad el día anterior, abiertas o cerradas, con Clef y Gemma.' : 'Procesa hasta 100 conversaciones nuevas y pendientes cada día, después de la carga de Atom.'}</p>
+    <p>{previousDay ? `Evalúa ${saved.dailyLimitPerCountry ? `hasta ${saved.dailyLimitPerCountry} conversaciones por país` : 'todas las conversaciones'} con actividad el día anterior, abiertas o cerradas, con Clef y Gemma.` : 'Procesa hasta 100 conversaciones nuevas y pendientes cada día, después de la carga de Atom.'}</p>
     {previousDay && <Alert type="info" message="Honduras y Panamá · Clef y Gemma" description={`Inicio: ${saved.dailyStartDate}. El día se calcula en la zona horaria indicada. También se recogen nuevas cargas de Atom durante la jornada.`} />}
     {notice && <Alert {...notice} showIcon />}
     <Form form={form} layout="vertical" onFinish={save} initialValues={scheduleValues(data.settings)}

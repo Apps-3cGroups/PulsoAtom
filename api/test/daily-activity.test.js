@@ -7,7 +7,8 @@ import { ModelRegistry } from '../src/model-registry.js';
 import { runDailyTick } from '../src/daily-scheduler.js';
 import { activityOnDate, previousDate, dailyActivityRequest } from '../src/daily-activity.js';
 import { configureDailyActivity, requestYesterdayActivity } from '../src/configure-daily-activity.js';
-import { startEvaluationBatch } from '../src/evaluation-service.js';
+import { prepareDailyLimit, applyDailyLimit } from '../src/daily-limit.js';
+import { startEvaluationBatch, evaluationModelProgress } from '../src/evaluation-service.js';
 
 function fixture() {
   const state = createState(false), calls = [];
@@ -164,4 +165,101 @@ test('un contenido cambiado al reanudar queda visible y no bloquea los casos sig
   state.conversations.push(conversation('next'));
   assert.deepEqual((await runDailyTick(store, registry, new Date('2026-11-10T08:01:00Z'))).conversationIds, ['next']);
   await idle(state);
+});
+
+
+test('el cupo por país suma importaciones, se congela en el lote y se renueva al día siguiente', async () => {
+  const { state, store, registry, calls } = fixture();
+  state.settings.dailyLimitPerCountry = 2;
+  state.settings.dailyConcurrency = 2;
+  state.conversations = [conversation('hn1')];
+  await runDailyTick(store, registry, new Date('2026-11-10T07:00:00Z')); await idle(state);
+  state.conversations.push(conversation('hn2'), conversation('hn3'), conversation('pa1', 'PA'), conversation('pa2', 'PA'), conversation('pa3', 'PA'));
+  const batch = await runDailyTick(store, registry, new Date('2026-11-10T08:00:00Z')); await idle(state);
+  assert.deepEqual(batch.conversationIds, ['hn2', 'pa1', 'pa2']);
+  assert.equal(batch.concurrency, 2); assert.equal(calls.length, 8);
+  assert.equal(await runDailyTick(store, registry, new Date('2026-11-10T09:00:00Z')), null);
+  // The source disappearing or changing country must not reopen a quota.
+  state.conversations = state.conversations.filter(c => c.id !== 'hn1');
+  state.conversations.find(c => c.id === 'hn2').country = 'PA';
+  assert.equal(await runDailyTick(store, registry, new Date('2026-11-10T10:00:00Z')), null);
+  state.conversations = [conversation('next1', 'HN', '2026-11-10T16:00:00Z'), conversation('next2', 'PA', '2026-11-10T17:00:00Z')];
+  assert.equal((await runDailyTick(store, registry, new Date('2026-11-11T06:01:00Z'))).caseCount, 2);
+  await idle(state);
+});
+
+test('reducir una cohorte conserva resultados e intentos, difiere solo pendientes y continúa Panamá incluso después de medianoche', async () => {
+  const { state, store, registry, calls } = fixture();
+  state.conversations = [conversation('old')];
+  await runDailyTick(store, registry, new Date('2026-11-10T07:00:00Z')); await idle(state);
+  state.conversations.push(...['current1', 'current2', 'excess1', 'excess2'].map(id => conversation(id)));
+  const batch = await runDailyTick(store, registry, new Date('2026-11-10T08:00:00Z')); await idle(state);
+  // Build a persisted interruption: Clef has a partial result on current1;
+  // every other task is untouched. Its valid result must survive resumption.
+  const retained = state.tasks.find(t => t.jobId === batch.id && t.conversationId === 'current1' && t.profile.id === 'clef-local');
+  for (const task of state.tasks.filter(t => t.jobId === batch.id)) {
+    if (task === retained) { task.status = 'partial'; task.error = { code: 'AI_CONTEXT_LIMIT' }; }
+    else { task.status = 'pending'; task.evaluationId = null; task.profileStates = {}; task.error = null; }
+  }
+  state.attempts = state.attempts.filter(a => a.jobId !== batch.id || a.taskId === retained.id);
+  state.evaluations = state.evaluations.filter(e => e.jobId !== batch.id || e.taskId === retained.id);
+  state.operationalRefs = state.operationalRefs.filter(r => r.id === 'old' || r.id === 'current1');
+  const current = state.jobs.find(j => j.id === batch.id);
+  Object.assign(current, { status: 'running', completed: 0, failed: 1, partial: 1, updatedAt: '2026-11-10T14:00:00Z' });
+  const preserved = structuredClone({ attempts: state.attempts, evaluations: state.evaluations });
+  calls.length = 0;
+  const request = await prepareDailyLimit(store, { activityDate: '2026-11-09', expectedVersion: 14,
+    limitPerCountry: 3, now: new Date('2026-11-10T14:01:00Z') });
+  assert.equal(await runDailyTick(store, registry, new Date('2026-11-10T14:02:00Z')), null);
+  await assert.rejects(applyDailyLimit(store, { requestId: request.id, expectedVersion: 15, now: new Date('2026-11-10T14:03:00Z') }), { code: 'EVALUATION_RUNNING' });
+  const result = await applyDailyLimit(store, { requestId: request.id, expectedVersion: 15, now: new Date('2026-11-10T14:11:00Z') });
+  assert.deepEqual(result.selected, { HN: 3, PA: 0 }); assert.deepEqual(result.deferred, { HN: 2, PA: 0 });
+  assert.deepEqual(state.attempts, preserved.attempts); assert.deepEqual(state.evaluations, preserved.evaluations);
+  assert.equal(state.tasks.filter(t => t.status === 'deferred').length, 4);
+  assert.equal(state.settings.dailyTime, '00:01'); assert.equal(state.settings.aiPolicy.mode, 'single');
+  assert.equal((await runDailyTick(store, registry, new Date('2026-11-10T14:12:00Z'))).id, batch.id); await idle(state);
+  assert.deepEqual(calls.sort(), [['current1', 'gemma-local'], ['current2', 'clef-local'], ['current2', 'gemma-local']].sort());
+  const done = state.jobs.find(j => j.id === batch.id);
+  assert.equal(done.total, 4); assert.equal(done.completed, 3); assert.equal(done.partial, 1); assert.equal(done.status, 'partial');
+  assert.ok(evaluationModelProgress(state, done).every(p => p.total === 2 && p.pending === 0));
+  state.conversations.push(conversation('pa1', 'PA'), conversation('pa2', 'PA'));
+  const panama = await runDailyTick(store, registry, new Date('2026-11-11T06:01:00Z'));
+  assert.equal(panama.dailyActivity.date, '2026-11-09'); assert.deepEqual(panama.conversationIds, ['pa1', 'pa2']); await idle(state);
+  assert.equal(await runDailyTick(store, registry, new Date('2026-11-11T06:02:00Z')), null);
+  assert.equal(state.settings.dailyCatchupRunDate, undefined);
+  const today = await runDailyTick(store, registry, new Date('2026-11-11T06:03:00Z')); await idle(state);
+  assert.equal(today.dailyActivity.date, '2026-11-10');
+});
+
+test('el ajuste falla sin perder trabajo si ya se superó el cupo y exige la versión y mantenimiento correspondientes', async () => {
+  const { state, store, registry } = fixture();
+  state.conversations = [conversation('a'), conversation('b')];
+  await runDailyTick(store, registry, new Date('2026-11-10T07:00:00Z')); await idle(state);
+  const request = await prepareDailyLimit(store, { activityDate: '2026-11-09', expectedVersion: 14, limitPerCountry: 1, now: new Date('2026-11-10T14:00:00Z') });
+  const before = structuredClone(state);
+  await assert.rejects(applyDailyLimit(store, { requestId: request.id, expectedVersion: 14 }), { code: 'VERSION_CONFLICT' });
+  await assert.rejects(applyDailyLimit(store, { requestId: 'wrong', expectedVersion: 15 }), { code: 'EVALUATION_MAINTENANCE' });
+  await assert.rejects(applyDailyLimit(store, { requestId: request.id, expectedVersion: 15 }), { code: 'DAILY_LIMIT_ALREADY_EXCEEDED' });
+  assert.deepEqual(state, before);
+});
+
+test('dos conversaciones avanzan en paralelo sin mezclar las fases de Clef y Gemma', async () => {
+  const { state, store, registry, calls } = fixture();
+  state.settings.dailyLimitPerCountry = 2; state.settings.dailyConcurrency = 2;
+  state.conversations = [conversation('h1'), conversation('h2'), conversation('h3'), conversation('p1', 'PA'), conversation('p2', 'PA'), conversation('p3', 'PA')];
+  let active = 0, peak = 0, clefFinished = 0;
+  for (const profile of registry.profiles) {
+    const original = profile.evaluator.evaluate;
+    profile.evaluator.evaluate = async (...args) => {
+      if (profile.id === 'gemma-local') assert.equal(clefFinished, 4);
+      active++; peak = Math.max(peak, active);
+      await wait(10);
+      const result = await original(...args);
+      active--; if (profile.id === 'clef-local') clefFinished++;
+      return result;
+    };
+  }
+  const job = await runDailyTick(store, registry, new Date('2026-11-10T07:00:00Z')); await idle(state);
+  assert.equal(job.caseCount, 4); assert.equal(peak, 2);
+  assert.equal(calls.length, 8); assert.equal(new Set(calls.map(c => c.join(':'))).size, 8);
 });
