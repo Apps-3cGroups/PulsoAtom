@@ -949,3 +949,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .reset-figures { display: block; margin: 0 auto 24px; }
 .active-card-country { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .active-run-status { margin-bottom: 12px; }
+
+.summary-page .map-legend .summary-pending-toggle { margin-inline-start: auto; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.summary-page.summary-month .map-legend .summary-pending-toggle { font-size: 11px; }
+@media (max-width: 700px) { .summary-page .map-legend .summary-pending-toggle { font-size: 10px; } }

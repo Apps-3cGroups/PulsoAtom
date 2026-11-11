@@ -485,16 +485,24 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
 
           echo "Pulling main with ff-only"
+          PREVIOUS_HEAD="$(git rev-parse HEAD)"
           git pull --ff-only origin main
           [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] || fail "Local commits differ from remote main; deployment stopped."
 
+          API_DEPLOY_REQUIRED=true
+          if [ "$PREVIOUS_HEAD" != "$(git rev-parse HEAD)" ] && git diff --quiet "$PREVIOUS_HEAD" HEAD -- api/ ecosystem.config.js web/server.js web/package.json web/package-lock.json package.json package-lock.json; then
+            API_DEPLOY_REQUIRED=false
+          fi
+
           unset GIT_ASKPASS GH_TOKEN_FILE GIT_TERMINAL_PROMPT
 
-          echo "Installing API dependencies"
-          npm ci --prefix "$API" --omit=dev --ignore-scripts --no-audit --no-fund
+          if [ "$API_DEPLOY_REQUIRED" = true ]; then
+            echo "Installing API dependencies"
+            npm ci --prefix "$API" --omit=dev --ignore-scripts --no-audit --no-fund
 
-          echo "Applying additive API migrations"
-          npm run db:migrate --prefix "$API" -- --defer-online-indexes
+            echo "Applying additive API migrations"
+            npm run db:migrate --prefix "$API" -- --defer-online-indexes
+          fi
 
           echo "Installing web dependencies"
           npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
@@ -509,17 +517,21 @@ jobs:
             cp -a "$MONITOR_BACKUP/monitor-evaluaciones" "$WEB/dist/"
           fi
 
-          echo "Restarting PM2 targets"
           export PM2_HOME=/home/td/.pm2
-          pm2 startOrReload "$REPO/ecosystem.config.js" --update-env >/dev/null
-          pm2 save >/dev/null
+          if [ "$API_DEPLOY_REQUIRED" = true ]; then
+            echo "Restarting PM2 targets"
+            pm2 startOrReload "$REPO/ecosystem.config.js" --update-env >/dev/null
+            pm2 save >/dev/null
 
-          echo "Waiting for API startup and its initialization transaction"
-          curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 90 --retry-connrefused --max-time 15 http://127.0.0.1:4001/pulsoAtom/api/health
-          printf '\n'
+            echo "Waiting for API startup and its initialization transaction"
+            curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 90 --retry-connrefused --max-time 15 http://127.0.0.1:4001/pulsoAtom/api/health
+            printf '\n'
 
-          echo "Applying online navigation indexes after API startup"
-          npm run db:migrate --prefix "$API"
+            echo "Applying online navigation indexes after API startup"
+            npm run db:migrate --prefix "$API"
+          else
+            echo "Frontend-only release: API, workers and PM2 processes were not restarted."
+          fi
 
           echo "Checking PulsoAtom health and web"
           curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-connrefused --max-time 15 http://127.0.0.1:4001/pulsoAtom/api/health
