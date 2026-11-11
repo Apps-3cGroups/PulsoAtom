@@ -54,8 +54,9 @@ function ConversationEntry({ conversation: c, showCountry, returnTo }) {
   const marks = visibleBoardMarks(c).filter(m => m.effective !== false && m.kind !== 'refuted');
   const attention = flagCount(c, 'critical') || flagCount(c, 'normal');
   const pending = evaluationNeedsAttention(c) || c.sourceChanged;
+  const clientLabel = `${c.client.name || 'Sin nombre'}${c.client.phoneLast4 ? ` …${c.client.phoneLast4}` : ''}`;
   return <Link className={`active-conversation-card ${attention ? 'has-flag' : ''}`} to={conversationLink(c.id, returnTo)} aria-label={`Ver conversación de ${c.client.name}, atendida por ${c.agent.name}, ${dateText(c.startedAt)}, ${timeText(c.startedAt)}`}>
-    <header><div><h3>{c.agent.name}</h3>{showCountry && <div className="active-card-country">{c.countryName || c.country}</div>}</div><span className={`active-card-status ${attention ? 'flagged' : ''}`}>{attention ? 'Con flags' : pending ? 'Pendiente' : 'OK'}</span></header>
+    <header><div><h3 title={c.agent.name}>{c.agent.name}</h3>{showCountry && <div className="active-card-country">{c.countryName || c.country}</div>}</div><span className={`active-card-status ${attention ? 'flagged' : ''}`}>{attention ? 'Con flags' : pending ? 'Pendiente' : 'OK'}</span></header>
     <div className="active-card-body">
       {c.activeReason?.code === 'friday-cohort' && <span className="active-pending">{c.activeReason.label}</span>}
       {marks.length > 0 && <ul className="active-flags">{marks.map(m => <li key={m.id}><FlagSymbol mark={m} /><span>{m.name}</span></li>)}</ul>}
@@ -64,6 +65,6 @@ function ConversationEntry({ conversation: c, showCountry, returnTo }) {
       {!evaluationNeedsAttention(c) && c.unavailableFlags > 0 && <span className="muted small">{c.unavailableFlags} variables sin datos suficientes</span>}
       {c.sourceChanged && <span className="active-pending">Contenido nuevo pendiente de evaluar</span>}
     </div>
-    <footer><span>Cliente <b>{c.client.name || 'Sin nombre'}{c.client.phoneLast4 ? ` …${c.client.phoneLast4}` : ''}</b></span><span>Inició {dateText(c.startedAt, { year: undefined })} · {timeText(c.startedAt)}</span></footer>
+    <footer><span title={`Cliente ${clientLabel}`}>Cliente <b>{clientLabel}</b></span><span>Inició {dateText(c.startedAt, { year: undefined })} · {timeText(c.startedAt)}</span></footer>
   </Link>;
 }
