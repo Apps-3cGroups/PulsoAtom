@@ -98,3 +98,26 @@
 }
 
 .compact-agent-row + .compact-agent-row { box-shadow: inset 0 1px #dfe5ec; }
+
+@media (max-width: 700px) {
+  .summary-page.summary-month > .page-heading { gap: 4px; }
+  .summary-page.summary-month > .page-heading h1 { font-size: 20px; line-height: 1.15; }
+  .summary-page.summary-month .heading-actions { width: 100%; }
+  .summary-page.summary-month .summary-heading-actions { width: 100%; flex-direction: row; align-items: center; justify-content: space-between; gap: 4px; }
+  .summary-page.summary-month .summary-heading-actions .period-note,
+  .summary-page.summary-month .summary-heading-actions > .small { font-size: 9px; gap: 4px; }
+  .summary-page.summary-month .metric-card { padding: 5px; }
+  .summary-page.summary-month .metric-label { font-size: 8px; gap: 2px; line-height: 1.15; }
+  .summary-page.summary-month .metric-card > strong { font-size: 18px; }
+  .summary-page.summary-month .overview-controls { padding: 4px 8px; gap: 5px; }
+  .summary-page.summary-month .segmented-range button { padding: 3px 8px; font-size: 11px; }
+  .summary-page.summary-month .map-legend { padding: 4px 8px; gap: 3px; }
+  .summary-page.summary-month .legend-toggle { font-size: 9px; padding: 2px 4px; gap: 4px; }
+  .summary-page.summary-month .legend-toggle .mark { width: 8px; height: 8px; }
+  .summary-page.summary-month .map-footer { padding: 4px 8px; font-size: 9px; }
+  .summary-page.summary-month .map-footer > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .compact-map-head { height: 22px; font-size: 7px; }
+  .compact-country-title { height: 18px; }
+  .compact-country-title button { font-size: 10px; gap: 5px; }
+  .compact-country-title .country-code { font-size: 8px; }
+}

@@ -16,4 +16,4 @@ La carga de datos es responsabilidad del importador existente. No se cambia ni s
 
 ## Validación
 
-Pruebas unitarias y de rutas cubren filtros, métricas, país único/múltiple, paginación, estados de origen, vencimiento, espera, límite, idempotencia y reanudación. La vista previa sintética incluye 3066 conversaciones. Revisión visual pendiente mientras Work reporta navegador deshabilitado.
+Pruebas unitarias y de rutas cubren filtros, métricas, país único/múltiple, paginación, estados de origen, vencimiento, espera, límite, idempotencia y reanudación. Validación final: 423 pruebas API, 98 pruebas web y compilación correctas. La revisión directa en navegador del 11/11/2026 utilizó 3066 conversaciones sintéticas, 37 asesores y un grupo de alta densidad. Se comprobaron Hoy, 3 días y 30 días; HN + PA y limpieza de países; figuras, métricas y estado vacío; regreso desde detalle conservando filtros y página; Activas con 12 tarjetas; y tamaños de 1440 × 900, 1230 × 954 y 390 × 844. El compacto ajusta la altura usando sus encabezados reales y reduce controles en móvil para evitar solapar los nombres.
