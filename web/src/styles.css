@@ -914,23 +914,23 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .summary-page .map-name-head, .summary-page .lane-name { width: 200px; }
 .summary-page .lane-name > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Size rows from their content even when the board's scroll viewport is shorter. */
-.active-conversation-board { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; }
+/* Keep cards compact; only their body scrolls, leaving the client footer visible. */
+.active-conversation-board { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 220px; align-content: start; }
 .active-conversation-card { display: flex; flex-direction: column; min-width: 0; min-height: 220px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; color: var(--ink); overflow: hidden; overflow-wrap: anywhere; }
 .active-conversation-card.has-flag { border-color: #d59c94; }
 .active-conversation-card:hover { border-color: var(--accent); color: var(--ink); box-shadow: 0 2px 8px #24442e10; }
 .active-conversation-card > header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .active-conversation-card > header > div { min-width: 0; }
-.active-conversation-card h3 { font-size: 17px; overflow-wrap: anywhere; }
+.active-conversation-card h3 { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .active-card-status { flex: none; font-size: 11px; border-radius: 20px; padding: 4px 8px; background: var(--surface-raised); color: var(--muted); }
 .active-card-status.flagged { color: #a62d21; background: #ffebe6; }
-.active-card-body { flex: 1 0 auto; min-width: 0; padding: 8px 16px 18px; }
+.active-card-body { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-gutter: stable; padding: 8px 16px 18px; }
 .active-card-body .active-flags { margin: 0; }
 .active-card-body .active-flags li { margin: 10px 0; font-size: 13px; align-items: baseline; }
 .active-card-media { display: flex; gap: 7px; color: var(--muted); margin-top: 12px; }
 .active-card-media > span { min-width: 0; }
-.active-conversation-card > footer { display: flex; flex: none; justify-content: space-between; flex-wrap: wrap; gap: 7px; font-size: 11px; padding: 10px 14px; color: var(--muted); border-top: 1px solid var(--border); }
-.active-conversation-card > footer > span { min-width: 0; max-width: 100%; }
+.active-conversation-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; flex: none; gap: 7px; font-size: 11px; padding: 10px 14px; color: var(--muted); border-top: 1px solid var(--border); }
+.active-conversation-card > footer > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .active-conversation-card > footer b { font-weight: 500; }
 @media (min-width: 1600px) { .active-conversation-board { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .active-conversation-board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
