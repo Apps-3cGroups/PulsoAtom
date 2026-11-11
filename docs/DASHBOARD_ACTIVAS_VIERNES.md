@@ -2,6 +2,8 @@
 
 El dashboard conserva Hoy, 3 días y 30 días. Los países múltiples se guardan en `countries=HN,PA`; `country=HN` sigue siendo compatible. Las figuras se guardan en `figures`; ausencia significa todas y una cadena vacía significa ninguna. Las métricas corresponden al mismo conjunto de conversaciones que el mapa. `normal` permanece como valor interno y se presenta como Menor.
 
+El resumen oculta por defecto las conversaciones sin evaluar o pendientes de una revisión de modelo. «Mostrar pendientes», a la derecha de las figuras, las incluye y conserva la selección con `pending=1` al recargar o volver del detalle. Las evaluaciones con incidencias siguen visibles. El filtro se aplica sobre los datos recibidos, sin otra consulta; mapa y métricas usan el mismo conjunto.
+
 `GET /active` devuelve `items`, `total`, `metrics`, `pending`, `page`, `pageSize` y `runs`. La selección habitual incluye ABIERTO, REASIGNADO y REINGRESO sin cierre. Cada tarjeta incluye `activeReason`; la fuente nunca se modifica.
 
 ## Corrida excepcional

@@ -1,4 +1,5 @@
 import { compactMarks } from './summaryMap.js';
+import { evaluationStatus } from './flags.js';
 
 export const figureKinds = ['critical', 'normal', 'positive', 'refuted', 'human'];
 export function selectedCountries(params, countries) {
@@ -9,10 +10,12 @@ export function selectedFigures(params) {
   if (!params.has('figures')) return [...figureKinds];
   return [...new Set(params.get('figures').split(',').filter(k => figureKinds.includes(k)))];
 }
-export function filterSummaryConversations(conversations, visible, variable) {
+export const selectedPending = params => params.get('pending') === '1';
+export function filterSummaryConversations(conversations, visible, variable, { showPending = false } = {}) {
   if (!visible.length) return [];
-  if (figureKinds.every(kind => visible.includes(kind))) return conversations;
-  return conversations.filter(c => compactMarks([c], { visible, variable, classification: 'all' }).kinds.length > 0);
+  const eligible = showPending ? conversations : conversations.filter(c => !['not_evaluated', 'review_pending'].includes(evaluationStatus(c)));
+  if (figureKinds.every(kind => visible.includes(kind))) return eligible;
+  return eligible.filter(c => compactMarks([c], { visible, variable, classification: 'all' }).kinds.length > 0);
 }
 export function summaryMetrics(conversations) {
   const evaluated = conversations.filter(c => c.evaluated).length;
