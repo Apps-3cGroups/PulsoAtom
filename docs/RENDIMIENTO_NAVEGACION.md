@@ -43,4 +43,4 @@ El despliegue ejecuta las migraciones funcionales antes de reiniciar y difiere l
 
 Para revertir rendimiento, revertir su PR y desplegar. Las columnas e índices aditivos pueden permanecer: el código anterior no depende de ellos. No se modificaron resultados ni transcripciones. La reversión funcional es independiente y debe coordinarse con cualquier corrida activa para conservar su recuperación. El despliegue preserva el monitor estático de avance existente.
 
-La validación visual y la publicación permanecen pendientes mientras el navegador de Work está deshabilitado.
+La validación visual directa se completó el 11/11/2026 sobre la entrega funcional integrada: tres períodos, multiselección, filtros y métricas, navegación de Activas y tamaños de escritorio/móvil. La publicación se realiza después de la entrega funcional; las mediciones anteriores corresponden a consultas en el servidor, no al tiempo visual del navegador.
