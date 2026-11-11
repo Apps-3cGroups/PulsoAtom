@@ -2,9 +2,10 @@ import { messageCounts } from './message-counts.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AppError } from './errors.js';
-import { selectedEvaluation, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
+import { selectedEvaluation, evaluationSelectionContext, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { classificationOf, catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { operationalConsensus } from './operational-evaluation.js';
+import { navigationSummaryCache } from './navigation-cache.js';
 
 export const catalogFields = z.object({
   name: z.string().trim().min(3).max(160), family: z.string().trim().min(3).max(120),
@@ -37,6 +38,9 @@ export function ensureVersion(item, expected) {
 export function viewContext(state, profileId) {
   return {
     profileId,
+    selection: evaluationSelectionContext(state),
+    summaryCache: navigationSummaryCache(state, profileId),
+    currentScope: currentCatalog(state).map(v => ({ id: v.id, version: v.version, active: v.active })),
     versions: new Map(state.catalogVersions.map(v => [v.id, v.snapshot])),
     evaluations: new Map(state.evaluations.map(e => [e.id, e])),
     reviews: Map.groupBy ? Map.groupBy(state.reviews, r => r.conversationId) : state.reviews.reduce((m, r) => m.set(r.conversationId, [...(m.get(r.conversationId) || []), r]), new Map()),
@@ -57,13 +61,18 @@ export function evaluationCompletion(evaluation, variables, profileView = false)
   return 'evaluated';
 }
 export function conversationView(state, conversation, context = viewContext(state), detail = false) {
-  const evaluation = selectedEvaluation(state, conversation, context.profileId);
+  if (!detail) { const cached = context.summaryCache?.get(conversation.id); if (cached) return cached; }
+  const evaluation = selectedEvaluation(state, conversation, context.profileId, context.selection);
   const reviews = (context.profileId ? [] : context.reviews.get(conversation.id) || []).filter(r => r.evaluationId === evaluation?.id);
   const latest = new Map();
   for (const review of reviews) latest.set(review.variableId, review.action === 'deshacer' ? null : review);
   const resultMap = new Map((evaluation?.results || []).map(r => [r.variableId, r]));
-  const scope = evaluation?.catalogVersions || currentCatalog(state).map(v => ({ id: v.id, version: v.version, active: v.active }));
-  const variables = scope.map(ref => {
+  const scope = evaluation?.catalogVersions || context.currentScope;
+  if (!evaluation && !detail && !context.pendingCatalogValidated) {
+    if (scope.some(ref => !context.versions.has(`${ref.id}:${ref.version}`))) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
+    context.pendingCatalogValidated = true;
+  }
+  const variables = (!evaluation && !detail ? [] : scope).map(ref => {
     const definition = context.versions.get(`${ref.id}:${ref.version}`);
     if (!definition) throw new AppError(500, 'Falta una versión del checklist referenciada por la evaluación.', 'MISSING_CATALOG_VERSION');
     const result = resultMap.get(ref.id) || { variableId: ref.id, status: 'no_evaluado', value: null, evidence: [] };
@@ -87,7 +96,9 @@ export function conversationView(state, conversation, context = viewContext(stat
     const priority = classification === 'critical' ? 'Crítico' : classification === 'normal' ? 'Normal' : null;
     const effective = !!kind && kind !== 'refuted';
     const dualDetected = effective && consensus?.detected === true;
-    return { ...definition, availability: catalogAvailability(definition), enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, consensusSuppressed, consensusPending };
+    return { ...(detail ? { ...definition, availability: catalogAvailability(definition) }
+      : { id: definition.id, name: definition.name, type: definition.type, method: definition.method }),
+      enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, consensusSuppressed, consensusPending };
   });
   const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, classification: v.classification, origin: v.origin, effective: v.effective, dualDetected: v.dualDetected,
     comparison: v.result.comparison ? Object.fromEntries(['agreement', 'detections', 'votes', 'expected', 'missing', 'label'].map(k => [k, v.result.comparison[k]])) : null }));
@@ -110,7 +121,7 @@ export function conversationView(state, conversation, context = viewContext(stat
     activityAt: conversation.activityAt, lastActivityAt: conversation.lastActivityAt || null,
     p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
   return detail ? { ...base, messages: conversation.messages, messageCounts: messageCounts(conversation.messages), sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: evaluationStatus === 'review_pending', modelReviews: evaluation.modelReviews || [], provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
-    metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : base;
+    metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : (context.summaryCache?.set(conversation.id, base), base);
 }
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
 export const listQuerySchema = z.object({

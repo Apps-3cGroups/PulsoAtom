@@ -1,3 +1,4 @@
+import { sendNavigationJson } from './navigation-response.js';
 import { activeReason, publicOneOffRuns } from './one-off-evaluations.js';
 import express from 'express';
 import helmet from 'helmet';
@@ -13,7 +14,7 @@ import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
 import { registryFromEnv, asRegistry } from './model-registry.js';
 import { mountModelRoutes } from './model-routes.js';
-import { selectedEvaluation, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
+import { selectedEvaluation, evaluationSelectionContext, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { conversationDailyMetrics } from './daily-metrics.js';
@@ -54,6 +55,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = (fresh = false) => store.readWithConversations ? store.readWithConversations({ fresh }) : store.read();
+  const authenticationTransaction = fn => store.authenticationTransaction ? store.authenticationTransaction(fn) : store.transaction(fn);
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
@@ -74,14 +76,14 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   });
   app.get(`${prefix}/health`, async (_req, res) => {
     let storageReady = true, state;
-    try { state = await store.read(); } catch { storageReady = false; }
+    try { state = await (store.readSchedulerState ? store.readSchedulerState() : store.read()); } catch { storageReady = false; }
     res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: storageReady && status(state).ready });
   });
   app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
   app.use(prefix, async (req, _res, next) => {
     const token = req.cookies[cookieName];
     if (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token)) {
-      const state = await store.read();
+      const state = store.readAuthentication ? await store.readAuthentication(tokenHash(token)) : await store.read();
       const session = state.sessions.find(s => s.id === tokenHash(token) && Date.parse(s.expiresAt) > Date.now());
       const user = session && state.users.find(u => u.id === session.userId && u.active);
       if (user) {
@@ -98,7 +100,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: config.secureCookie, path: basePath, maxAge: config.sessionHours * 3600000 };
   async function signIn(req, res, user) {
     const token = newToken();
-    await store.transaction(state => {
+    await authenticationTransaction(state => {
       state.sessions = state.sessions.filter(s => Date.parse(s.expiresAt) > Date.now() && s.id !== req.sessionId);
       state.sessions.push({ id: tokenHash(token), userId: user.id, expiresAt: new Date(Date.now() + cookieOptions.maxAge).toISOString() });
     });
@@ -121,7 +123,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       if (!source || !matchesSomos3cPassword(source.passwordHash, input.password)) throw new AppError(401, 'Usuario o contraseña incorrectos.', 'INVALID_CREDENTIALS');
       if (!source.active || source.blocked) throw new AppError(403, 'La cuenta de origen está inactiva o bloqueada.', 'SOURCE_ACCOUNT_BLOCKED');
       if (source.changeRequired) throw new AppError(403, 'Debes actualizar tu contraseña en el portal de origen antes de entrar a Pulso.', 'PASSWORD_CHANGE_REQUIRED');
-      const user = await store.transaction(state => {
+      const user = await authenticationTransaction(state => {
         const id = externalUserId(source.id);
         let current = state.users.find(item => item.id === id);
         const sourceAdmin = source.sourceRoles.includes('super_admin');
@@ -137,14 +139,14 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       return signIn(req, res, user);
     }
     const input = loginSchema.parse(req.body);
-    const state = await store.read();
-    const user = state.users.find(u => u.email.toLowerCase() === input.email.toLowerCase() && u.active);
+    const candidate = store.readUserByEmail ? await store.readUserByEmail(input.email) : (await store.read()).users.find(u => u.email.toLowerCase() === input.email.toLowerCase());
+    const user = candidate?.active ? candidate : null;
     if (!verifyPassword(input.password, user?.passwordHash)) throw new AppError(401, 'Correo o contraseña incorrectos.', 'INVALID_CREDENTIALS');
     await signIn(req, res, user);
   });
   app.get(`${prefix}/auth/me`, requireUser, (req, res) => res.json({ user: req.user, mode: config.demo ? 'demo' : 'real' }));
   app.post(`${prefix}/auth/logout`, async (req, res) => {
-    if (req.sessionId) await store.transaction(state => { state.sessions = state.sessions.filter(s => s.id !== req.sessionId); return null; });
+    if (req.sessionId) await authenticationTransaction(state => { state.sessions = state.sessions.filter(s => s.id !== req.sessionId); return null; });
     res.clearCookie(cookieName, { path: basePath, httpOnly: true, sameSite: 'strict', secure: config.secureCookie }).status(204).end();
   });
   app.use(prefix, requireUser);
@@ -190,7 +192,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ grant });
   });
   app.get(`${prefix}/bootstrap`, async (_req, res) => {
-    const state = await readHistory();
+    const state = store.readBootstrap ? await store.readBootstrap() : await readHistory();
     const dates = state.conversations.map(c => c.date).sort();
     const activityDates = state.conversations.map(c => c.activityDate || c.date).sort();
     res.json({
@@ -256,8 +258,9 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     res.json({ item });
   });
   const expose = async (state, userId, conversations, profileId) => {
+    const selection = evaluationSelectionContext(state);
     const evaluations = conversations.map(c => {
-      const e = selectedEvaluation(state, c, profileId);
+      const e = selectedEvaluation(state, c, profileId, selection);
       if (!e) return null;
       // Viewing a legacy prediction can bias a later review even when its original
       // input cannot be proven equivalent. Track exposure conservatively, without
@@ -265,12 +268,18 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       return e.sourceHash ? e : { ...e, sourceHash: sourceFingerprint(c),
         catalogVersions: e.catalogVersions.map(v => ({ ...v, active: e.results.some(r => r.variableId === v.id) })) };
     }).filter(Boolean);
-    if (evaluations.length) await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
+    if (evaluations.length) {
+      if (store.recordExposures) {
+        const exposureState = { ...state, exposures: [] };
+        evaluations.forEach(e => exposeEvaluation(exposureState, userId, e));
+        await store.recordExposures(exposureState.exposures);
+      } else await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
+    }
   };
   app.get(`${prefix}/active`, async (req, res) => {
     const query = listQuerySchema.parse({ ...req.query, pageSize: req.query.pageSize || 12 });
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
-    const state = await readHistory();
+    const state = store.readForNavigation ? await store.readForNavigation(query, { activeOnly: true }) : await readHistory();
     const reasons = new Map(state.conversations.map(c => [c.id, activeReason(c, state.settings)]));
     const active = { ...state, conversations: state.conversations.filter(c => reasons.get(c.id)) };
     const conversations = filteredConversations(active, query).sort(priorityOrder);
@@ -278,18 +287,19 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       .map(c => ({ ...c, activeReason: reasons.get(c.id) }));
     const ids = new Set(items.map(c => c.id));
     await expose(state, req.user.id, state.conversations.filter(c => ids.has(c.id)), query.modelProfileId);
-    res.json({ items, total: conversations.length, metrics: summarize(conversations),
+    await sendNavigationJson(req, res, { items, total: conversations.length, metrics: summarize(conversations),
       pending: conversations.filter(c => c.evaluationStatus !== 'evaluated' || c.sourceChanged).length,
       page: query.page, pageSize: query.pageSize, runs: publicOneOffRuns(state) });
   });
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
-    const state = await readHistory();
+    const state = store.readForNavigation ? await store.readForNavigation(query) : await readHistory();
     const conversations = filteredConversations(state, query);
-    await expose(state, req.user.id, state.conversations.filter(c => conversations.some(v => v.id === c.id)), query.modelProfileId);
+    const visibleIds = new Set(conversations.map(c => c.id));
+    await expose(state, req.user.id, state.conversations.filter(c => visibleIds.has(c.id)), query.modelProfileId);
     const priority = conversations.filter(c => c.p1 || c.p2).sort(priorityOrder);
-    res.json({ metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
+    await sendNavigationJson(req, res, { metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
   });
   const list = (search = false) => async (req, res) => {
     const query = listQuerySchema.parse(req.query);

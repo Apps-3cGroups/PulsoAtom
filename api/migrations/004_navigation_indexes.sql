@@ -1,0 +1,22 @@
+-- Additive online indexes, restartable after an interrupted migration.
+SET SESSION lock_wait_timeout = 10;
+SET @pulso_navigation_ddl = IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluations' AND COLUMN_NAME = 'conversation_key'), 'SELECT 1', 'ALTER TABLE evaluations ADD COLUMN conversation_key VARCHAR(200) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(payload, ''$.conversationId''))) VIRTUAL, ALGORITHM=INPLACE, LOCK=NONE');
+PREPARE pulso_navigation_stmt FROM @pulso_navigation_ddl;
+EXECUTE pulso_navigation_stmt;
+DEALLOCATE PREPARE pulso_navigation_stmt;
+SET @pulso_navigation_ddl = IF(EXISTS(SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluations' AND INDEX_NAME = 'ix_evaluations_conversation'), 'SELECT 1', 'ALTER TABLE evaluations ADD INDEX ix_evaluations_conversation (conversation_key), ALGORITHM=INPLACE, LOCK=NONE');
+PREPARE pulso_navigation_stmt FROM @pulso_navigation_ddl;
+EXECUTE pulso_navigation_stmt;
+DEALLOCATE PREPARE pulso_navigation_stmt;
+SET @pulso_navigation_ddl = IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_tasks' AND COLUMN_NAME = 'conversation_key'), 'SELECT 1', 'ALTER TABLE evaluation_tasks ADD COLUMN conversation_key VARCHAR(200) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(payload, ''$.conversationId''))) VIRTUAL, ALGORITHM=INPLACE, LOCK=NONE');
+PREPARE pulso_navigation_stmt FROM @pulso_navigation_ddl;
+EXECUTE pulso_navigation_stmt;
+DEALLOCATE PREPARE pulso_navigation_stmt;
+SET @pulso_navigation_ddl = IF(EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_tasks' AND COLUMN_NAME = 'job_key'), 'SELECT 1', 'ALTER TABLE evaluation_tasks ADD COLUMN job_key VARCHAR(200) GENERATED ALWAYS AS (JSON_UNQUOTE(JSON_EXTRACT(payload, ''$.jobId''))) VIRTUAL, ALGORITHM=INPLACE, LOCK=NONE');
+PREPARE pulso_navigation_stmt FROM @pulso_navigation_ddl;
+EXECUTE pulso_navigation_stmt;
+DEALLOCATE PREPARE pulso_navigation_stmt;
+SET @pulso_navigation_ddl = IF(EXISTS(SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'evaluation_tasks' AND INDEX_NAME = 'ix_tasks_conversation_job'), 'SELECT 1', 'ALTER TABLE evaluation_tasks ADD INDEX ix_tasks_conversation_job (conversation_key, job_key), ALGORITHM=INPLACE, LOCK=NONE');
+PREPARE pulso_navigation_stmt FROM @pulso_navigation_ddl;
+EXECUTE pulso_navigation_stmt;
+DEALLOCATE PREPARE pulso_navigation_stmt;

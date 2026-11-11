@@ -13,7 +13,7 @@ export function scheduleClock(now, timezone) {
 }
 
 export async function runDailyTick(store, evaluator, now = new Date()) {
-  const state = await store.read();
+  const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   const { settings, jobs } = state;
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
   const registry = asRegistry(evaluator).forState(state);
@@ -25,7 +25,7 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
     const options = dailyActivityRequest(settings, settings.dailyCatchupRunDate || clock.date);
     for (const id of options.modelIds) registry.resolve(id);
     await recoverEvaluationJobs(store);
-    const current = await store.read();
+    const current = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
     if (current.jobs.some(job => job.status === 'running')) return null;
     const interrupted = current.jobs.find(job => job.dailyActivity?.configurationHash === options.dailyActivity.configurationHash && job.status === 'interrupted' && !job.dailyResumeError);
     let execution;
