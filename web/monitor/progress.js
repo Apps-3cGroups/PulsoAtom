@@ -1,6 +1,9 @@
 export const POLL_MS = 30_000;
-export const ACTIVITY_DATE = '2026-11-09';
-export const COUNTRIES = [{ code: 'HN', name: 'Honduras', target: 200 }, { code: 'PA', name: 'Panamá', target: 197 }];
+export const RUN_DATE = '2026-11-11';
+export const ACTIVITY_DATE = '2026-11-10';
+// Verified ready conversations for this activity date: HN 367, PA 164.
+// Apply the daily country cap; later assigned batches can raise the PA target.
+export const COUNTRIES = [{ code: 'HN', name: 'Honduras', target: 200 }, { code: 'PA', name: 'Panamá', target: 164 }];
 export const MODELS = [{ id: 'clef-local', label: 'Clef', model: 'clef-flash' }, { id: 'gemma-local', label: 'Gemma', model: 'gemma-4-26b-a4b-it-mlx' }];
 export class MonitorError extends Error {
   constructor(message, status = 0) { super(message); this.status = status; }
@@ -34,7 +37,8 @@ export function createPoller({ collect, onStart, onData, onError, onEnd, schedul
     onStart?.();
     try {
       const snapshot = await collect(controller.signal);
-      if (!stopped) { automatic = !snapshot.finished; onData?.(snapshot); }
+      // Keep watching even between finished batches: more loads can arrive.
+      if (!stopped) onData?.(snapshot);
     } catch (error) {
       if (!stopped) { if ([401, 403].includes(error.status)) automatic = false; onError?.(error.name === 'AbortError' ? new MonitorError('La consulta tardó demasiado. Conservamos la última lectura.') : error); }
     } finally {

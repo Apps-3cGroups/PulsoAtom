@@ -5,11 +5,12 @@ import { Alert, Button, ConfigProvider, Progress, Tag } from 'antd';
 import { ArrowLeftOutlined, CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import './style.css';
-import { createApi, createCollector, createPoller, portalBase } from './progress.js';
+import { ACTIVITY_DATE, RUN_DATE, createApi, createCollector, createPoller, portalBase } from './progress.js';
 
 const time = value => value ? new Intl.DateTimeFormat('es-HN', { timeZone: 'America/Tegucigalpa', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).format(new Date(value)) : '—';
 const number = value => new Intl.NumberFormat('es-HN').format(value);
 const pct = value => value.toLocaleString('es-HN', { maximumFractionDigits: 1 });
+const day = value => new Intl.DateTimeFormat('es-HN', { timeZone: 'America/Tegucigalpa', day: 'numeric', month: 'long' }).format(new Date(`${value}T12:00:00Z`));
 function Brand() { return <span className="brand"><span className="brand-mark" aria-hidden="true"><i /><i /></span><span>Pulso<span className="brand-period">.</span></span></span>; }
 
 function Monitor({ base }) {
@@ -30,8 +31,8 @@ function Monitor({ base }) {
   return <div className="monitor-shell">
     <header className="monitor-topbar"><a href={`${base}/`} aria-label="Volver a Pulso"><Brand /></a><span className="topbar-divider" /><span className="monitor-name">Avance en vivo</span><a className="back-link" href={`${base}/evaluaciones`}><ArrowLeftOutlined /> Volver al portal</a></header>
     <main className="monitor-main">
-      <div className="page-intro"><div><span className="eyebrow">HONDURAS Y PANAMÁ · ACTIVIDAD DEL 9 DE NOVIEMBRE</span><h1>Así avanza la revisión<span>.</span></h1><p>Clef y Gemma sobre las mismas conversaciones. Completas, parciales y pendientes, en un solo lugar.</p></div><Button icon={<ReloadOutlined />} loading={busy && !!snapshot} disabled={busy} onClick={() => poller.current?.refresh()}>Actualizar ahora</Button></div>
-      <div className={`connection-strip${stale || quiet || snapshot?.interrupted || snapshot?.paused ? ' connection-warning' : ''}`} role="status"><span><i className={!error && !snapshot?.finished && !quiet ? 'pulse-dot' : ''} />{status}{!error && !snapshot?.finished && <small> · cada 30 segundos</small>}</span><span>{snapshot ? `Última consulta: ${time(snapshot.observedAt)}` : 'Conectando con Pulso…'} <small>· hora de Honduras</small></span></div>
+      <div className="page-intro"><div><span className="eyebrow">HONDURAS Y PANAMÁ · CORRIDA DEL {day(RUN_DATE)} · ACTIVIDAD DEL {day(ACTIVITY_DATE)}</span><h1>Así avanza la revisión<span>.</span></h1><p>Clef y Gemma sobre las mismas conversaciones. Completas, parciales y pendientes, en un solo lugar.</p></div><Button icon={<ReloadOutlined />} loading={busy && !!snapshot} disabled={busy} onClick={() => poller.current?.refresh()}>Actualizar ahora</Button></div>
+      <div className={`connection-strip${stale || quiet || snapshot?.interrupted || snapshot?.paused ? ' connection-warning' : ''}`} role="status"><span><i className={!error && !snapshot?.finished && !quiet ? 'pulse-dot' : ''} />{status}{!error && <small> · cada 30 segundos</small>}</span><span>{snapshot ? `Última consulta: ${time(snapshot.observedAt)}` : 'Conectando con Pulso…'} <small>· hora de Honduras</small></span></div>
       {error && <Alert type={auth ? 'warning' : 'error'} showIcon message={error.message} action={auth ? <Button href={`${base}/`} target="_blank" rel="noopener noreferrer">Iniciar sesión</Button> : undefined} />}
       {!snapshot ? <section className="waiting-panel" aria-busy={busy}><Brand /><h2>{error ? 'El avance aparecerá al recuperar la conexión' : 'Consultando la corrida actual'}</h2><p>{error ? 'Inicia sesión en Pulso y vuelve aquí para actualizar.' : 'Leyendo los resultados guardados de Honduras y Panamá.'}</p></section> : <>
         <section className="progress-overview" aria-label="Avance general de las revisiones">
