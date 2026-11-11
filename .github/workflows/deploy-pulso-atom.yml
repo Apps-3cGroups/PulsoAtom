@@ -507,6 +507,9 @@ jobs:
           echo "Installing web dependencies"
           npm ci --prefix "$WEB" --ignore-scripts --no-audit --no-fund
 
+          echo "Checking summary filter overlays before replacing web assets"
+          (cd "$WEB" && node --test test/summary-overlays.test.js)
+
           echo "Building web"
           if [ -d "$WEB/dist/monitor-evaluaciones" ]; then
             MONITOR_BACKUP="$(mktemp -d /tmp/pulso-monitor-backup.XXXXXX)"
