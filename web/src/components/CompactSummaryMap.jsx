@@ -6,7 +6,7 @@ import { compactDaySlots, groupCompactDay, compactMarks } from '../services/summ
 import { classificationOf, dualMarks, evaluationStatus, evaluationStatusLabel } from '../services/flags';
 import './CompactSummaryMap.css';
 
-const labels = { critical: 'Crítico', normal: 'Normal', refuted: 'Refutado', human: 'Humano', positive: 'Positivo' };
+const labels = { critical: 'Crítico', normal: 'Menor', refuted: 'Refutado', human: 'Humano', positive: 'Positivo' };
 
 export default function CompactSummaryMap({ groups, days, visible, variable, classification, onOpen, onHistory }) {
   const map = useRef(null), timeline = useRef(null);
@@ -17,7 +17,9 @@ export default function CompactSummaryMap({ groups, days, visible, variable, cla
   useLayoutEffect(() => {
     const measure = () => {
       if (!map.current || !timeline.current) return;
-      const available = map.current.clientHeight - 32 - groups.length * 28;
+      const headerHeight = map.current.querySelector('.compact-map-head')?.getBoundingClientRect().height || 0;
+      const countryHeight = [...map.current.querySelectorAll('.compact-country-title')].reduce((sum, title) => sum + title.getBoundingClientRect().height, 0);
+      const available = map.current.clientHeight - headerHeight - countryHeight - 2;
       const next = { slots: compactDaySlots(timeline.current.clientWidth, days.length), rowHeight: Math.max(2, Math.min(22, available / Math.max(1, rowCount))) };
       setLayout(current => current.slots === next.slots && current.rowHeight === next.rowHeight ? current : next);
     };

@@ -9,6 +9,7 @@ try {
   await connection.query('CREATE TABLE IF NOT EXISTS schema_migrations (name VARCHAR(160) PRIMARY KEY, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB');
   const directory = new URL('../migrations/', import.meta.url);
   for (const name of (await readdir(directory)).filter(name => name.endsWith('.sql')).sort()) {
+    if (process.argv.includes('--defer-online-indexes') && name.endsWith('_indexes.sql')) continue;
     const [existing] = await connection.execute('SELECT name FROM schema_migrations WHERE name = ?', [name]);
     if (existing.length) { console.log(`Ya aplicada: ${name}`); continue; }
     const sql = await readFile(new URL(name, directory), 'utf8');

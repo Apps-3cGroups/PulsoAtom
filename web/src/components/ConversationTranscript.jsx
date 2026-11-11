@@ -12,7 +12,7 @@ const messageTime = value => hasTime(value) ? timeText(value) : '—';
 const classificationOptions = [
   { value: 'all', label: 'Todas las marcas' },
   { value: 'critical', label: 'Flag crítico' },
-  { value: 'normal', label: 'Flag normal' },
+  { value: 'normal', label: 'Flag menor' },
   { value: 'positive', label: '+ Positivo' },
   { value: 'human', label: 'Flag humano' },
   { value: 'refuted', label: 'Refutados' },

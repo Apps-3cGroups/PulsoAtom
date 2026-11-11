@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto';
 import { evaluationInstructions, PROMPT_VERSION, RULES_VERSION } from './evaluator.js';
 
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export const sourceFingerprint = c => digest({ id: c.id, country: c.country ?? null, completed: c.completed ?? true,
+const navigationFingerprints = new WeakMap();
+export const rememberSourceFingerprint = (conversation, fingerprint) => navigationFingerprints.set(conversation, fingerprint);
+export function copySourceFingerprint(from, to) { if (navigationFingerprints.has(from)) navigationFingerprints.set(to, navigationFingerprints.get(from)); }
+export const sourceFingerprint = c => navigationFingerprints.get(c) || digest({ id: c.id, country: c.country ?? null, completed: c.completed ?? true,
   messages: c.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text, timestamp: m.timestamp ?? null,
     ...(c.messageAgentIdsAvailable ? { agentId: m.agentId ?? null } : {}) })),
   // Optional inputs enter the fingerprint only when used by the evaluator. The
@@ -27,11 +30,19 @@ export function ensureEvaluationState(state) {
   for (const [id, e] of legacy) state.operationalRefs.push({ id, evaluationId: e.id });
   return state;
 }
-export function selectedEvaluation(state, conversation, profileId) {
-  if (profileId) return state.evaluations.filter(e => e.conversationId === conversation.id && historicalProfileId(e) === profileId)
+const group = (values, key) => values.reduce((map, value) => {
+  const id = value[key]; if (!map.has(id)) map.set(id, []); map.get(id).push(value); return map;
+}, new Map());
+// Explicit per-read context; never reused across mutations of evaluator state.
+export function evaluationSelectionContext(state) {
+  return { evaluations: group(state.evaluations, 'conversationId'), byId: group(state.evaluations, 'id'), refs: group(state.operationalRefs || [], 'id') };
+}
+export function selectedEvaluation(state, conversation, profileId, context) {
+  if (profileId) return (context?.evaluations.get(conversation.id) || state.evaluations).filter(e => e.conversationId === conversation.id && historicalProfileId(e) === profileId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const ref = state.operationalRefs?.find(r => r.id === conversation.id);
-  return operationalEvaluation(state, state.evaluations.find(e => e.id === (ref?.evaluationId || conversation.evaluationId)));
+  const ref = context ? context.refs.get(conversation.id)?.[0] : state.operationalRefs?.find(r => r.id === conversation.id);
+  const id = ref?.evaluationId || conversation.evaluationId;
+  return operationalEvaluation(state, context ? context.byId.get(id)?.[0] : state.evaluations.find(e => e.id === id));
 }
 export function latestVerdict(state, conversationId, sourceHash, variableId, version) {
   if (!sourceHash) return null;
