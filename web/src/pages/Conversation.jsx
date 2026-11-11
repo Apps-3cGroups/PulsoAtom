@@ -1,3 +1,4 @@
+import { conversationReturn } from '../services/conversationNavigation';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Drawer, Tag, Timeline, Tooltip } from 'antd';
@@ -18,6 +19,7 @@ export default function Conversation() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const returnTarget = conversationReturn(params);
   const requestPath = id ? `/conversations/${encodeURIComponent(id)}` : null;
   const request = useApi(requestPath);
   const [filters, setFilters] = useState({ onlyMarked: false, variableId: null, classification: 'all' });
@@ -63,14 +65,14 @@ export default function Conversation() {
   };
   const showFlag = variableId => { setSelectedFlagId(variableId); setInspector('flag'); };
   const showChecklist = (all = false) => { setChecklistAll(all); setInspector('checklist'); };
-  if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Volver al histórico</Button><ErrorState error={request.error} retry={request.reload} /></>;
+  if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTarget.to)}>{returnTarget.action}</Button><ErrorState error={request.error} retry={request.reload} /></>;
   if (request.loading || !conversation || request.dataPath !== requestPath) return <LoadingState />;
   const c = conversation;
   const status = evaluationStatus(c);
   const selectedFlag = c.variables.find(v => v.id === selectedFlagId);
   const titles = { checklist: 'Checklist de la evaluación', models: 'Evaluaciones de los modelos', metrics: 'Métricas de la conversación', history: 'Historial de revisiones', flag: selectedFlag?.name || 'Detalle del flag' };
   return <div className="detail-page conversation-focus">
-    <div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate('/historico')}>Histórico</Button><span>/</span><span>Conversación</span><span className="mono muted">{c.id}</span></div>
+    <div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTarget.to)}>{returnTarget.label}</Button><span>/</span><span>Conversación</span><span className="mono muted">{c.id}</span></div>
     <PageHeading eyebrow="CONVERSACIÓN" title={<>{c.client.name}{c.client.phoneLast4 && <span className="heading-phone"> …{c.client.phoneLast4}</span>}</>} description={`${c.agent.name} · ${c.countryName} · ${dateText(c.date)} · ${c.channel}`} actions={<div className="conversation-heading-actions">
       <Button icon={<BarChartOutlined />} onClick={() => setInspector('metrics')}>Métricas</Button>
       <Button icon={<ReadOutlined />} onClick={() => setInspector('models')}>Modelos</Button>

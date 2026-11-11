@@ -9,7 +9,7 @@ import { PageHeading, ErrorState, EmptyState, LoadingState, PriorityTag, dateTex
 
 const types = ['Flag', 'Métrica', 'Descriptor', 'Calculado'];
 const methods = ['IA', 'Código', 'IA + código', 'Cálculo'];
-const markOptions = [{ value: '', label: 'Normal para flags · Sin marca para otros tipos' }, { value: 'Crítico', label: 'Flag crítico' }, { value: '+', label: '+ Positivo' }];
+const markOptions = [{ value: '', label: 'Menor para flags · Sin marca para otros tipos' }, { value: 'Crítico', label: 'Flag crítico' }, { value: '+', label: '+ Positivo' }];
 export default function Catalog() {
   const { user, bootstrap, refreshBootstrap } = usePortal();
   const isAdmin = user.role === 'admin';

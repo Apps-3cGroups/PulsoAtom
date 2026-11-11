@@ -116,6 +116,7 @@ const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isN
 export const listQuerySchema = z.object({
   modelProfileId: z.string().max(160).optional(),
   from: dateOnly.optional(), to: dateOnly.optional(), country: z.string().max(10).optional(),
+  countries: z.string().max(200).regex(/^[A-Z]{2}(,[A-Z]{2})*$/).transform(value => [...new Set(value.split(','))]).optional(),
   dateBasis: z.enum(['started', 'activity']).default('activity'),
   agent: z.string().max(120).optional(), q: z.string().max(300).optional(), variable: z.string().max(160).optional(),
   priority: z.enum(['P1', 'P2', 'Crítico', 'Normal', 'all']).optional(),
@@ -128,7 +129,7 @@ const displayDateOf = (conversation, basis) => basis === 'started' ? conversatio
 const displayTimeOf = (conversation, basis) => basis === 'started' ? conversation.startedAt : conversation.activityAt || conversation.lastActivityAt || conversation.startedAt;
 export function filteredConversations(state, query, textSearch = false) {
   const context = viewContext(state, query.modelProfileId);
-  return state.conversations.filter(c => (!query.from || displayDateOf(c, query.dateBasis) >= query.from) && (!query.to || displayDateOf(c, query.dateBasis) <= query.to) && (!query.country || c.country === query.country) && (!query.agent || c.agent.id === query.agent)).map(c => {
+  return state.conversations.filter(c => (!query.from || displayDateOf(c, query.dateBasis) >= query.from) && (!query.to || displayDateOf(c, query.dateBasis) <= query.to) && (query.countries ? query.countries.includes(c.country) : !query.country || c.country === query.country) && (!query.agent || c.agent.id === query.agent)).map(c => {
     const view = conversationView(state, c, context);
     view.displayDate = displayDateOf(c, query.dateBasis);
     view.displayAt = displayTimeOf(c, query.dateBasis);

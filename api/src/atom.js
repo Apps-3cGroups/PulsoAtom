@@ -65,6 +65,9 @@ export function mapAtomConversation(row, events, country, timezone) {
   return {
     id: String(row.IdConversacion), sourceId: row.IdExternoAtom,
     sourceDocumentId: row.IdDocumentoVigente == null ? null : String(row.IdDocumentoVigente), demo: false,
+    sourceState: String(row.EstadoOrigen || '').trim().toUpperCase(), sourceClosedAt: optionalIso(row.FechaFinUtc),
+    ingestionBatchId: row.IdLoteIngesta == null ? null : String(row.IdLoteIngesta),
+    ingestionStartedAt: optionalIso(row.IngestaInicioUtc),
     country: country.code, countryName: country.name, sourceCountryCode: Number(row.CodigoPais),
     agent: { id: row.IdAsesorActual == null ? 'sin-asesor' : String(row.IdAsesorActual), name: row.AsesorNombre || 'Sin asesor asignado' },
     client: { name: row.ClienteNombre || 'Cliente', code: row.IdExternoAtom, phoneLast4: null },
@@ -84,6 +87,7 @@ export class AtomReader {
   constructor(options, timezone) {
     this.pool = mysql.createPool(options.connection);
     this.tables = Object.fromEntries(Object.entries(options.tables).map(([key, value]) => [key, mysql.escapeId(value)]));
+    this.tables.batches ||= mysql.escapeId(options.tables.documents.includes('.') ? `${options.tables.documents.split('.')[0]}.tblLotesIngesta` : 'tblLotesIngesta');
     this.timezone = timezone;
     this.cache = null;
     this.pending = null;
@@ -97,7 +101,7 @@ export class AtomReader {
       const where = batch ? ` WHERE c.IdConversacion IN (${batch.map(() => '?').join(',')})` : '';
       const [countries] = await this.pool.query(`SELECT DISTINCT p.CodigoPais AS code, p.ISO_Code2 AS iso2, p.NombrePais AS name FROM ${p} p INNER JOIN ${c} c ON c.CodigoPais = p.CodigoPais INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO'${where} ORDER BY p.NombrePais`, batch);
       for (const country of countries) countryMap.set(String(country.code), country);
-      const [conversations] = await this.pool.query(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual, c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.FechaCreacionUtc, c.FechaActualizacionUtc, c.IdDocumentoVigente, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal${where} ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`, batch);
+      const [conversations] = await this.pool.query(`SELECT c.IdConversacion, c.IdExternoAtom, c.CodigoPais, c.IdAsesorActual, c.ClienteNombre, c.FechaInicioUtc, c.FechaFinUtc, c.FechaUltimaActividadUtc, c.FechaCreacionUtc, c.FechaActualizacionUtc, c.IdDocumentoVigente, c.EstadoOrigen, d.IdLoteIngesta, l.FechaInicioUtc AS IngestaInicioUtc, a.Nombre AS AsesorNombre, ch.Nombre AS CanalNombre FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO' LEFT JOIN ${this.tables.batches} l ON l.IdLoteIngesta = d.IdLoteIngesta LEFT JOIN ${a} a ON a.IdAsesor = c.IdAsesorActual LEFT JOIN ${ch} ch ON ch.IdCanal = c.IdCanal${where} ORDER BY c.FechaUltimaActividadUtc DESC, c.IdConversacion DESC`, batch);
       rows.push(...conversations);
     }
     const countryRows = [...countryMap.values()];
@@ -121,6 +125,21 @@ export class AtomReader {
       return mapAtomConversation(row, byDocument.get(String(row.IdDocumentoVigente)) || [], country, this.timezone);
     });
     return { conversations, countries, loadedAt: new Date().toISOString() };
+  }
+  async readIngestionSnapshot(run) {
+    const { batches: b, documents: d, conversations: c, countries: p } = this.tables;
+    const [rows] = await this.pool.execute(`SELECT l.IdLoteIngesta AS id, l.Estado AS status, p.ISO_Code2 AS country
+      FROM ${b} l LEFT JOIN ${d} d ON d.IdLoteIngesta = l.IdLoteIngesta
+      LEFT JOIN ${c} c ON c.IdConversacion = d.IdConversacion LEFT JOIN ${p} p ON p.CodigoPais = c.CodigoPais
+      WHERE l.FechaInicioUtc >= ? AND l.FechaInicioUtc < ?
+      GROUP BY l.IdLoteIngesta, l.Estado, p.ISO_Code2`, [new Date(run.ingestionFrom), new Date(run.expiresAt)]);
+    const batches = new Map();
+    for (const row of rows) {
+      const id = String(row.id);
+      if (!batches.has(id)) batches.set(id, { id, status: row.status, countries: [] });
+      if (row.country) batches.get(id).countries.push(row.country);
+    }
+    return { batches: [...batches.values()] };
   }
   async read({ fresh = false, conversationIds } = {}) {
     // Targeted evaluation reads always query the source independently. They

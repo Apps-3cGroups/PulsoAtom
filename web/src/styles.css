@@ -942,3 +942,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .summary-month .metric-card > strong { font-size: 22px; }
 .summary-month .metric-detail { display: none; }
 .summary-month .overview-controls { padding-block: 6px; }
+
+/* A single full-width separator keeps each advisor's lane easy to follow. */
+.summary-page .agent-lane + .agent-lane { border-top: 1px solid #dfe5e8; }
+.country-multiselect { min-width: 220px; max-width: 420px; }
+.reset-figures { display: block; margin: 0 auto 24px; }
+.active-card-country { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.active-run-status { margin-bottom: 12px; }

@@ -90,7 +90,7 @@ test('grouped options retain severity for human marks, separate refuted marks, a
   const original = structuredClone(variables);
   assert.deepEqual(groupFlagOptions(variables), [
     { label: 'Flag crítico', options: [{ value: 'human', label: 'Flag human' }] },
-    { label: 'Flag normal', options: [{ value: 'normal', label: 'Flag normal' }] },
+    { label: 'Flag menor', options: [{ value: 'normal', label: 'Flag normal' }] },
     { label: '+ Positivo', options: [{ value: 'plus', label: 'Flag plus' }] },
     { label: 'Refutados', options: [{ value: 'refuted', label: 'Flag refuted' }] },
   ]);
