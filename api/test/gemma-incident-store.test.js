@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { GemmaIncidentStore } from '../src/gemma-incident-store.js';
 import { RECOVERY_ID, RECOVERY_JOBS } from '../src/gemma-incident-recovery.js';
 
@@ -19,9 +20,10 @@ function fixture() {
     const table = sql.match(/FROM (\w+)/)?.[1];
     assert.ok(rows[table], `Unexpected table: ${table}`);
     const selected = sql.includes(' WHERE ') ? rows[table].filter(r => params.includes(sql.includes('jobId') ? r.jobId : r.id)) : rows[table];
-    return [selected.map(payload => ({ payload: structuredClone(payload) }))];
+    return [selected.map(payload => sql.includes('SHA2(') ? { id: payload.id, revision: createHash('sha256').update(JSON.stringify(payload)).digest('hex') }
+      : { id: payload.id, payload: structuredClone(payload) })];
   }, async execute(sql, params) { writes.push({ sql, params }); return [{}]; }, async beginTransaction() {}, async commit() {}, async rollback() {}, release() {} };
-  return { connection, queries, writes };
+  return { connection, queries, writes, rows };
 }
 test('incident reads retain all global jobs but only scoped tasks, attempts and referenced evaluations', async () => {
   const store = new GemmaIncidentStore({}, plan), f = fixture();
@@ -34,6 +36,22 @@ test('incident reads retain all global jobs but only scoped tasks, attempts and 
     assert.deepEqual(s.operationalRefs.map(r => r.id), ['one']);
     assert.equal(s.settings.evaluationMaintenance, RECOVERY_ID);
     assert.ok(f.queries.every(q => !/FROM (users|sessions|comparison_samples)/.test(q.sql)));
+  } finally { await store.close(); }
+});
+test('unchanged payloads are cached, revisions are checked and returned objects cannot corrupt the cache', async () => {
+  const store = new GemmaIncidentStore({}, plan), f = fixture();
+  try {
+    const first = await store.load(f.connection);
+    first.tasks[0].status = 'corrupted';
+    f.queries.length = 0;
+    const second = await store.load(f.connection);
+    assert.equal(second.tasks[0].status, 'partial');
+    assert.equal(f.queries.filter(q => q.sql.startsWith('SELECT id, payload') && !q.sql.includes('portal_settings')).length, 0);
+    f.rows.evaluation_tasks[0].status = 'completed';
+    const third = await store.load(f.connection);
+    assert.equal(third.tasks[0].status, 'completed');
+    const changed = f.queries.filter(q => q.sql.startsWith('SELECT id, payload') && !q.sql.includes('portal_settings'));
+    assert.equal(changed.length, 1); assert.deepEqual(changed[0].params, ['task']);
   } finally { await store.close(); }
 });
 test('scoped transactions retain the global lock and do not rewrite excluded historical records', async () => {
