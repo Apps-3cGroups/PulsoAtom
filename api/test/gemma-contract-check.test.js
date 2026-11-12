@@ -42,26 +42,26 @@ test('full preflight targets only enabled Gemma under a dual policy with unavail
   const { state, registry, calls } = fixture();
   const before = JSON.stringify(state);
   const result = await checkGemmaContract({ state, registry, redactions: [env.AGENT_SHARED_TOKEN] });
-  assert.equal(calls.length, 1); assert.equal(result.requested, 47); assert.equal(result.valid, 47);
+  assert.equal(calls.length, 6); assert.ok(calls.every(c => c.variables.length <= 8)); assert.equal(result.requested, 47); assert.equal(result.valid, 47);
   assert.equal(result.evaluated, 46); assert.equal(result.abstained, 1); assert.equal(result.invalid, 0);
   assert.equal(result.contractValid, true); assert.equal(result.reasonableResults, true); assert.equal(result.success, true);
   assert.ok(result.semanticChecks.every(check => check.passed));
-  assert.equal(result.attempts[0].responseId, 'synthetic-gemma-check-1');
+  assert.equal(result.attempts[0].responseId, 'synthetic-gemma-check-6');
   assert.equal(JSON.stringify(state), before);
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|gateway\.synthetic|Justificación sintética|messages|evidence/);
 });
 
 test('preflight keeps 45 valid items and retries only the two format errors once with safe feedback', async () => {
   const { state, registry, calls } = fixture(({ results, number }) => {
-    if (number === 1) {
-      results.tipo_interaccion.status = 'no_evaluado';
-      results.asistente_comunicacion_poco_profesional.evidence_message_ids = ['synthetic-human-1'];
+    if (number <= 6) {
+      if (results.tipo_interaccion) results.tipo_interaccion.status = 'no_evaluado';
+      if (results.asistente_comunicacion_poco_profesional) results.asistente_comunicacion_poco_profesional.evidence_message_ids = ['synthetic-human-1'];
     }
   });
   const result = await checkGemmaContract({ state, registry });
-  assert.equal(result.success, true); assert.equal(calls.length, 2);
+  assert.equal(result.success, true); assert.equal(calls.length, 7);
   assert.deepEqual(result.attempts.map(a => [a.requested, a.valid]), [[47, 45], [2, 2]]);
-  assert.deepEqual(calls[1].correccionesFormato, [
+  assert.deepEqual(calls.at(-1).correccionesFormato, [
     { variableId: 'tipo_interaccion', rules: ['inconsistent_status_value'] },
     { variableId: 'asistente_comunicacion_poco_profesional', rules: ['unexpected_evidence'] },
   ]);
@@ -69,11 +69,11 @@ test('preflight keeps 45 valid items and retries only the two format errors once
 
 test('persistent reason/evidence failures stay invalid after one retry without fabricated results', async () => {
   const { state, registry, calls } = fixture(({ results }) => {
-    results.tipo_interaccion.reason = '';
-    results.asistente_comunicacion_poco_profesional.evidence_message_ids = ['a', 'b', 'c', 'd'];
+    if (results.tipo_interaccion) results.tipo_interaccion.reason = '';
+    if (results.asistente_comunicacion_poco_profesional) results.asistente_comunicacion_poco_profesional.evidence_message_ids = ['a', 'b', 'c', 'd'];
   });
   const result = await checkGemmaContract({ state, registry });
-  assert.equal(calls.length, 2); assert.equal(result.success, false); assert.equal(result.contractValid, false);
+  assert.equal(calls.length, 7); assert.equal(result.success, false); assert.equal(result.contractValid, false);
   assert.equal(result.valid, 45); assert.equal(result.invalid, 2);
   assert.deepEqual(result.validationErrors, [
     { variableId: 'tipo_interaccion', rules: ['invalid_reason'] },
@@ -86,7 +86,7 @@ test('valid abstentions do not masquerade as completed semantic checks', async (
     for (const item of Object.values(results)) Object.assign(item, { status: 'no_evaluado', value: null, evidence_message_ids: [] });
   });
   const result = await checkGemmaContract({ state, registry });
-  assert.equal(calls.length, 1); assert.equal(result.contractValid, true); assert.equal(result.abstained, 47);
+  assert.equal(calls.length, 6); assert.equal(result.contractValid, true); assert.equal(result.abstained, 47);
   assert.equal(result.evaluated, 0); assert.equal(result.reasonableResults, false); assert.equal(result.success, false);
   assert.equal(result.sharedRuleResults, 1);
 });
