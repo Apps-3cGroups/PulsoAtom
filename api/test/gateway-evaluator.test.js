@@ -174,6 +174,22 @@ test('a later context batch failure retains validated earlier answers', async ()
   assert.equal(answer.contextBatches.length, 1);
 });
 
+test('Gemma format retries constrain valid combinations without rewriting decisions or profile identity', async () => {
+  const response = payload(); response.model = 'gemma-4-26b-a4b-it-mlx';
+  const { instance, calls } = evaluator(envelope(response), { model: response.model });
+  const answer = await instance.evaluate(conversation, variables, { validationErrors: [{ variableId: 'event', rules: ['inconsistent_status_value'] }] });
+  assert.equal(instance.outputSchemaVersion, undefined);
+  assert.equal(answer.formatRepair, 'status-value-evidence-1');
+  assert.deepEqual(JSON.parse(calls[0][1].body).body.response_format.json_schema.schema, clefFlashEvaluationSchema(variables, conversation));
+  assert.equal(answer.results.find(r => r.variableId === 'event').value, 1);
+  const raw = valid(); raw.results.event.status = 'no_evaluado';
+  response.choices[0].message.content = JSON.stringify(raw);
+  const invalid = await evaluator(envelope(response), { model: response.model }).instance.evaluate(conversation, variables,
+    { validationErrors: [{ variableId: 'event', rules: ['inconsistent_status_value'] }] });
+  assert.ok(!invalid.results.some(r => r.variableId === 'event'));
+  assert.ok(invalid.validationErrors.some(e => e.rules.includes('inconsistent_status_value')));
+});
+
 test('refusals and content filtering require intervention, while truncated answers remain incomplete', async () => {
   for (const change of [{ refusal: 'Rejected' }, { finish_reason: 'content_filter' }, { finish_reason: 'length' }]) {
     const response = payload();

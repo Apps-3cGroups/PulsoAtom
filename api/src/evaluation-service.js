@@ -328,10 +328,13 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         if (response.runtimeIdentity) runtimeIdentities.push(structuredClone(response.runtimeIdentity));
         if (response.runtimeIdentities?.length) runtimeIdentities.push(...structuredClone(response.runtimeIdentities));
         const contextBatches = [...(metadata.contextBatches || []), ...(response.contextBatches || []).map(b => ({ ...b, attemptId: attempt.id }))];
+        const formatRepairs = [...(metadata.formatRepairs || []), ...(response.formatRepair === 'status-value-evidence-1'
+          ? [{ version: response.formatRepair, attemptId: attempt.id, responseId: response.responseId, variableIds: pending.map(v => v.id) }] : [])];
         for (const result of response.results) retained.set(result.variableId, result);
         metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null, ...provenance,
           ...(runtimeIdentities.length ? { runtimeIdentities } : {}),
           ...(contextBatches.length ? { contextBatches } : {}),
+          ...(formatRepairs.length ? { formatRepairs } : {}),
           ...(decisionInstructionsVersion ? { decisionInstructionsVersion } : {}) };
         itemErrors = pending.filter(v => !retained.has(v.id)).map(v => {
           const failure = response.validationErrors?.find(e => e.variableId === v.id);
@@ -349,6 +352,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
             actualModel, ...(response.runtimeIdentity ? { runtimeIdentity: structuredClone(response.runtimeIdentity) } : {}),
             ...(response.runtimeIdentities?.length ? { runtimeIdentities: structuredClone(response.runtimeIdentities) } : {}),
             ...(response.contextBatches?.length ? { contextBatches: structuredClone(response.contextBatches) } : {}),
+            ...(response.formatRepair === 'status-value-evidence-1' ? { formatRepair: response.formatRepair } : {}),
             usage: response.usage || null, ...attemptMetadata, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
           s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
         });
@@ -389,6 +393,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
     ...(answer.runtimeIdentities?.length ? { runtimeIdentities: answer.runtimeIdentities } : {}),
     ...(answer.contextBatches?.length ? { contextBatches: answer.contextBatches } : {}),
+    ...(answer.formatRepairs?.length ? { formatRepairs: answer.formatRepairs } : {}),
     ...(answer.decisionInstructionsVersion ? { decisionInstructionsVersion: answer.decisionInstructionsVersion } : {}),
     ...(answer.protocol ? { protocol: answer.protocol, adapterVersion: answer.adapterVersion, instructionsHash: answer.instructionsHash,
       requestIds: answer.requestIds, requests: answer.requests } : {}),
