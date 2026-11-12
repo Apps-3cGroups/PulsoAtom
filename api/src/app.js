@@ -18,6 +18,8 @@ import { selectedEvaluation, evaluationSelectionContext, exposeEvaluation, sourc
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { conversationDailyMetrics } from './daily-metrics.js';
+import { appearanceSettings, appearanceUpdateSchema, updateAppearance } from './appearance.js';
+import { activeFiguresSchema, activeConversations, activePriorityOrder } from './active-presentation.js';
 
 const cookieName = 'pulso_session';
 const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(1).max(200) }).strict();
@@ -56,6 +58,8 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = (fresh = false) => store.readWithConversations ? store.readWithConversations({ fresh }) : store.read();
   const authenticationTransaction = fn => store.authenticationTransaction ? store.authenticationTransaction(fn) : store.transaction(fn);
+  const readSettings = async () => store.readSettings ? store.readSettings() : (await store.read()).settings || {};
+  const settingsTransaction = fn => store.settingsTransaction ? store.settingsTransaction(fn) : store.transaction(state => fn(state.settings ||= {}));
   const reviewHistory = fn => store.transactionWithConversations ? store.transactionWithConversations(fn) : store.transaction(fn);
   app.disable('x-powered-by');
   app.use(helmet());
@@ -79,7 +83,10 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     try { state = await (store.readSchedulerState ? store.readSchedulerState() : store.read()); } catch { storageReady = false; }
     res.status(storageReady ? 200 : 503).json({ status: storageReady ? 'ok' : 'configuration_required', mode: config.demo ? 'demo' : 'real', storage: config.demo ? 'local_demo_file' : 'mysql', storageReady, evaluationReady: storageReady && status(state).ready });
   });
-  app.get(`${prefix}/meta`, (_req, res) => res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0' }));
+  app.get(`${prefix}/meta`, async (_req, res) => {
+    const { fontScale } = appearanceSettings(await readSettings());
+    res.json({ name: 'Pulso', mode: config.demo ? 'demo' : 'real', authMode: identity?.mode === 'person-email' ? 'somos3c-email' : identity ? 'somos3c' : 'local', timezone: config.timezone, version: '0.1.0', appearance: { fontScale } });
+  });
   app.use(prefix, async (req, _res, next) => {
     const token = req.cookies[cookieName];
     if (typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token)) {
@@ -152,6 +159,14 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   app.use(prefix, requireUser);
   mountModelRoutes(app, prefix, { store, registry, config, requireAdmin, readHistory, reviewHistory, ...modelServices });
   mountTdRoutes(app, prefix, requireAdmin, { enabled: !config.demo, ...tdServices });
+  app.get(`${prefix}/access/appearance`, requireAdmin, async (_req, res) => {
+    res.json({ appearance: appearanceSettings(await readSettings()) });
+  });
+  app.patch(`${prefix}/access/appearance`, requireAdmin, async (req, res) => {
+    const input = appearanceUpdateSchema.parse(req.body);
+    const appearance = await settingsTransaction(settings => updateAppearance(settings, input, req.user.id));
+    res.json({ appearance });
+  });
   app.get(`${prefix}/access/grants`, requireAdmin, async (_req, res) => {
     if (!identity) throw new AppError(409, 'La identidad externa no está configurada.', 'INTEGRATION_PENDING');
     const state = await store.read();
@@ -278,11 +293,12 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   };
   app.get(`${prefix}/active`, async (req, res) => {
     const query = listQuerySchema.parse({ ...req.query, pageSize: req.query.pageSize || 12 });
+    const figures = activeFiguresSchema.parse(req.query.figures);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     const state = store.readForNavigation ? await store.readForNavigation(query, { activeOnly: true }) : await readHistory();
     const reasons = new Map(state.conversations.map(c => [c.id, activeReason(c, state.settings)]));
     const active = { ...state, conversations: state.conversations.filter(c => reasons.get(c.id)) };
-    const conversations = filteredConversations(active, query).sort(priorityOrder);
+    const conversations = activeConversations(filteredConversations(active, query), figures).sort(activePriorityOrder);
     const items = conversations.slice((query.page - 1) * query.pageSize, query.page * query.pageSize)
       .map(c => ({ ...c, activeReason: reasons.get(c.id) }));
     const ids = new Set(items.map(c => c.id));

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +52,71 @@ test('la API rechaza montar el portal en la raíz del dominio', () => {
 });
 
 const workflowPath = new URL('../../.github/workflows/deploy-pulso-atom.yml', import.meta.url);
+
+test('deploy preserves worker dependencies for source-only releases and installs when required', async () => {
+  const workflow = await readFile(workflowPath, 'utf8');
+  // Execute the actual deployment block. Stubs model Git's path-sensitive diff
+  // and npm's replacement of node_modules without accessing a repo or network.
+  const block = workflow.match(/^ {10}if \[ "\$API_DEPLOY_REQUIRED" = true \]; then\n[\s\S]*?^ {10}fi$/m)?.[0];
+  assert.ok(block, 'Missing API deployment block');
+  const directory = await mkdtemp(path.join(tmpdir(), 'pulso-deploy-dependencies-'));
+  const bin = path.join(directory, 'bin');
+  const gitStub = `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args.join(' ') === 'rev-parse HEAD') { console.log(process.env.TEST_CURRENT_HEAD); process.exit(0); }
+if (args[0] !== 'diff' || args[1] !== '--quiet' || !args.includes('--')) process.exit(88);
+const paths = args.slice(args.indexOf('--') + 1);
+const changed = JSON.parse(process.env.TEST_CHANGED_FILES);
+process.exit(changed.some(file => paths.some(scope => file === scope || scope.endsWith('/') && file.startsWith(scope))) ? 1 : 0);
+`;
+  const npmStub = `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.TEST_NPM_LOG, JSON.stringify(args) + '\\n');
+if (args[0] === 'ci') {
+  const api = args[args.indexOf('--prefix') + 1];
+  if (api !== process.env.API || !api.startsWith(process.env.TEST_FIXTURE_ROOT + path.sep)) process.exit(89);
+  const dependencies = path.join(api, 'node_modules');
+  fs.rmSync(dependencies, { recursive: true, force: true });
+  fs.mkdirSync(dependencies);
+  fs.writeFileSync(path.join(dependencies, 'worker-dependency'), 'replacement');
+} else if (args[0] !== 'run' || args[1] !== 'db:migrate') process.exit(90);
+`;
+  try {
+    await mkdir(bin);
+    await writeFile(path.join(bin, 'git'), gitStub, { mode: 0o700 });
+    await writeFile(path.join(bin, 'npm'), npmStub, { mode: 0o700 });
+    const cases = [
+      { name: 'source-only', existing: true, changes: ['api/src/app.js'], sameHead: false, install: false },
+      { name: 'package-change', existing: true, changes: ['api/package.json'], sameHead: false, install: true },
+      { name: 'lock-change', existing: true, changes: ['api/package-lock.json'], sameHead: false, install: true },
+      { name: 'missing-directory', existing: false, changes: ['api/src/app.js'], sameHead: false, install: true },
+      { name: 'manual-same-head', existing: true, changes: [], sameHead: true, install: true },
+    ];
+    for (const scenario of cases) {
+      const api = path.join(directory, `${scenario.name} api`), dependencies = path.join(api, 'node_modules');
+      const log = path.join(directory, `${scenario.name}.jsonl`);
+      await mkdir(api);
+      if (scenario.existing) {
+        await mkdir(dependencies);
+        await writeFile(path.join(dependencies, 'worker-dependency'), 'in-use-by-worker');
+      }
+      execFileSync('/bin/bash', ['-eu', '-c', block.replace(/^ {10}/gm, '')], {
+        cwd: directory, encoding: 'utf8', env: {
+          ...process.env, PATH: `${bin}:/usr/bin:/bin`, API: api, API_DEPLOY_REQUIRED: 'true', PREVIOUS_HEAD: 'previous',
+          TEST_FIXTURE_ROOT: directory, TEST_CURRENT_HEAD: scenario.sameHead ? 'previous' : 'next',
+          TEST_CHANGED_FILES: JSON.stringify(scenario.changes), TEST_NPM_LOG: log,
+        },
+      });
+      const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      const installs = calls.filter(args => args[0] === 'ci');
+      assert.equal(installs.length, Number(scenario.install), scenario.name);
+      assert.equal(await readFile(path.join(dependencies, 'worker-dependency'), 'utf8'), scenario.install ? 'replacement' : 'in-use-by-worker', scenario.name);
+      assert.equal(calls.filter(args => args[0] === 'run' && args[1] === 'db:migrate').length, 1, `${scenario.name}: migrations remain enabled`);
+      if (scenario.install) assert.deepEqual(installs[0], ['ci', '--prefix', api, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test('la auditoría de un lote exige UUID y solo entra en la ruta explícita de lectura', async () => {
   const workflow = await readFile(workflowPath, 'utf8');

@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 import { buildSummaryLanes, compactDaySlots, groupCompactDay, compactMarks } from '../src/services/summaryMap.js';
 import { resolveSummaryRange, summaryDayWindow } from '../src/services/summaryDates.js';
 
+test('unassigned assistants are last within each country, preserving the remaining order and every conversation', () => {
+  const day = '2026-11-10';
+  const countries = [{ code: 'HN' }, { code: 'PA' }];
+  const rows = countries.flatMap(country => ['sin-asesor', 'b', 'a'].map((agent, i) => ({
+    id: `${country.code}-${agent}`, country: country.code, agent: { id: agent, name: agent },
+    displayDate: day, displayAt: `${day}T12:00:0${i}Z`,
+  })));
+  const before = structuredClone(rows);
+  for (const days of [[day], ['2026-11-11', day, '2026-11-09']]) {
+    const groups = buildSummaryLanes(rows, countries, days);
+    assert.deepEqual(groups.map(g => g.code), ['HN', 'PA']);
+    assert.deepEqual(groups.map(g => g.agents.map(a => a.id)), [['b', 'a', 'sin-asesor'], ['b', 'a', 'sin-asesor']]);
+    assert.equal(groups.flatMap(g => g.agents.flatMap(a => a.byDay[day])).length, rows.length);
+  }
+  assert.deepEqual(rows, before);
+});
+
 test('a dense month preserves every conversation once, including last-day and pending cases', () => {
   const days = summaryDayWindow(resolveSummaryRange({ days: 30, now: new Date('2026-11-09T16:00:00Z') })).days;
   const countries = [{ code: 'HN' }, { code: 'CR' }];

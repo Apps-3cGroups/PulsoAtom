@@ -5,6 +5,8 @@ import { api } from '../services/api';
 import { useApi, usePortal } from '../hooks';
 import { EmptyState, ErrorState, LoadingState, PageHeading, tableLoading } from '../components/common';
 
+import AppearanceSettings from '../components/AppearanceSettings';
+
 const roles = [{ value: 'supervisor', label: 'Supervisor' }, { value: 'admin', label: 'Administrador' }];
 
 export default function Access() {
@@ -38,6 +40,7 @@ export default function Access() {
   };
   return <div>
     <PageHeading eyebrow="ADMINISTRACIÓN" title="Accesos a Pulso" description="Usa las credenciales de Somos3C y asigna aquí los permisos de Pulso." />
+    <AppearanceSettings />
     {error && <Alert type="error" showIcon message={error.message} style={{ marginBottom: 16 }} />}
     <section className="evaluation-card access-create">
       <h2>Agregar acceso</h2>

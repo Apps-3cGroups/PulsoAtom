@@ -6,16 +6,21 @@ export function selectedCountries(params, countries) {
   const allowed = new Set(countries.map(c => c.code));
   return [...new Set((params.get('countries') ?? params.get('country') ?? '').split(',').filter(c => allowed.has(c)))].sort();
 }
-export function selectedFigures(params) {
-  if (!params.has('figures')) return [...figureKinds];
-  return [...new Set(params.get('figures').split(',').filter(k => figureKinds.includes(k)))];
+export function selectedFigures(params, kinds = figureKinds) {
+  if (!params.has('figures')) return [...kinds];
+  return [...new Set(params.get('figures').split(',').filter(k => kinds.includes(k)))];
 }
-export const selectedPending = params => params.get('pending') === '1';
-export function filterSummaryConversations(conversations, visible, variable, { showPending = false } = {}) {
+export function cleanOverviewParams(params) {
+  const next = new URLSearchParams(params);
+  if (!next.has('countries') && next.has('country')) next.set('countries', next.get('country'));
+  ['country', 'variable', 'pending', 'classification', 'agreement'].forEach(key => next.delete(key));
+  return next;
+}
+export function filterSummaryConversations(conversations, visible) {
   if (!visible.length) return [];
-  const eligible = showPending ? conversations : conversations.filter(c => !['not_evaluated', 'review_pending'].includes(evaluationStatus(c)));
+  const eligible = conversations.filter(c => !['not_evaluated', 'review_pending'].includes(evaluationStatus(c)));
   if (figureKinds.every(kind => visible.includes(kind))) return eligible;
-  return eligible.filter(c => compactMarks([c], { visible, variable, classification: 'all' }).kinds.length > 0);
+  return eligible.filter(c => compactMarks([c], { visible, classification: 'all' }).kinds.length > 0);
 }
 export function summaryMetrics(conversations) {
   const evaluated = conversations.filter(c => c.evaluated).length;

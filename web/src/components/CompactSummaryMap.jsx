@@ -4,11 +4,13 @@ import { RightOutlined } from '@ant-design/icons';
 import { Mark, dateText, timeText } from './common';
 import { compactDaySlots, groupCompactDay, compactMarks } from '../services/summaryMap';
 import { classificationOf, dualMarks, evaluationStatus, evaluationStatusLabel } from '../services/flags';
+import { useAppearance } from '../appearance';
 import './CompactSummaryMap.css';
 
 const labels = { critical: 'Crítico', normal: 'Menor', refuted: 'Refutado', human: 'Humano', positive: 'Positivo' };
 
 export default function CompactSummaryMap({ groups, days, visible, variable, classification, onOpen, onHistory }) {
+  const { fontScale } = useAppearance();
   const map = useRef(null), timeline = useRef(null);
   const [layout, setLayout] = useState({ slots: 1, rowHeight: 20 });
   const [selection, setSelection] = useState(null);
@@ -20,13 +22,13 @@ export default function CompactSummaryMap({ groups, days, visible, variable, cla
       const headerHeight = map.current.querySelector('.compact-map-head')?.getBoundingClientRect().height || 0;
       const countryHeight = [...map.current.querySelectorAll('.compact-country-title')].reduce((sum, title) => sum + title.getBoundingClientRect().height, 0);
       const available = map.current.clientHeight - headerHeight - countryHeight - 2;
-      const next = { slots: compactDaySlots(timeline.current.clientWidth, days.length), rowHeight: Math.max(2, Math.min(22, available / Math.max(1, rowCount))) };
+      const next = { slots: compactDaySlots(timeline.current.clientWidth, days.length), rowHeight: Math.max(fontScale > 1 ? 22 * fontScale : 2, Math.min(22, available / Math.max(1, rowCount))) };
       setLayout(current => current.slots === next.slots && current.rowHeight === next.rowHeight ? current : next);
     };
     const observer = new ResizeObserver(measure);
     observer.observe(map.current); observer.observe(timeline.current); measure();
     return () => observer.disconnect();
-  }, [days.length, groups.length, rowCount]);
+  }, [days.length, groups.length, rowCount, fontScale]);
   useEffect(() => { setSelection(null); }, [groups, days, visible, variable, classification]);
   const openGroup = (conversations, agent, day) => conversations.length === 1 ? onOpen(conversations[0]) : setSelection({ conversations, agent, day });
   return <>

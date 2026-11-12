@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { figureKinds, filterSummaryConversations, summaryMetrics, selectedCountries, selectedFigures, selectedPending } from '../src/services/summaryFilters.js';
+import { figureKinds, filterSummaryConversations, summaryMetrics, selectedCountries, selectedFigures, cleanOverviewParams } from '../src/services/summaryFilters.js';
 const mark = (id, kind, extras = {}) => ({ id, kind, classification: kind, effective: true, name: id, ...extras });
 const rows = [
   { id: 'critical', evaluated: true, p1: 1, originalAlerts: 1, marks: [mark('a', 'critical')] },
@@ -11,12 +11,10 @@ const rows = [
 ];
 test('figures filter the same population used by metrics, preserving human/refuted meanings', () => {
   assert.equal(filterSummaryConversations(rows, figureKinds).length, 5);
-  assert.equal(filterSummaryConversations(rows, figureKinds, undefined, { showPending: true }).length, 6);
   assert.deepEqual(filterSummaryConversations(rows, []).map(c => c.id), []);
   assert.deepEqual(filterSummaryConversations(rows, ['critical']).map(c => c.id), ['critical']);
   assert.deepEqual(filterSummaryConversations(rows, ['human', 'refuted']).map(c => c.id), ['human', 'refuted']);
-  assert.deepEqual(filterSummaryConversations(rows, ['normal'], 'b').map(c => c.id), ['human']);
-  assert.deepEqual(filterSummaryConversations(rows, ['normal'], 'a'), []);
+  assert.deepEqual(filterSummaryConversations(rows, ['normal']).map(c => c.id), ['human']);
   const metrics = summaryMetrics(filterSummaryConversations(rows, ['critical', 'normal']));
   assert.equal(metrics.total, 2); assert.equal(metrics.withAlerts, 2); assert.equal(metrics.alertPercent, 100);
 });
@@ -32,14 +30,20 @@ test('pending visibility distinguishes missing model reviews from saved partial 
   assert.deepEqual(shown.map(c => c.id), ['complete', 'partial']);
   assert.equal(summaryMetrics(shown).total, 2);
   assert.equal(summaryMetrics(shown).withAlerts, 2);
-  assert.deepEqual(filterSummaryConversations(conversations, ['critical'], 'a', { showPending: true }).map(c => c.id), ['complete', 'partial', 'one-model', 'legacy-one-model']);
-  assert.deepEqual(filterSummaryConversations(conversations, ['positive'], undefined, { showPending: true }), []);
-  assert.deepEqual(filterSummaryConversations(conversations, [], undefined, { showPending: true }), []);
-  assert.equal(summaryMetrics(filterSummaryConversations(conversations, figureKinds, undefined, { showPending: true })).total, 5);
+  assert.deepEqual(filterSummaryConversations(conversations, ['critical']).map(c => c.id), ['complete', 'partial']);
+  assert.deepEqual(filterSummaryConversations(conversations, ['positive']), []);
+  assert.deepEqual(filterSummaryConversations(conversations, []), []);
 });
-test('pending conversations stay hidden unless explicitly enabled in the URL', () => {
-  for (const query of ['', 'pending=0', 'pending=false', 'pending=invalid']) assert.equal(selectedPending(new URLSearchParams(query)), false);
-  assert.equal(selectedPending(new URLSearchParams('days=30&countries=HN,PA&pending=1')), true);
+test('legacy hidden filters are removed without losing country, period or exception selection', () => {
+  const original = new URLSearchParams('days=30&country=HN&figures=human,refuted&pending=1&variable=old&classification=critical&agreement=both');
+  const cleaned = cleanOverviewParams(original);
+  assert.equal(cleaned.get('countries'), 'HN');
+  assert.equal(cleaned.get('days'), '30');
+  assert.equal(cleaned.get('figures'), 'human,refuted');
+  for (const key of ['country', 'pending', 'variable', 'classification', 'agreement']) assert.equal(cleaned.has(key), false);
+  assert.equal(original.get('pending'), '1');
+  assert.equal(cleanOverviewParams(new URLSearchParams('countries=PA&country=HN&figures=')).get('countries'), 'PA');
+  assert.equal(cleanOverviewParams(new URLSearchParams('figures=')).has('figures'), true);
 });
 test('country URL compatibility, all countries, explicit empty figures and restored selection', () => {
   const countries = [{ code: 'HN' }, { code: 'PA' }];
