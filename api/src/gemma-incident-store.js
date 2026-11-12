@@ -17,18 +17,25 @@ export class GemmaIncidentStore extends MysqlStore {
     const read = async (key, table, column, ids) => {
       if (!ids.length) { state[key] = []; return; }
       const [rows] = await connection.query(`SELECT id, SHA2(CAST(payload AS CHAR), 256) AS revision FROM ${table} WHERE ${column} IN (${ids.map(() => '?').join(',')}) ORDER BY sequence_id`, ids);
-      const changed = rows.filter(row => this.recordCache.get(`${table}:${row.id}`)?.revision !== row.revision);
+      const values = new Map();
+      const changed = rows.filter(row => {
+        const cached = this.recordCache.get(`${table}:${row.id}`);
+        if (cached?.revision !== row.revision) return true;
+        values.set(row.id, cached.value); return false;
+      });
       if (changed.length) {
         const [payloads] = await connection.query(`SELECT id, payload FROM ${table} WHERE id IN (${changed.map(() => '?').join(',')})`, changed.map(r => r.id));
         const revisions = new Map(changed.map(r => [r.id, r.revision]));
-        for (const row of payloads) this.recordCache.set(`${table}:${row.id}`, { revision: revisions.get(row.id), value: decode(row.payload) });
+        for (const row of payloads) {
+          const value = decode(row.payload); values.set(row.id, value);
+          this.recordCache.set(`${table}:${row.id}`, { revision: revisions.get(row.id), value });
+        }
       }
       // Revisions are checked inside the same transaction on every read. Never
       // hand mutable cached objects to the evaluation service or draft writer.
       state[key] = rows.map(row => {
-        const cached = this.recordCache.get(`${table}:${row.id}`);
-        if (!cached || cached.revision !== row.revision) throw new Error('INCIDENT_ROW_CHANGED');
-        return structuredClone(cached.value);
+        if (!values.has(row.id)) throw new Error('INCIDENT_ROW_CHANGED');
+        return structuredClone(values.get(row.id));
       });
     };
     await read('tasks', 'evaluation_tasks', "JSON_UNQUOTE(JSON_EXTRACT(payload,'$.jobId'))", RECOVERY_JOBS);

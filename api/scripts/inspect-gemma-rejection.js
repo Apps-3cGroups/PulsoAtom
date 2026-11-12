@@ -9,7 +9,7 @@ const allowed = new Set('the a an is are was were to of for with in on from and 
 function classify(value, depth = 0) {
   if (depth > 4) return null;
   if (typeof value === 'string') return { bytes: Buffer.byteLength(value), hash: createHash('sha256').update(value).digest('hex'),
-    pattern: value.slice(0, 2000).toLowerCase().split(/\s+/).map(w => /^\d+$/.test(w) ? w : allowed.has(w.replace(/[^a-z_]/g, '')) ? w.replace(/[^a-z_]/g, '') : '[redacted]').join(' ') };
+    pattern: value.slice(0, 2000).toLowerCase().split(/\s+/).map(w => /^\d{1,5}$/.test(w) ? w : allowed.has(w.replace(/[^a-z_]/g, '')) ? w.replace(/[^a-z_]/g, '') : '[redacted]').join(' ') };
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return Object.fromEntries(['message', 'error', 'detail', 'code'].filter(k => Object.hasOwn(value, k)).map(k => [k, classify(value[k], depth + 1)]));
 }
