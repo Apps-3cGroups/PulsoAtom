@@ -7,6 +7,7 @@ import { resumeEvaluationBatch, evaluationModelProgress } from '../src/evaluatio
 import { sourceFingerprint } from '../src/evaluation-context.js';
 import { acquireBackfillLock, persistBackfillManifest } from '../src/gemma-backfill.js';
 import { assertGemmaIncidentHealth } from '../src/gemma-incident-health.js';
+import { readRecoveryCapacity, recoveryBaseline, recoveryPilotResult } from '../src/gemma-recovery-throughput.js';
 
 const productionApi = '/var/www/nodeapps/PulsoAtom/api';
 const directory = `${productionApi}/.data/incident-recovery/${RECOVERY_ID}`;
@@ -80,7 +81,15 @@ async function worker(store, registry) {
     Object.assign(manifest, { status: 'running', pid: process.pid, startedAt: new Date().toISOString() });
     await persistBackfillManifest(manifestFile, manifest);
     const initial = await store.read(); assertStable(initial, manifest);
-    manifest.health = await assertGemmaIncidentHealth(registry.forState(initial).resolve('gemma-local'), { token: process.env.AGENT_SHARED_TOKEN });
+    const gemma = registry.forState(initial).resolve('gemma-local');
+    manifest.health = await assertGemmaIncidentHealth(gemma, { token: process.env.AGENT_SHARED_TOKEN });
+    const capacity = await readRecoveryCapacity(gemma, process.env.AGENT_SHARED_TOKEN);
+    manifest.health.parallelCapacity = capacity;
+    const setConcurrency = value => store.transaction(s => {
+      assertStable(s, manifest);
+      for (const job of s.jobs.filter(j => RECOVERY_JOBS.includes(j.id))) job.concurrency = Math.min(value, capacity);
+    });
+    await setConcurrency(manifest.concurrencyPilot?.concurrency || 2);
     await persistBackfillManifest(manifestFile, manifest);
     const guarded = { read: () => store.read(), readWithConversations: options => store.readWithConversations(options),
       transaction: fn => store.transaction(s => { assertStable(s, manifest); return fn(s); }) };
@@ -98,7 +107,7 @@ async function worker(store, registry) {
         const fresh = await store.readWithConversations({ fresh: true, conversationIds: ids });
         const unchanged = ids.filter(id => { const c = fresh.conversations.find(c => c.id === id);
           return c && pending.filter(t => t.conversationId === id).every(t => t.context.sourceHash === sourceFingerprint(c)); });
-        const stableIds = unchanged.filter(id => {
+        let stableIds = unchanged.filter(id => {
           const c = fresh.conversations.find(c => c.id === id);
           const timestamp = Date.parse(c.lastActivityAt);
           const date = Number.isFinite(timestamp) ? new Date(timestamp - 6 * 3600000).toISOString().slice(0, 10) : null;
@@ -107,6 +116,24 @@ async function worker(store, registry) {
         manifest.sourceChanged = [...new Set([...(manifest.sourceChanged || []), ...ids.filter(id => !unchanged.includes(id))])];
         Object.assign(manifest, { round, currentJob: jobId, updatedAt: new Date().toISOString() });
         await persistBackfillManifest(manifestFile, manifest);
+        if (!manifest.concurrencyPilot && capacity >= 4 && manifest.baseline?.perMinute > 0 && stableIds.length >= 8) {
+          const pilotIds = stableIds.slice(0, 8), startedAt = new Date().toISOString();
+          await setConcurrency(4);
+          manifest.pilotRunning = { jobId, conversations: 8, concurrency: 4, startedAt };
+          await persistBackfillManifest(manifestFile, manifest);
+          await (await resumeEvaluationBatch(guarded, registry, jobId, { conversationIds: pilotIds })).completion;
+          const measured = await store.read(); assertStable(measured, manifest);
+          manifest.concurrencyPilot = recoveryPilotResult(measured, { jobId, conversationIds: pilotIds,
+            startedAt, finishedAt: new Date().toISOString(), baselineRate: manifest.baseline.perMinute });
+          delete manifest.pilotRunning;
+          await setConcurrency(manifest.concurrencyPilot.concurrency);
+          await store.transaction(s => { assertStable(s, manifest);
+            s.settings.gemmaIncidentRecovery.concurrencyPilot = structuredClone(manifest.concurrencyPilot);
+          });
+          await persistBackfillManifest(manifestFile, manifest);
+          console.log(JSON.stringify({ stage: 'concurrency-pilot', ...manifest.concurrencyPilot }));
+          stableIds = stableIds.slice(8);
+        }
         if (stableIds.length) await (await resumeEvaluationBatch(guarded, registry, jobId, { conversationIds: stableIds })).completion;
       }
       }
@@ -151,11 +178,11 @@ async function continueRecovery(store) {
       process.kill(manifest.pid, 'SIGTERM');
       for (let i = 0; i < 50 && alive(manifest.pid); i++) {
         try { if (/\) Z /.test(await readFile(`/proc/${manifest.pid}/stat`, 'utf8'))) break; }
-        catch (e) { if (e.code === 'ENOENT') break; throw e; }
+        catch (e) { if (['ENOENT', 'ESRCH'].includes(e.code)) break; throw e; }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       try { if (alive(manifest.pid) && !/\) Z /.test(await readFile(`/proc/${manifest.pid}/stat`, 'utf8'))) fail('WORKER_STILL_RUNNING'); }
-      catch (e) { if (e.code !== 'ENOENT') throw e; }
+      catch (e) { if (!['ENOENT', 'ESRCH'].includes(e.code)) throw e; }
     }
     try {
       const lock = JSON.parse(await readFile(`${directory}/worker.lock`, 'utf8'));
@@ -164,12 +191,14 @@ async function continueRecovery(store) {
     } catch (e) { if (e.code !== 'ENOENT') throw e; }
     const current = await store.read(); assertStable(current, manifest);
     const plan = recoveryPlan(current), priorMaintenance = manifest.plan.priorMaintenance;
+    const baseline = manifest.status === 'running' ? recoveryBaseline(current, manifest.plan, manifest.startedAt, new Date().toISOString()) : null;
     await persistBackfillManifest(`${directory}/checkpoint-${Date.now()}.json`, { manifest, plan });
     const source = fileURLToPath(new URL('../', import.meta.url)), workerApi = `${directory}/worker-api`;
     for (const entry of ['src', 'scripts', 'package.json']) await cp(path.join(source, entry), path.join(workerApi, entry),
       { recursive: true, force: true, filter: f => !['.env', '.data', 'node_modules'].includes(path.basename(f)) });
     await store.transaction(draft => prepareRecovery(draft, plan, new Date().toISOString()));
-    Object.assign(manifest, { status: 'prepared', pid: null, errorCode: null, plan: { ...plan, priorMaintenance }, updatedAt: new Date().toISOString() });
+    Object.assign(manifest, { status: 'prepared', pid: null, errorCode: null, plan: { ...plan, priorMaintenance },
+      ...(baseline ? { baseline } : {}), updatedAt: new Date().toISOString() });
     await persistBackfillManifest(manifestFile, manifest);
     const log = await open(`${directory}/worker.log`, 'a', 0o600);
     try {
