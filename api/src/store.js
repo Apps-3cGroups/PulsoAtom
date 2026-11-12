@@ -28,6 +28,8 @@ export class DemoStore {
     await rename(temp, this.filename);
   }
   async read() { await this.queue; return structuredClone(this.state); }
+  async readSettings() { await this.queue; return structuredClone(this.state.settings || {}); }
+  async settingsTransaction(fn) { return this.transaction(state => fn(state.settings ||= {})); }
   async transaction(fn) {
     const run = this.queue.then(async () => {
       const draft = structuredClone(this.state);
@@ -43,6 +45,7 @@ export class DemoStore {
 }
 
 export class UnconfiguredStore {
+  async readSettings() { return {}; }
   async read() { throw missingDatabase(); }
   async transaction() { throw missingDatabase(); }
   async close() {}
@@ -105,6 +108,13 @@ function emptyState() {
 }
 export class MysqlStore {
   constructor(options) { this.pool = mysql.createPool(options); }
+  async readSettings() {
+    const [rows] = await this.pool.execute("SELECT payload FROM portal_settings WHERE id = 'settings'");
+    return rows[0] ? decode(rows[0].payload) : {};
+  }
+  // Reuse the same global lock as evaluation workers, but do not load or write
+  // their tables. Fresh settings are merged inside the locked transaction.
+  async settingsTransaction(fn) { return this.transaction(state => fn(state.settings ||= {}), []); }
   async readAuthentication(sessionId) {
     const [sessions] = await this.pool.execute('SELECT payload FROM sessions WHERE id = ?', [sessionId]);
     const session = sessions[0] && decode(sessions[0].payload);
@@ -255,6 +265,8 @@ export class MysqlStore {
 export class AtomHistoryStore {
   constructor(base, reader) { this.base = base; this.reader = reader; }
   async read() { return this.base.read(); }
+  async readSettings() { return this.base.readSettings ? this.base.readSettings() : (await this.base.read()).settings || {}; }
+  async settingsTransaction(fn) { return this.base.settingsTransaction ? this.base.settingsTransaction(fn) : this.base.transaction(state => fn(state.settings ||= {})); }
   async readAuthentication(id) { return this.base.readAuthentication ? this.base.readAuthentication(id) : this.base.read(); }
   async readUserByEmail(email) { return this.base.readUserByEmail ? this.base.readUserByEmail(email) : (await this.base.read()).users.find(u => u.email.toLowerCase() === email.toLowerCase()); }
   async authenticationTransaction(fn) { return this.base.authenticationTransaction ? this.base.authenticationTransaction(fn) : this.base.transaction(fn); }

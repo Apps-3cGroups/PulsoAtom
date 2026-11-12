@@ -1,0 +1,86 @@
+.appearance-settings { margin-bottom: 24px; }
+.appearance-settings form > label { display: block; margin-bottom: 8px; }
+.appearance-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.appearance-actions .ant-input-number { width: 6em; }
+.appearance-settings .ant-alert { margin-top: 14px; }
+.appearance-validation { color: var(--p1); margin-top: 8px; }
+
+/* The baseline layout remains unchanged at 1. Larger text needs room rather
+   than a page zoom: content wraps and dense maps keep their own scroll area. */
+html[data-large-text='true'] .topbar { flex-wrap: wrap; gap: 12px 24px; padding-block: 12px; }
+html[data-large-text='true'] .topbar nav { order: 3; flex-basis: 100%; min-width: 0; max-width: 100%; min-height: 2.5em; flex-wrap: wrap; gap: 8px 24px; overflow: visible; }
+html[data-large-text='true'] .topbar nav a { padding-block: 6px; }
+html[data-large-text='true'] .page-heading,
+html[data-large-text='true'] .app-footer,
+html[data-large-text='true'] .login-copyright,
+html[data-large-text='true'] .demo-banner { flex-wrap: wrap; }
+html[data-large-text='true'] .app-shell.summary-shell { height: auto; min-height: 100dvh; overflow: visible; }
+html[data-large-text='true'] .summary-shell .workspace { overflow: visible; min-height: 0; }
+html[data-large-text='true'] .summary-shell .summary-page,
+html[data-large-text='true'] .summary-shell .active-page { height: auto; min-height: 0; overflow: visible; }
+html[data-large-text='true'] .summary-page .overview-panel { min-height: 350px; overflow: visible; }
+html[data-large-text='true'] .summary-page .conversation-map { min-height: 350px; max-height: 70vh; flex: auto; }
+html[data-large-text='true'] .summary-page .map-scroll { min-width: calc((200px + var(--days) * 165px) * var(--font-scale)); }
+html[data-large-text='true'] .summary-page .map-name-head,
+html[data-large-text='true'] .summary-page .lane-name { width: calc(200px * var(--font-scale)); }
+html[data-large-text='true'] .summary-page .map-name-head { white-space: normal; }
+html[data-large-text='true'] .summary-page .lane-name { padding-block: 4px; }
+html[data-large-text='true'] .summary-page .lane-name > span:last-child { white-space: normal; overflow-wrap: anywhere; }
+html[data-large-text='true'] .summary-page .agent-lane { min-height: calc(31px * var(--font-scale)); }
+html[data-large-text='true'] .summary-page .summary-controls .country-multiselect,
+html[data-large-text='true'] .active-page .active-toolbar .country-multiselect { width: min(100%, calc(220px * var(--font-scale))); min-width: 0; max-width: 100%; flex: 0 1 calc(220px * var(--font-scale)); }
+html[data-large-text='true'] .summary-page .summary-controls .summary-period { flex-wrap: wrap; }
+html[data-large-text='true'] .summary-page .summary-controls .legend-toggle { min-height: calc(30px * var(--font-scale)); }
+html[data-large-text='true'] .summary-map-hint,
+html[data-large-text='true'] .summary-range { white-space: normal; }
+html[data-large-text='true'] .summary-stat-card { min-height: calc(80px * var(--font-scale)); }
+html[data-large-text='true'] .summary-stat-card .summary-stat-label { min-height: 1.4em; }
+html[data-large-text='true'] .active-conversation-board { grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(270px * var(--font-scale))), 1fr)); grid-auto-rows: calc(220px * var(--font-scale)); max-height: 72vh; overflow: auto; flex: auto; }
+html[data-large-text='true'] .active-conversation-card { min-height: calc(220px * var(--font-scale)); }
+html[data-large-text='true'] .active-conversation-card > header { flex-wrap: wrap; }
+html[data-large-text='true'] .active-conversation-card h3 { white-space: normal; }
+html[data-large-text='true'] .active-conversation-card > footer { grid-template-columns: minmax(0, 1fr); }
+html[data-large-text='true'] .active-conversation-card > footer > span { white-space: normal; overflow-wrap: anywhere; }
+html[data-large-text='true'] .active-footer { flex-wrap: wrap; }
+html[data-large-text='true'] .compact-summary-map { --compact-label: calc(190px * var(--font-scale)); overflow: auto; flex: auto; min-height: 350px; max-height: 70vh; }
+html[data-large-text='true'] .compact-map-head,
+html[data-large-text='true'] .compact-country-title,
+html[data-large-text='true'] .compact-agent-row { min-width: calc((190px + var(--compact-days) * 32px) * var(--font-scale)); }
+html[data-large-text='true'] .compact-map-head { height: auto; min-height: calc(30px * var(--font-scale)); }
+html[data-large-text='true'] .compact-day-heads > span { height: calc(18px * var(--font-scale)); }
+html[data-large-text='true'] .compact-country-title { height: auto; min-height: calc(28px * var(--font-scale)); }
+html[data-large-text='true'] .compact-agent-row { min-height: calc(22px * var(--font-scale)); }
+html[data-large-text='true'] .compact-agent-name > span { white-space: normal; }
+html[data-large-text='true'] .compact-agent-row { height: auto; }
+html[data-large-text='true'] .login-grid { grid-template-columns: minmax(0, 1fr); }
+html[data-large-text='true'] .login-intro h1 { overflow-wrap: anywhere; hyphens: auto; }
+html[data-large-text='true'] .login-card { width: 100%; max-width: 900px; }
+html[data-large-text='true'] .message-bubble-meta,
+html[data-large-text='true'] .access-found,
+html[data-large-text='true'] .access-lookup { flex-wrap: wrap; }
+html[data-large-text='true'] .message-bubble-meta time { margin-left: 0; }
+html[data-large-text='true'] .topic-tags { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+html[data-large-text='true'] .topic-tags .ant-tag { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+html[data-large-text='true'] .message-reading-grid,
+html[data-large-text='true'] .message-column-labels { grid-template-columns: minmax(0, 1fr); }
+html[data-large-text='true'] .message-flags-sidebar { border-left: 0; border-top: 1px solid var(--border); height: auto; max-height: 65vh; }
+html[data-large-text='true'] .ant-tooltip .ant-tooltip-inner { max-width: min(calc(330px * var(--font-scale)), calc(100vw - 24px)); }
+html[data-large-text='true'] .ant-tooltip { max-width: min(calc(350px * var(--font-scale)), calc(100vw - 16px)); }
+html[data-large-text='true'] .ant-table-wrapper { overflow-x: auto; }
+html[data-large-text='true'] .ant-btn { height: auto; min-height: calc(36px * var(--font-scale)); white-space: normal; }
+html[data-large-text='true'] .ant-btn-sm { min-height: calc(27px * var(--font-scale)); }
+html[data-large-text='true'] .ant-btn-lg { min-height: calc(45px * var(--font-scale)); }
+html[data-large-text='true'] .message-dual-badge,
+html[data-large-text='true'] .dual-badge,
+html[data-large-text='true'] .dual-badge-compact { min-height: 1.4em; height: auto; }
+@media (max-width: 700px) {
+  html[data-large-text='true'] .summary-totals { grid-template-columns: 1fr; }
+  html[data-large-text='true'] .summary-stat-card { min-height: 0; }
+  html[data-large-text='true'] .topbar-right { margin-left: 0; }
+  html[data-large-text='true'] .login-page { padding-inline: 16px; }
+  html[data-large-text='true'] .login-brand { flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+  html[data-large-text='true'] .login-brand > .eyebrow { flex-basis: 100%; min-width: 0; max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+  html[data-large-text='true'] .login-intro h1 br:nth-child(2) { display: initial; }
+  html[data-large-text='true'] .login-card { padding-inline: 18px; }
+  html[data-large-text='true'] .appearance-actions { align-items: stretch; }
+}

@@ -508,8 +508,12 @@ jobs:
           unset GIT_ASKPASS GH_TOKEN_FILE GIT_TERMINAL_PROMPT
 
           if [ "$API_DEPLOY_REQUIRED" = true ]; then
-            echo "Installing API dependencies"
-            npm ci --prefix "$API" --omit=dev --ignore-scripts --no-audit --no-fund
+            if [ "$PREVIOUS_HEAD" != "$(git rev-parse HEAD)" ] && [ -d "$API/node_modules" ] && git diff --quiet "$PREVIOUS_HEAD" HEAD -- api/package.json api/package-lock.json; then
+              echo "API dependencies unchanged: preserving the directory used by detached evaluation workers."
+            else
+              echo "Installing API dependencies"
+              npm ci --prefix "$API" --omit=dev --ignore-scripts --no-audit --no-fund
+            fi
 
             echo "Applying additive API migrations"
             npm run db:migrate --prefix "$API" -- --defer-online-indexes

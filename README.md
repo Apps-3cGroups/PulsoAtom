@@ -120,6 +120,14 @@ Los servicios reutilizables viven en `api/src/services/tdApiClient.js`, `tdS3Ser
 
 En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/integrations/td/s3/upload`, `/s3/url`, `/s3/download`, `/mail/health` y `/mail/send` bajo el mismo prefijo. La subida y el correo tienen límite de frecuencia. En modo demostración estas rutas están cerradas. React dispone de los mismos servicios en `web/src/services/tdApiClient.js`, `tdS3Service.js` y `tdMailService.js`; `downloadS3File` entrega un `Blob`. Los helpers `fileToBase64` y `downloadBlob` están en `web/src/services/tdFileHelpers.js` para futuros formularios.
 
+### Excepciones y tamaño de letra
+
+Resumen permite seleccionar Crítico, Menor, Positivo, Refutado y Humano; Activas ofrece únicamente Crítico, Menor y Positivo. Ambas vistas ocultan conversaciones sin evaluación o pendientes de revisión de un modelo, y conservan las evaluadas con incidencias. Activas filtra antes de paginar y ordena por cantidad de críticos, menores, positivos y actividad reciente. Las marcas humanas vigentes mantienen su clasificación; las refutadas no aparecen en Activas.
+
+Accesos → Tamaño de letra guarda una escala global de 1 a 2 en pasos de 0.1. El valor 1 conserva el tamaño original y 2 duplica los textos. Guardar aplica el cambio inmediatamente; los demás usuarios lo reciben al recargar. Restablecer a 1 modifica el formulario y requiere Guardar. La configuración visual usa una versión independiente de la programación de evaluaciones.
+
+`GET/PATCH /pulsoAtom/api/access/appearance` requiere administrador; PATCH recibe `{ fontScale, expectedVersion }` y responde `{ appearance }`. `/meta` expone solamente `appearance.fontScale`, también para el inicio de sesión. No se requiere migración estructural. `/active` acepta `figures` con categorías separadas por comas: omitirlo selecciona todas y enviarlo vacío no selecciona ninguna.
+
 ### Evaluación con Clef y Gemma
 
 La lectura histórica de Atom consulta conversaciones y mensajes sin guardar transcripciones en Pulso. Los modelos locales reciben roles, IDs, texto y definiciones activas compatibles con IA a través del Gateway. Las respuestas se validan por variable, identidad de modelo y evidencia. Código y métricas se calculan una sola vez y no cuentan como votos.

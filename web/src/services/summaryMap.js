@@ -11,7 +11,8 @@ export function buildSummaryLanes(conversations, countries, days) {
     if (!group.agents.has(id)) group.agents.set(id, { ...conversation.agent, byDay: Object.fromEntries(days.map(day => [day, []])) });
     group.agents.get(id).byDay[conversation.displayDate].push(conversation);
   }
-  return [...groups.values()].filter(g => g.agents.size).map(group => ({ ...group, agents: [...group.agents.values()].map(agent => {
+  return [...groups.values()].filter(g => g.agents.size).map(group => ({ ...group, agents: [...group.agents.values()]
+    .sort((a, b) => Number(a.id === 'sin-asesor') - Number(b.id === 'sin-asesor')).map(agent => {
     for (const day of days) agent.byDay[day].sort((a, b) => b.displayAt.localeCompare(a.displayAt) || a.id.localeCompare(b.id));
     return agent;
   }) }));

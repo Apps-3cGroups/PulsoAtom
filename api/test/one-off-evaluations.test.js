@@ -5,6 +5,7 @@ import { ModelRegistry } from '../src/model-registry.js';
 import { fridayRun, activeReason, selectOneOffConversations, ingestionReadiness } from '../src/one-off-evaluations.js';
 import { runOneOffTick as tick } from '../src/one-off-scheduler.js';
 import { listQuerySchema, filteredConversations } from '../src/domain.js';
+import { dualizeEvaluation } from './fixtures/dual-state.js';
 const when = value => new Date(`2026-11-13T${value}Z`);
 const runOneOffTick = (store, registry, at, operations = {}) => tick(store, registry, at, { now: () => at, ...operations });
 const chat = (id, country = 'HN') => ({ id, country, sourceDocumentId: `doc-${id}`, ingestionBatchId: country, ingestionStartedAt: '2026-11-13T16:00:00.000Z',
@@ -97,6 +98,12 @@ test('Activas API paginates across countries and excludes NEW and closed chats',
  state.countries = [{ code: 'HN', name: 'Honduras' }, { code: 'PA', name: 'Panamá' }];
  state.conversations = Array.from({ length: 30 }, (_, i) => ({ ...chat(String(i), i % 2 ? 'PA' : 'HN'), sourceState: 'ABIERTO', completed: false, sourceClosedAt: null }));
  state.conversations.push({ ...chat('new'), sourceState: 'NUEVO', completed: false, sourceClosedAt: null }, chat('closed'));
+ for (const c of state.conversations) {
+  const evaluation = { id: `evaluated-${c.id}`, conversationId: c.id, createdAt: '2026-11-12T13:00:00.000Z',
+   catalogVersions: state.catalog.map(v => ({ id: v.id, version: v.version, active: v.active })),
+   results: state.catalog.map(v => ({ variableId: v.id, status: 'evaluado', value: 0, evidence: [] })) };
+  c.evaluationId = evaluation.id; state.evaluations.push(evaluation); dualizeEvaluation(state, c, evaluation);
+ }
  const client = request.agent(createApp(store, { demo: true, origin: 'http://127.0.0.1:3000', sessionHours: 8, timezone: 'America/Tegucigalpa' }, registry));
  await client.post('/pulsoAtom/api/auth/demo').send({ role: 'admin' }).expect(200);
  const first = (await client.get('/pulsoAtom/api/active?countries=HN,PA&pageSize=12').expect(200)).body;

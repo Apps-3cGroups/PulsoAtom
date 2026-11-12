@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { App as AntApp, Avatar, Button, ConfigProvider, Dropdown, Form, Input, Alert, theme as antTheme } from 'antd';
+import { App as AntApp, Avatar, Button, ConfigProvider, Dropdown, Form, Input, Alert } from 'antd';
 import esES from 'antd/locale/es_ES';
 import { ArrowRightOutlined, LogoutOutlined, UserOutlined, DownOutlined, SafetyCertificateOutlined, EyeOutlined } from '@ant-design/icons';
 import { api } from './services/api';
 import { PortalContext, useApi } from './hooks';
 import { Brand, ErrorState, LoadingState, dateText, setDisplayTimezone } from './components/common';
 import PortalRoutes from './routes';
+import { AppearanceProvider } from './appearance';
+import { appearanceTheme, normalizeFontScale } from './services/appearance';
 
 const secondaryNavigationPaths = new Set(['/historico', '/catalogo', '/modelos', '/evaluaciones', '/accesos']);
 
@@ -53,5 +55,8 @@ export default function App() {
     return () => { cancelled = true; };
   }, [retry]);
   useEffect(() => { const handler = () => setUser(null); window.addEventListener('pulso:unauthorized', handler); return () => window.removeEventListener('pulso:unauthorized', handler); }, []);
-  return <ConfigProvider locale={esES} theme={{ algorithm: antTheme.defaultAlgorithm, token: { colorPrimary: '#167963', colorPrimaryHover: '#0d6653', colorPrimaryActive: '#095642', colorInfo: '#167963', colorBgBase: '#f3f5f1', colorTextBase: '#19251f', colorTextDisabled: '#5d7062', colorBgContainerDisabled: '#eef1ec', borderRadius: 8, fontFamily: '"Instrument Sans", "Avenir Next", "Segoe UI", sans-serif', fontSize: 13, controlHeight: 36 }, components: { Table: { headerBg: '#eaf0e9', rowHoverBg: '#eef4ed' }, Button: { primaryShadow: 'none' } } }}><AntApp>{loading ? <LoadingState fullScreen /> : error ? <div className="boot-loading"><Brand /><ErrorState error={error} retry={() => setRetry(n => n + 1)} /></div> : user ? <Portal user={user} onLogout={() => setUser(null)} /> : <Login meta={meta} onLogin={setUser} />}</AntApp></ConfigProvider>;
+  const fontScale = normalizeFontScale(meta?.appearance?.fontScale);
+  const portalTheme = useMemo(() => appearanceTheme(fontScale), [fontScale]);
+  const setAppearance = appearance => setMeta(current => ({ ...current, appearance: { fontScale: normalizeFontScale(appearance?.fontScale) } }));
+  return <AppearanceProvider fontScale={fontScale} setAppearance={setAppearance}><ConfigProvider locale={esES} theme={portalTheme}><AntApp>{loading ? <LoadingState fullScreen /> : error ? <div className="boot-loading"><Brand /><ErrorState error={error} retry={() => setRetry(n => n + 1)} /></div> : user ? <Portal user={user} onLogout={() => setUser(null)} /> : <Login meta={meta} onLogin={setUser} />}</AntApp></ConfigProvider></AppearanceProvider>;
 }

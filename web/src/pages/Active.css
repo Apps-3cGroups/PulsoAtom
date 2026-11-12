@@ -21,7 +21,7 @@
   flex-wrap: wrap;
   gap: 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
 }
 
 .active-page .active-toolbar .active-legend > span {
@@ -30,7 +30,7 @@
 
 .active-page .active-toolbar .active-legend .control-label {
   margin-right: 3px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   letter-spacing: .015em;
 }
 
@@ -44,7 +44,7 @@
   border-radius: 5px;
   background: #fff;
   color: var(--secondary);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale, 1));
   cursor: default;
 }
 
@@ -55,7 +55,7 @@
 
 /* Keep the 220px cards and fixed footer; only flag text grows for projection. */
 .active-page .active-card-body .active-flags li {
-  font-size: 15px;
+  font-size: calc(15px * var(--font-scale, 1));
 }
 
 @media (max-width: 900px) {

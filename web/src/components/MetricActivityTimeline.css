@@ -1,16 +1,16 @@
 .metric-activity-timeline { min-width: 0; padding: 20px 22px 16px; border-top: 1px solid #dce7e0; }
 .mat-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px 20px; margin-bottom: 17px; }
-.mat-heading h4 { margin: 0 0 4px; color: #284c3c; font-size: 14px; line-height: 1.4; font-weight: 600; }
-.mat-heading > div > span { font-size: 12px; color: #62776a; }
+.mat-heading h4 { margin: 0 0 4px; color: #284c3c; font-size: calc(14px * var(--font-scale, 1)); line-height: 1.4; font-weight: 600; }
+.mat-heading > div > span { font-size: calc(12px * var(--font-scale, 1)); color: #62776a; }
 .mat-wait-key { display: flex; align-items: flex-start; gap: 7px; max-width: 260px; }
 .mat-wait-key > i { flex: none; width: 12px; height: 12px; margin-top: 2px; border: 1px solid #b9cadd; border-radius: 3px; background: #e9f0f8; }
-.mat-wait-key > span { display: block; font-size: 12px; line-height: 1.4; color: #5b718c; }
-.mat-wait-key b { display: block; margin-top: 3px; color: #3e5e7e; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.mat-wait-key > span { display: block; font-size: calc(12px * var(--font-scale, 1)); line-height: 1.4; color: #5b718c; }
+.mat-wait-key b { display: block; margin-top: 3px; color: #3e5e7e; font-size: calc(12px * var(--font-scale, 1)); font-weight: 500; font-variant-numeric: tabular-nums; }
 .mat-wait-key b > span { padding-inline: 4px; color: #6a849e; }
 .mat-chart { display: grid; grid-template-columns: 100px minmax(0, 1fr); column-gap: 16px; row-gap: 10px; }
 .mat-row-labels { display: grid; grid-template-rows: repeat(3, 36px); }
-.mat-row-labels > div { display: flex; gap: 7px; align-items: center; color: #4b6658; font-size: 12px; }
-.mat-row-labels b { margin-left: auto; color: #355c49; font-weight: 600; font-size: 12px; font-variant-numeric: tabular-nums; }
+.mat-row-labels > div { display: flex; gap: 7px; align-items: center; color: #4b6658; font-size: calc(12px * var(--font-scale, 1)); }
+.mat-row-labels b { margin-left: auto; color: #355c49; font-weight: 600; font-size: calc(12px * var(--font-scale, 1)); font-variant-numeric: tabular-nums; }
 .mat-role-dot { display: block; flex: none; width: 7px; height: 7px; border-radius: 50%; }
 .mat-plot { position: relative; display: grid; grid-template-rows: repeat(3, 36px); margin-inline: 4px; min-width: 0; }
 .mat-track { position: relative; min-width: 0; }
@@ -22,11 +22,11 @@
 .mat-first-human { width: 10px; height: 10px; box-shadow: 0 0 0 3px #d4e8dc, 0 0 0 4px #ffffffd0; }
 .mat-wait-band { position: absolute; top: 5px; bottom: 5px; background: #e9f0f89c; border-radius: 5px 0 0 5px; pointer-events: none; }
 .mat-response-line { position: absolute; top: 5px; bottom: 5px; border-left: 1px dashed #9bb2cb; pointer-events: none; }
-.mat-axis { grid-column: 2; display: flex; justify-content: space-between; gap: 12px; color: #657b6d; font-size: 11px; padding-inline: 4px; }
+.mat-axis { grid-column: 2; display: flex; justify-content: space-between; gap: 12px; color: #657b6d; font-size: calc(11px * var(--font-scale, 1)); padding-inline: 4px; }
 .mat-axis > span, .mat-empty-interval > span { display: flex; flex-direction: column; gap: 3px; }
 .mat-axis > span:last-child, .mat-empty-interval > span:last-child { text-align: right; }
-.mat-axis b, .mat-empty-interval b { color: #3e674f; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.mat-empty-interval { display: flex; justify-content: space-between; align-items: center; gap: 18px; font-size: 11px; color: #657b6d; }
+.mat-axis b, .mat-empty-interval b { color: #3e674f; font-size: calc(12px * var(--font-scale, 1)); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mat-empty-interval { display: flex; justify-content: space-between; align-items: center; gap: 18px; font-size: calc(11px * var(--font-scale, 1)); color: #657b6d; }
 .mat-empty-interval > i { flex: 1; border-top: 1px solid #d4dfd6; }
-.mat-empty p { margin: 12px 0 0; color: #6b7e70; font-size: 12px; }
+.mat-empty p { margin: 12px 0 0; color: #6b7e70; font-size: calc(12px * var(--font-scale, 1)); }
 @media (max-width: 650px) { .metric-activity-timeline { padding: 17px 16px 14px; } .mat-heading { flex-wrap: wrap; gap: 12px; } .mat-wait-key { max-width: none; } .mat-chart { grid-template-columns: 88px minmax(0, 1fr); column-gap: 12px; } }
