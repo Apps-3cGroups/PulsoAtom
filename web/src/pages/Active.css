@@ -1,19 +1,25 @@
 .active-page .active-toolbar {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto minmax(36px, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 8px 12px;
 }
 
 .active-page .active-toolbar .country-multiselect {
-  width: min(100%, 280px);
+  flex: 0 1 280px;
+  width: 280px;
   min-width: 0;
+  max-width: 280px;
 }
 
 .active-page .active-toolbar .active-legend {
-  justify-content: center;
-  gap: 12px;
+  flex: 0 1 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
   color: var(--muted);
   font-size: 13px;
 }
@@ -22,9 +28,29 @@
   white-space: nowrap;
 }
 
+.active-page .active-toolbar .active-legend .control-label {
+  margin-right: 3px;
+  font-size: 13px;
+  letter-spacing: .015em;
+}
+
+.active-page .active-toolbar .active-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--secondary);
+  font-size: 13px;
+  cursor: default;
+}
+
 .active-page .active-toolbar > .ant-btn {
-  justify-self: end;
-  margin-left: 0;
+  flex: none;
+  margin-left: auto;
 }
 
 /* Keep the 220px cards and fixed footer; only flag text grows for projection. */
@@ -33,21 +59,11 @@
 }
 
 @media (max-width: 900px) {
-  .active-page .active-toolbar {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px 12px;
-  }
-
   .active-page .active-toolbar .active-legend {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    gap: 8px 12px;
+    flex-basis: 100%;
   }
 
-  .active-page .active-toolbar > .ant-btn {
-    grid-column: 2;
-    grid-row: 1;
+  .active-page .active-toolbar .country-multiselect {
+    flex: 1 1 0;
   }
 }
