@@ -72,7 +72,7 @@ test('outer HTTP errors are not parsed as upstream context errors and successful
   assert.deepEqual((await clientFor(envelope(payload, 200)).invoke(operation)).response, payload);
 });
 
-test('a context-limited Clef case stays partially unevaluated while another completes without retries, fallback or Gemma calls', async () => {
+test('a Clef case exceeding even a single-variable request stays partial without fallback or Gemma calls', async () => {
   const state = createState(false), calls = [], maintenanceId = 'synthetic-context-maintenance';
   const flags = state.catalog.filter(v => v.active && !v.retired && v.type === 'Flag' && v.method === 'IA').slice(0, 2);
   const codeVariable = state.catalog.find(v => v.active && !v.retired && supportsCodeVariable(v));
@@ -110,7 +110,7 @@ test('a context-limited Clef case stays partially unevaluated while another comp
   }, async transaction(fn) { const draft = structuredClone(state), result = await fn(draft); Object.assign(state, draft); return structuredClone(result); } };
   const execution = await resumeEvaluationBatch(store, registry, job.id, { profileIds: ['clef-local'] });
   assert.equal((await execution.completion).status, 'partial');
-  assert.deepEqual(calls, ['large', 'small']);
+  assert.deepEqual(calls, ['large', 'large', 'small']);
   const large = state.tasks.find(t => t.id === 'large-clef-local'), small = state.tasks.find(t => t.id === 'small-clef-local');
   assert.equal(large.status, 'partial'); assert.equal(large.error.code, 'AI_CONTEXT_LIMIT');
   assert.equal(small.status, 'completed');

@@ -38,6 +38,38 @@ export class GatewayEvaluator {
     return { catalog, models: models.response, requestId: models.requestId };
   }
   async evaluate(conversation, variables, options) {
+    try { return await this.#evaluateSingle(conversation, variables, options); }
+    catch (error) {
+      if (error.code !== 'AI_CONTEXT_LIMIT' || variables.length <= 1) throw error;
+    }
+    // Keep every source message and the same decision instructions. Reduce
+    // only the checklist/schema, after an explicit provider context rejection.
+    const answers = [], batches = [];
+    const queue = [];
+    const groupSize = Math.min(8, Math.ceil(variables.length / 2));
+    for (let i = 0; i < variables.length; i += groupSize) queue.push(variables.slice(i, i + groupSize));
+    let failure;
+    while (queue.length) {
+      const group = queue.shift();
+      try {
+        const answer = await this.#evaluateSingle(conversation, group, options);
+        answers.push(answer);
+        batches.push({ variableIds: group.map(v => v.id), responseId: answer.responseId, responseField: answer.responseField });
+      } catch (error) {
+        if (error.code === 'AI_CONTEXT_LIMIT' && group.length > 1) {
+          const middle = Math.ceil(group.length / 2); queue.unshift(group.slice(0, middle), group.slice(middle)); continue;
+        }
+        if (!answers.length) throw error;
+        failure = { code: error.code }; break;
+      }
+    }
+    const usage = answers.reduce((sum, a) => { for (const [key, n] of Object.entries(a.usage || {})) sum[key] = (sum[key] || 0) + n; return sum; }, {});
+    const { runtimeIdentity: _identity, ...last } = answers.at(-1);
+    return { ...last, results: answers.flatMap(a => a.results), validationErrors: answers.flatMap(a => a.validationErrors),
+      runtimeIdentities: answers.flatMap(a => a.runtimeIdentity ? [a.runtimeIdentity] : []), contextBatches: batches,
+      usage: Object.keys(usage).length ? usage : null, ...(failure ? { failure } : {}) };
+  }
+  async #evaluateSingle(conversation, variables, options) {
     if (!this.configured) throw new AppError(503, 'Falta configurar el modelo local y su herramienta en el Gateway.', 'AI_CONFIGURATION');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
