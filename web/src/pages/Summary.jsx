@@ -3,18 +3,22 @@ import { selectedCountries, selectedFigures, selectedPending, filterSummaryConve
 import { useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Checkbox, ConfigProvider, Select, Tooltip } from 'antd';
-import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
+import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, InfoCircleOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
 import { LoadingState, ErrorState, EmptyState, Mark, dateText, timeText } from '../components/common';
 import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../services/summaryDates';
-import { summaryRangeLabel } from '../services/summaryPresentation';
+import { summaryRangeLabel, summaryPercentage } from '../services/summaryPresentation';
 import { buildSummaryLanes } from '../services/summaryMap';
 import CompactSummaryMap from '../components/CompactSummaryMap';
 import { classificationOf, dualMarks, flagVariables, markKind, noVisibleFlagsLabel, evaluationStatus, evaluationStatusLabel } from '../services/flags';
 import './Summary.css';
 
 const legends = [['critical', 'Crítico'], ['normal', 'Menor'], ['positive', 'Positivo'], ['refuted', 'Refutado'], ['human', 'Humano']];
+const countTooltip = (count, total, description) => <div className="summary-stat-tooltip">
+  <strong>{count.toLocaleString('es-HN')} {count === 1 ? 'conversación' : 'conversaciones'} {description}</strong>
+  <span>{total ? `De ${total.toLocaleString('es-HN')} ${total === 1 ? 'conversación visible' : 'conversaciones visibles'}.` : 'No hay conversaciones con estos filtros.'}</span>
+</div>;
 const variableOptions = catalog => [
   { label: 'Todas las variables', value: 'all' },
   ...[
@@ -70,14 +74,20 @@ export default function Summary() {
   const filtered = useMemo(() => filterSummaryConversations(current?.conversations || [], visible, variable, { showPending }), [current, visible.join(','), variable, showPending]);
   const hiddenPending = !showPending ? filterSummaryConversations(current?.conversations || [], visible, variable, { showPending: true }).length - filtered.length : 0;
   const metrics = current ? summaryMetrics(filtered) : null;
+  const flagPercentage = summaryPercentage(metrics?.withAlerts, metrics?.total);
+  const positivePercentage = summaryPercentage(metrics?.withPositives, metrics?.total);
   const groups = useMemo(() => buildSummaryLanes(filtered, bootstrap.countries, days), [filtered, bootstrap.countries, days]);
   return <div className={`summary-page ${preset === 30 ? 'summary-month' : ''}`}>
     <h1 className="visually-hidden">Resumen de conversaciones</h1>
     <div className="summary-stats-bar">
       <div className="summary-totals" aria-label="Indicadores de las conversaciones visibles" aria-busy={waiting}>
-        <div className="summary-stat-card"><span>Conversaciones</span><strong>{metrics?.total.toLocaleString('es-HN') ?? '—'}</strong></div>
-        <div className="summary-stat-card summary-total-flags"><span>Con flags</span><strong>{metrics?.withAlerts.toLocaleString('es-HN') ?? '—'}</strong></div>
-        <div className="summary-stat-card summary-total-positive"><span>Con positivos</span><strong>{metrics?.withPositives.toLocaleString('es-HN') ?? '—'}</strong></div>
+        <div className="summary-stat-card"><span className="summary-stat-label">Conversaciones</span><strong>{metrics?.total.toLocaleString('es-HN') ?? '—'}</strong></div>
+        <Tooltip trigger={['hover', 'focus']} placement="bottom" title={metrics ? countTooltip(metrics.withAlerts, metrics.total, 'con flags de atención') : null}>
+          <div className="summary-stat-card summary-total-flags" tabIndex={metrics ? 0 : undefined} aria-label={`Con flags: ${flagPercentage}`}><span className="summary-stat-label">Con flags <InfoCircleOutlined aria-hidden="true" /></span><strong>{flagPercentage}</strong></div>
+        </Tooltip>
+        <Tooltip trigger={['hover', 'focus']} placement="bottom" title={metrics ? countTooltip(metrics.withPositives, metrics.total, 'con resultados positivos') : null}>
+          <div className="summary-stat-card summary-total-positive" tabIndex={metrics ? 0 : undefined} aria-label={`Positivos: ${positivePercentage}`}><span className="summary-stat-label">+ Positivos <InfoCircleOutlined aria-hidden="true" /></span><strong>{positivePercentage}</strong></div>
+        </Tooltip>
       </div>
       <div className="summary-range-actions">
         <Tooltip trigger={['hover', 'focus']} title="Cada chat aparece una vez, en el día de su última actividad registrada en Atom, aunque haya comenzado antes."><span className="summary-range" tabIndex={0}><CalendarOutlined /><span>{summaryRangeLabel(from, to)}</span></span></Tooltip>
