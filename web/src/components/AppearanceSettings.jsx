@@ -29,7 +29,7 @@ export default function AppearanceSettings() {
         body: { fontScale: draft, expectedVersion: saved.version } });
       setSaved(result.appearance); setDraft(result.appearance.fontScale);
       setAppearance(result.appearance);
-      message.success('Tamaño de letra guardado para todo el portal.');
+      message.success({ key: 'appearance-saved', content: 'Tamaño de letra guardado para todo el portal.', duration: 3 });
     } catch (caught) { setError(caught); } finally { setSaving(false); }
   };
   return <section className="evaluation-card appearance-settings" aria-labelledby="appearance-heading">
