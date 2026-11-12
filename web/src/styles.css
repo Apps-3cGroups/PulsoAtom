@@ -64,6 +64,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .topbar nav { display: flex; align-self: stretch; gap: 24px; }
 .topbar nav a { display: flex; align-items: center; position: relative; color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .topbar nav a:hover, .topbar nav a.active { color: var(--ink); }
+.topbar nav a.secondary-nav-link { color: #637266; }
+.topbar nav a.secondary-nav-link:hover, .topbar nav a.secondary-nav-link.active, .topbar nav a.secondary-nav-link:focus-visible { color: var(--ink); }
 .topbar nav a.active::after { content: ''; height: 3px; border-radius: 2px 2px 0 0; background: var(--accent); position: absolute; inset: auto 0 -1px; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 .historical-status { display: flex; align-items: center; gap: 8px; color: var(--muted); white-space: nowrap; font-size: 12px; margin-right: 6px; }
