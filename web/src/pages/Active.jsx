@@ -35,8 +35,8 @@ export default function Active() {
   return <div className="active-page">
     <h1 className="visually-hidden">Activas</h1>
     <section className="active-toolbar" aria-label="Filtros de Activas">
+      <div className="active-legend" aria-label="Simbología de flags"><span className="control-label">FIGURAS VISIBLES</span><span className="active-legend-item"><Mark kind="critical" />Crítico</span><span className="active-legend-item"><Mark kind="normal" />Menor</span><span className="active-legend-item"><Mark kind="positive" />Positivo</span><span className="active-legend-item"><Mark kind="human" />Humano</span></div>
       <Select mode="multiple" allowClear showSearch maxTagCount="responsive" optionFilterProp="label" aria-label="Países de Activas" placeholder="Todos los países" className="country-multiselect" styles={{ popup: { root: { zIndex: 1100 } } }} value={countries} onChange={values => patch({ countries: values.length ? values.sort().join(',') : null, page: null })} options={bootstrap.countries.map(c => ({ label: c.name, value: c.code }))} />
-      <div className="active-legend" aria-label="Simbología de flags"><span><Mark kind="critical" />Crítico</span><span><Mark kind="normal" />Menor</span><span><Mark kind="positive" />Positivo</span><span><Mark kind="human" />Revisión humana</span></div>
       <Button aria-label="Actualizar Activas" title="Actualizar Activas" icon={<ReloadOutlined />} loading={loading} onClick={reload} />
     </section>
     {error ? <ErrorState error={error} retry={reload} /> : !ready ? <LoadingState /> : <>
