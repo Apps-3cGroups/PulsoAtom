@@ -113,6 +113,67 @@ test('responses must prove the exact configured model identity', async () => {
   }
 });
 
+test('numbered runtime instances require native inventory and preserve both identities', async () => {
+  const response = payload(); response.model = `${base.model}:2`;
+  const paths = [];
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); paths.push(request.path);
+    return mockResponse(request.path === '/v1/chat/completions' ? envelope(response) : {
+      ...envelope({ models: [{ key: base.model, type: 'llm', loaded_instances: [{ id: response.model, config: { context_length: 8192 } }] }] }),
+      method: 'GET', path: '/api/v1/models',
+    });
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(paths, ['/v1/chat/completions', '/api/v1/models']);
+  assert.equal(answer.model, base.model);
+  assert.deepEqual(answer.runtimeIdentity, { modelKey: base.model, instanceId: response.model,
+    inventoryRequestId: requestId, responseRequestId: requestId, contextLength: 8192 });
+  assert.deepEqual(answer.validationErrors, []);
+});
+
+test('context rejection divides only the checklist and preserves the full conversation', async () => {
+  const requests = [];
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body; requests.push(request);
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    if (ids.length > 1) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'context_length_exceeded', message: 'Context length exceeded' } } });
+    const raw = valid(); raw.results = Object.fromEntries(ids.map(id => [id, raw.results[id]]));
+    return mockResponse(envelope(payload(raw)));
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.equal(answer.results.length, 2);
+  assert.deepEqual(answer.validationErrors, []);
+  assert.equal(answer.contextBatches.length, 2);
+  for (const request of requests) {
+    assert.equal(request.messages[0].content, evaluationInstructions);
+    for (const message of conversation.messages) assert.ok(request.messages.at(-1).content.includes(message.text));
+  }
+});
+
+test('context still too small for one variable remains an explicit error', async () => {
+  const instance = evaluator({ ...envelope(), ok: false, upstream_status_code: 400,
+    response: { error: { code: 'context_length_exceeded', message: 'Context length exceeded' } } }).instance;
+  await assert.rejects(instance.evaluate(conversation, [variables[0]]), code('AI_CONTEXT_LIMIT'));
+});
+
+test('a later context batch failure retains validated earlier answers', async () => {
+  let singles = 0;
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body;
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    if (ids.length > 1) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'context_length_exceeded' } } });
+    if (++singles === 2) return mockResponse({}, 503);
+    const raw = valid(); raw.results = Object.fromEntries(ids.map(id => [id, raw.results[id]]));
+    return mockResponse(envelope(payload(raw)));
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(answer.results.map(r => r.variableId), ['event']);
+  assert.equal(answer.failure.code, 'AI_TRANSIENT');
+  assert.equal(answer.contextBatches.length, 1);
+});
+
 test('refusals and content filtering require intervention, while truncated answers remain incomplete', async () => {
   for (const change of [{ refusal: 'Rejected' }, { finish_reason: 'content_filter' }, { finish_reason: 'length' }]) {
     const response = payload();

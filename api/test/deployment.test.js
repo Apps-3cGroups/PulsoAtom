@@ -156,7 +156,12 @@ test('el próximo lote local separa inspección y estado de su inicio sobre el c
   for (const guard of ['"$actual_sha" = "__EXPECTED_SHA__"', 'diff --quiet HEAD -- api']) {
     assert.ok(production.indexOf(guard) >= 0 && production.indexOf(guard) < production.indexOf('exec node'));
   }
-  assert.doesNotMatch(production, /git pull|pm2|npm |migrate|reset-evaluations/);
+  const incidentStop = production.match(/if \[ '__OPERATION__' = 'gemma-tuesday-recover' \]; then[\s\S]*?\n\s+fi/)?.[0];
+  assert.ok(incidentStop);
+  assert.match(incidentStop, /trap restart_incident_api EXIT/);
+  assert.match(incidentStop, /pm2 stop pulso-atom-api/);
+  assert.match(incidentStop, /pm2 restart pulso-atom-api/);
+  assert.doesNotMatch(production.replace(incidentStop, ''), /git pull|pm2|npm |migrate|reset-evaluations/);
   const deployCondition = workflow.match(/\n  deploy:\n\s+if: ([^\n]+)/)?.[1];
   assert.equal(deployCondition, "${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}");
   assert.match(workflow, /cancel-in-progress: false/);
