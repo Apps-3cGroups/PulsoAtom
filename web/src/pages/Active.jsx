@@ -1,14 +1,15 @@
 import { conversationLink } from '../services/conversationNavigation';
 import { useEffect } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Select, Pagination } from 'antd';
+import { Button, Select, Pagination } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
 import { flagCount, noVisibleFlagsLabel, evaluationNeedsAttention, evaluationStatusLabel } from '../services/flags';
 import { visibleBoardMarks } from '../services/activeBoard';
 import { selectedCountries } from '../services/summaryFilters';
-import { PageHeading, LoadingState, EmptyState, ErrorState, Mark, FlagSymbol, dateText, timeText } from '../components/common';
+import { LoadingState, EmptyState, ErrorState, Mark, FlagSymbol, dateText, timeText } from '../components/common';
+import './Active.css';
 
 const pollRuns = data => data.runs?.some(run => ['scheduled', 'waiting_ingestion', 'waiting_evaluation', 'running'].includes(run.status));
 export default function Active() {
@@ -31,17 +32,14 @@ export default function Active() {
   useEffect(() => {
     if (ready && page > Math.max(1, Math.ceil(data.total / 12))) patch({ page: Math.max(1, Math.ceil(data.total / 12)) });
   }, [ready, data?.total, page]);
-  const heading = countries.length === 1 ? bootstrap.countries.find(c => c.code === countries[0])?.name : countries.length ? 'Países seleccionados' : 'Todos los países';
   return <div className="active-page">
-    <PageHeading eyebrow="CONVERSACIONES POR ASISTENTE" title="Activas" description="Conversaciones en atención y lotes vigentes, con todos sus flags a la vista." />
+    <h1 className="visually-hidden">Activas</h1>
     <section className="active-toolbar" aria-label="Filtros de Activas">
-      <label>Países<Select mode="multiple" allowClear showSearch optionFilterProp="label" aria-label="Países de Activas" placeholder="Todos los países" className="country-multiselect" value={countries} onChange={values => patch({ countries: values.length ? values.sort().join(',') : null, page: null })} options={bootstrap.countries.map(c => ({ label: c.name, value: c.code }))} /></label>
-      <span className="active-dates">En atención<small>Abiertas, reasignadas y reingresadas sin cierre.</small></span>
-      <Button aria-label="Actualizar Activas" icon={<ReloadOutlined />} loading={loading} onClick={reload}>Actualizar</Button>
+      <Select mode="multiple" allowClear showSearch maxTagCount="responsive" optionFilterProp="label" aria-label="Países de Activas" placeholder="Todos los países" className="country-multiselect" styles={{ popup: { root: { zIndex: 1100 } } }} value={countries} onChange={values => patch({ countries: values.length ? values.sort().join(',') : null, page: null })} options={bootstrap.countries.map(c => ({ label: c.name, value: c.code }))} />
+      <div className="active-legend" aria-label="Simbología de flags"><span><Mark kind="critical" />Crítico</span><span><Mark kind="normal" />Menor</span><span><Mark kind="positive" />Positivo</span><span><Mark kind="human" />Revisión humana</span></div>
+      <Button aria-label="Actualizar Activas" title="Actualizar Activas" icon={<ReloadOutlined />} loading={loading} onClick={reload} />
     </section>
     {error ? <ErrorState error={error} retry={reload} /> : !ready ? <LoadingState /> : <>
-      {data.runs?.map(run => <Alert className="active-run-status" key={run.id} type={['blocked', 'failed', 'not_started'].includes(run.status) ? 'warning' : 'info'} message={`${run.label}: ${run.statusLabel}`} description={run.reason || (run.total ? `${run.completed} de ${run.total} evaluaciones registradas` : undefined)} />)}
-      <div className="active-board-heading"><div><h2>{heading}</h2><span>{data.total} conversaciones · {data.metrics.withAlerts} con flags · {data.pending} por completar</span></div><div className="active-legend"><span><Mark kind="critical" />Crítico</span><span><Mark kind="normal" />Menor</span><span><Mark kind="positive" />Positivo</span><span><Mark kind="human" />Revisión humana</span></div></div>
       {!data.total ? <EmptyState title="No hay conversaciones activas" description="No hay conversaciones en atención para los países seleccionados." /> : <div className="active-board active-conversation-board" aria-label="Conversaciones en atención">
         {data.items.map(c => <ConversationEntry key={c.id} conversation={c} returnTo={`${location.pathname}${location.search}`} showCountry={countries.length !== 1} />)}
       </div>}
@@ -52,6 +50,7 @@ export default function Active() {
 
 function ConversationEntry({ conversation: c, showCountry, returnTo }) {
   const marks = visibleBoardMarks(c).filter(m => m.effective !== false && m.kind !== 'refuted');
+  const media = (c.media || []).filter(kind => String(kind).trim().toLowerCase() !== 'archivo');
   const attention = flagCount(c, 'critical') || flagCount(c, 'normal');
   const pending = evaluationNeedsAttention(c) || c.sourceChanged;
   const clientLabel = `${c.client.name || 'Sin nombre'}${c.client.phoneLast4 ? ` …${c.client.phoneLast4}` : ''}`;
@@ -60,7 +59,7 @@ function ConversationEntry({ conversation: c, showCountry, returnTo }) {
     <div className="active-card-body">
       {c.activeReason?.code === 'friday-cohort' && <span className="active-pending">{c.activeReason.label}</span>}
       {marks.length > 0 && <ul className="active-flags">{marks.map(m => <li key={m.id}><FlagSymbol mark={m} /><span>{m.name}</span></li>)}</ul>}
-      {c.media?.length > 0 && <div className="active-card-media"><Mark kind="media" /><span>{c.media.join(' · ')}</span></div>}
+      {media.length > 0 && <div className="active-card-media"><Mark kind="media" /><span>{media.join(' · ')}</span></div>}
       {evaluationNeedsAttention(c) ? <span className="active-pending">{evaluationStatusLabel(c)}</span> : !marks.length && <span className="active-no-flags">{noVisibleFlagsLabel(c)}</span>}
       {!evaluationNeedsAttention(c) && c.unavailableFlags > 0 && <span className="muted small">{c.unavailableFlags} variables sin datos suficientes</span>}
       {c.sourceChanged && <span className="active-pending">Contenido nuevo pendiente de evaluar</span>}
