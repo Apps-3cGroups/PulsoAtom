@@ -324,8 +324,11 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         if (retained.size && metadata.model !== actualModel) throw new AppError(409, 'El proveedor cambió el modelo efectivo durante el reintento.', 'MODEL_CHANGED');
         attemptMetadata = nativeMetadata(response, profile, pending.map(v => v.id));
         const provenance = accumulatedMetadata(metadata, attemptMetadata, attempt.id);
+        const runtimeIdentities = [...(metadata.runtimeIdentities || [])];
+        if (response.runtimeIdentity) runtimeIdentities.push(structuredClone(response.runtimeIdentity));
         for (const result of response.results) retained.set(result.variableId, result);
         metadata = { model: actualModel, responseId: response.responseId || null, usage: response.usage || null, ...provenance,
+          ...(runtimeIdentities.length ? { runtimeIdentities } : {}),
           ...(decisionInstructionsVersion ? { decisionInstructionsVersion } : {}) };
         itemErrors = pending.filter(v => !retained.has(v.id)).map(v => {
           const failure = response.validationErrors?.find(e => e.variableId === v.id);
@@ -340,7 +343,8 @@ async function processTask(store, registry, job, task, conversation, catalog) {
             ...(responseField ? { responseField } : {}),
             ...(outputSchemaVersion ? { outputSchemaVersion } : {}),
             ...(decisionInstructionsVersion ? { decisionInstructionsVersion } : {}),
-            actualModel, usage: response.usage || null, ...attemptMetadata, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
+            actualModel, ...(response.runtimeIdentity ? { runtimeIdentity: structuredClone(response.runtimeIdentity) } : {}),
+            usage: response.usage || null, ...attemptMetadata, validationErrors: itemErrors, validVariableIds: response.results.map(r => r.variableId), error: lastError ? safeError(lastError) : null });
           s.tasks.find(t => t.id === task.id).profileStates = structuredClone(profileStates);
         });
         if (!lastError || !retryable(lastError)) break;
@@ -378,6 +382,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     createdAt: now(), demo: job.demo, ...task.context, provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null, profileId: effective.id, provider: effective.provider,
     profileLabel: effective.label, requestedProfileId: task.profile.id, requestedProvider: task.profile.provider, requestedModel: task.profile.model,
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
+    ...(answer.runtimeIdentities?.length ? { runtimeIdentities: answer.runtimeIdentities } : {}),
     ...(answer.decisionInstructionsVersion ? { decisionInstructionsVersion: answer.decisionInstructionsVersion } : {}),
     ...(answer.protocol ? { protocol: answer.protocol, adapterVersion: answer.adapterVersion, instructionsHash: answer.instructionsHash,
       requestIds: answer.requestIds, requests: answer.requests } : {}),

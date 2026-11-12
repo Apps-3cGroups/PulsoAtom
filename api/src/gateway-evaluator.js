@@ -1,6 +1,7 @@
 import { AppError } from './errors.js';
 import { evaluationInput, evaluationInstructions, evaluationSchema, supportsAiVariable, validateEvaluation } from './evaluator.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
+import { verifyNumberedModelInstance } from './services/gatewayModelIdentity.js';
 import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from './services/clefFlashSchema.js';
 import { CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION, clefFlashDecisionInstructions } from './services/clefFlashInstructions.js';
 
@@ -58,7 +59,8 @@ export class GatewayEvaluator {
     // Never silently attribute a result to the requested model when the server
     // omitted its identity or answered with a different loaded model.
     if (typeof payload.model !== 'string' || !payload.model.trim()) throw new AppError(502, 'El servicio local no informó qué modelo produjo la respuesta.', 'MODEL_IDENTITY_UNVERIFIED');
-    if (payload.model !== this.model) throw new AppError(409, 'El servicio local respondió con un modelo distinto al solicitado. Revisa su configuración.', 'MODEL_CHANGED');
+    const runtimeIdentity = payload.model === this.model ? null : await verifyNumberedModelInstance({
+      client: this.#client, toolKey: this.toolKey, requested: this.model, returned: payload.model, responseRequestId: envelope.requestId });
     if (!Array.isArray(payload.choices) || payload.choices.length !== 1) throw new AppError(502, 'El modelo local no devolvió una única evaluación.', 'INVALID_AI_RESULT');
     const choice = payload.choices[0];
     if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new AppError(422, 'El modelo no puede evaluar este contenido.', 'AI_SAFETY_REFUSAL');
@@ -74,7 +76,7 @@ export class GatewayEvaluator {
     // may use that channel; never extract JSON fragments from reasoning prose
     // or replace a nonempty final answer, even when that answer is invalid.
     const emptyContent = text == null || (typeof text === 'string' && !text.trim());
-    if (payload.model === 'clef-flash' && emptyContent) {
+    if (this.model === 'clef-flash' && emptyContent) {
       text = message?.reasoning_content;
       responseField = 'reasoning_content';
     }
@@ -101,7 +103,7 @@ export class GatewayEvaluator {
           rules: ['unexpected_fields'], message: `Respuesta inválida para ${variable.id}: unexpected_fields.` });
       }
     }
-    return { ...validated, model: payload.model,
+    return { ...validated, model: this.model, ...(runtimeIdentity ? { runtimeIdentity } : {}),
       responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage),
       ...(this.outputSchemaVersion ? { outputSchemaVersion: this.outputSchemaVersion } : {}),
       ...(this.decisionInstructionsVersion ? { decisionInstructionsVersion: this.decisionInstructionsVersion } : {}) };

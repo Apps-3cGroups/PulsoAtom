@@ -113,6 +113,24 @@ test('responses must prove the exact configured model identity', async () => {
   }
 });
 
+test('numbered runtime instances require native inventory and preserve both identities', async () => {
+  const response = payload(); response.model = `${base.model}:2`;
+  const paths = [];
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); paths.push(request.path);
+    return mockResponse(request.path === '/v1/chat/completions' ? envelope(response) : {
+      ...envelope({ models: [{ key: base.model, type: 'llm', loaded_instances: [{ id: response.model, config: { context_length: 8192 } }] }] }),
+      method: 'GET', path: '/api/v1/models',
+    });
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(paths, ['/v1/chat/completions', '/api/v1/models']);
+  assert.equal(answer.model, base.model);
+  assert.deepEqual(answer.runtimeIdentity, { modelKey: base.model, instanceId: response.model,
+    inventoryRequestId: requestId, responseRequestId: requestId, contextLength: 8192 });
+  assert.deepEqual(answer.validationErrors, []);
+});
+
 test('refusals and content filtering require intervention, while truncated answers remain incomplete', async () => {
   for (const change of [{ refusal: 'Rejected' }, { finish_reason: 'content_filter' }, { finish_reason: 'length' }]) {
     const response = payload();
