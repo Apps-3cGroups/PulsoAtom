@@ -2,22 +2,16 @@
 .conversation-focus { max-width: 1800px; margin-inline: auto; }
 .conversation-focus .breadcrumb-line { margin-bottom: 8px; }
 .conversation-focus .page-heading { margin-bottom: 14px; }
-.conversation-focus .page-heading .eyebrow { display: none; }
 .conversation-focus .page-heading p { margin-top: 5px; }
+.conversation-focus .page-heading h1, .conversation-focus .page-heading p { overflow-wrap: anywhere; }
+.conversation-focus .page-heading p strong { font-weight: 500; color: var(--ink); }
 .conversation-focus .conversation-meta { margin-bottom: 10px; }
 .conversation-focus .heading-actions { min-width: 0; max-width: 100%; }
 .conversation-focus .conversation-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 100%; }
-.conversation-context-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
+.conversation-model-summary { display: grid; gap: 6px; padding-bottom: 16px; margin-bottom: 20px; border-bottom: 1px solid var(--border); color: var(--secondary); font-size: 13px; }
+.conversation-context-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
 .message-workspace { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: 0 3px 16px #23423105; }
-.message-workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 14px 24px; }
-.message-workspace-heading .eyebrow { display: none; }
-.message-workspace-heading h2 { display: flex; align-items: center; gap: 10px; font: 600 25px/1.2 'Bricolage Grotesque', sans-serif; letter-spacing: -.4px; margin: 5px 0 0; }
-.message-workspace-heading h2 .anticon { color: var(--accent); font-size: 23px; }
-.message-workspace-counts { display: flex; align-items: center; gap: 7px; color: var(--secondary); font-size: 12px; }
-.message-workspace-counts strong { display: flex; align-items: baseline; gap: 6px; font-size: 23px; font-variant-numeric: tabular-nums; }
-.message-workspace-counts strong span, .message-workspace-counts small { font-size: 12px; font-weight: 400; color: var(--muted); }
-.message-count-divider { width: 1px; height: 25px; background: var(--border); margin-inline: 13px; color: transparent; }
-.message-toolbar { display: flex; align-items: center; gap: 12px; padding: 13px 24px; background: #f5f8f4; border-block: 1px solid var(--border); flex-wrap: wrap; }
+.message-toolbar { display: flex; align-items: center; gap: 12px; padding: 13px 24px; background: #f5f8f4; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .message-toolbar .ant-checkbox-wrapper { font-size: 13px; font-weight: 600; margin-right: 6px; }
 .message-flag-filter { width: 300px; max-width: 100%; }
 .message-classification-filter { width: 185px; }
@@ -116,19 +110,12 @@
   .message-flag-filter { width: 245px; }
 }
 @media (max-width: 700px) {
-  .message-workspace-heading { padding: 16px; gap: 10px; }
-  .message-workspace-heading .eyebrow { font-size: 8px; }
-  .message-workspace-heading h2 { font-size: 21px; }
-  .message-workspace-counts { gap: 10px; }
-  .message-workspace-counts strong { font-size: 19px; flex-direction: column; gap: 1px; }
   .message-toolbar { padding: 12px 16px; gap: 10px; }
   .message-flag-filter, .message-classification-filter { flex: 1 1 180px; width: auto; }
   .message-toolbar .ant-checkbox-wrapper { flex-basis: 100%; }
   .message-filter-count { margin-left: 0; }
   .message-reading-grid { display: flex; flex-direction: column; }
   .message-column-labels { display: none; }
-  .message-workspace-counts { flex-wrap: wrap; justify-content: flex-end; gap: 5px; max-width: 145px; }
-  .message-count-divider { margin-inline: 3px; }
   .message-flags-sidebar { order: -1; height: auto; max-height: 235px; border-left: none; border-bottom: 1px solid var(--border); padding: 14px 16px; }
   .message-flags-sidebar h4 { margin-top: 14px; }
   .message-workspace-scroll { height: 65vh; min-height: 360px; padding-inline: 16px; }

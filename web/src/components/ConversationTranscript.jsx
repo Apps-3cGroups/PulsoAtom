@@ -1,7 +1,7 @@
 import { actorName } from '../services/participants';
 import { Fragment, useMemo, useState } from 'react';
 import { Button, Checkbox, Popover, Select, Tooltip } from 'antd';
-import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, FlagOutlined, MessageOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, FlagOutlined } from '@ant-design/icons';
 import { classificationOf, flagLabel } from '../services/flags';
 import { filterMessageRows, groupFlagOptions } from '../services/messageFlags';
 import { EmptyState, FlagSymbol, dateText, timeText } from './common';
@@ -87,9 +87,6 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
         : 'No hay flags disponibles para levantar. Puedes consultar o revisar las marcas existentes.';
 
   return <section className="message-workspace" aria-label="Conversación y flags por mensaje">
-    <header className="message-workspace-heading"><div><span className="eyebrow">LEE, IDENTIFICA Y REVISA</span><h2><MessageOutlined /> Conversación</h2></div>
-      <div className="message-workspace-counts"><strong>{messages.length}</strong><span>mensajes</span><span className="message-count-divider" aria-hidden="true">·</span><strong>{index.byMessage.size}</strong><span>con marca</span></div>
-    </header>
     <div className="message-toolbar">
       <Checkbox checked={filters.onlyMarked} onChange={event => patch({ onlyMarked: event.target.checked })}>Con marca</Checkbox>
       <Select className="message-flag-filter" aria-label="Filtrar mensajes por flag" placeholder="Todos los flags" value={filters.variableId || undefined}
