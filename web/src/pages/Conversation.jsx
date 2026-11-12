@@ -73,7 +73,7 @@ export default function Conversation() {
   const titles = { checklist: 'Checklist de la evaluación', models: 'Evaluaciones de los modelos', metrics: 'Métricas de la conversación', history: 'Historial de revisiones', flag: selectedFlag?.name || 'Detalle del flag' };
   return <div className="detail-page conversation-focus">
     <div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTarget.to)}>{returnTarget.label}</Button><span>/</span><span>Conversación</span></div>
-    <PageHeading title={<><span className="visually-hidden">Asistente: </span>{c.agent.name}</>} description={<>Cliente: <strong>{c.client.name}</strong></>} actions={<div className="conversation-heading-actions">
+    <PageHeading title={<><span className="visually-hidden">Asistente: </span>{c.agent.name}</>} description={<>Cliente: <strong>{c.client.name}</strong> · {c.countryName} · {dateText(c.date)} · {c.channel}</>} actions={<div className="conversation-heading-actions">
       <Button icon={<BarChartOutlined />} onClick={() => setInspector('metrics')}>Métricas</Button>
       <Button icon={<ReadOutlined />} onClick={() => setInspector('models')}>Modelos</Button>
       <Button icon={<HistoryOutlined />} onClick={() => setInspector('history')}>Revisiones ({c.reviews.length})</Button>
