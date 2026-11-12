@@ -1,4 +1,4 @@
-import { readFile, mkdir, cp, symlink, open } from 'node:fs/promises';
+import { readFile, mkdir, cp, symlink, open, unlink } from 'node:fs/promises';
 import { execFileSync, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,17 +116,61 @@ async function worker(store, registry) {
     throw e;
   } finally { await release(); }
 }
+async function continueRecovery(store) {
+  const release = await acquireBackfillLock(`${directory}/launch.lock`, RECOVERY_ID);
+  try {
+    const manifest = await readManifest(); assertManifest(manifest);
+    const before = await store.read();
+    if (manifest.status === 'completed') return status(before, manifest);
+    assertStable(before, manifest);
+    const script = `${directory}/worker-api/scripts/recover-tuesday-evaluations.js`;
+    if (alive(manifest.pid)) {
+      const argv = (await readFile(`/proc/${manifest.pid}/cmdline`, 'utf8')).split('\0');
+      if (!argv.includes(script) || !argv.includes('--worker')) fail('WORKER_IDENTITY_CHANGED');
+      process.kill(manifest.pid, 'SIGTERM');
+      for (let i = 0; i < 50 && alive(manifest.pid); i++) {
+        try { if (/\) Z /.test(await readFile(`/proc/${manifest.pid}/stat`, 'utf8'))) break; }
+        catch (e) { if (e.code === 'ENOENT') break; throw e; }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      try { if (alive(manifest.pid) && !/\) Z /.test(await readFile(`/proc/${manifest.pid}/stat`, 'utf8'))) fail('WORKER_STILL_RUNNING'); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+    try {
+      const lock = JSON.parse(await readFile(`${directory}/worker.lock`, 'utf8'));
+      if (lock.pid !== manifest.pid || lock.maintenanceId !== RECOVERY_ID) fail('WORKER_LOCK_CHANGED');
+      await unlink(`${directory}/worker.lock`);
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    const current = await store.read(); assertStable(current, manifest);
+    const plan = recoveryPlan(current), priorMaintenance = manifest.plan.priorMaintenance;
+    await persistBackfillManifest(`${directory}/checkpoint-${Date.now()}.json`, { manifest, plan });
+    const source = fileURLToPath(new URL('../', import.meta.url)), workerApi = `${directory}/worker-api`;
+    for (const entry of ['src', 'scripts', 'package.json']) await cp(path.join(source, entry), path.join(workerApi, entry),
+      { recursive: true, force: true, filter: f => !['.env', '.data', 'node_modules'].includes(path.basename(f)) });
+    await store.transaction(draft => prepareRecovery(draft, plan, new Date().toISOString()));
+    Object.assign(manifest, { status: 'prepared', pid: null, errorCode: null, plan: { ...plan, priorMaintenance }, updatedAt: new Date().toISOString() });
+    await persistBackfillManifest(manifestFile, manifest);
+    const log = await open(`${directory}/worker.log`, 'a', 0o600);
+    try {
+      const child = spawn(process.execPath, [`--env-file=${productionApi}/.env`, script, '--worker'],
+        { cwd: workerApi, env: process.env, detached: true, stdio: ['ignore', log.fd, log.fd] });
+      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
+      return { resumed: true, id: RECOVERY_ID, pendingTasks: plan.pending.length, preservedCompletedTasks: plan.completed.length, pid: child.pid };
+    } finally { await log.close(); }
+  } finally { await release(); }
+}
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !['--start', '--worker', '--status'].includes(args[0])) fail('INVALID_ARGUMENTS');
+  if (args.length !== 1 || !['--start', '--continue', '--worker', '--status'].includes(args[0])) fail('INVALID_ARGUMENTS');
   const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
   const { MysqlStore, AtomHistoryStore } = await import('../src/store.js');
   const { AtomReader } = await import('../src/atom.js');
   const { registryFromEnv } = await import('../src/model-registry.js');
   const db = databaseConfig(); if (config.demo || db?.database !== 'dbPulsosAtom') fail('REAL_MODE_REQUIRED');
-  const store = args[0] === '--worker' ? new AtomHistoryStore(new MysqlStore(db), new AtomReader(atomDatabaseConfig(), config.timezone)) : new MysqlStore(db);
+  const { GemmaIncidentStore } = await import('../src/gemma-incident-store.js');
+  const store = args[0] === '--worker' ? new AtomHistoryStore(new GemmaIncidentStore(db, (await readManifest()).plan), new AtomReader(atomDatabaseConfig(), config.timezone)) : new MysqlStore(db);
   try {
-    const result = args[0] === '--start' ? await start(store) : args[0] === '--worker' ? await worker(store, registryFromEnv()) : status(await store.read(), await readManifest());
+    const result = args[0] === '--start' ? await start(store) : args[0] === '--continue' ? await continueRecovery(store) : args[0] === '--worker' ? await worker(store, registryFromEnv()) : status(await store.read(), await readManifest());
     if (result) console.log(JSON.stringify(result, null, 2));
   } finally { await store.close(); }
 }

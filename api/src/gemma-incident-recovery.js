@@ -24,7 +24,7 @@ export function recoveryPlan(state) {
     priorMaintenance: state.settings.evaluationMaintenance || null };
 }
 
-// Call only after the production API worker has stopped. No result or profile
+// Call only after the owning evaluation worker has stopped. No result or profile
 // is rewritten. Completed tasks are immutable; attempts retain their history.
 export function prepareRecovery(state, plan, timestamp) {
   const current = recoveryPlan(state);
