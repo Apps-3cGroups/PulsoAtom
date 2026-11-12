@@ -41,7 +41,8 @@ async function start(store) {
     let existing; try { existing = await readManifest(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     if (existing) return { alreadyStarted: true, ...status(await store.read(), existing) };
     // Workflow stops precisely this process before preparing in-flight tasks.
-    const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', env: { ...process.env, PM2_HOME: '/home/td/.pm2' } }));
+    const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+      env: { ...process.env, PM2_HOME: '/home/td/.pm2' } }));
     const api = processes.filter(p => p.name === 'pulso-atom-api');
     if (api.length !== 1 || api[0].pm2_env.status !== 'stopped') fail('API_MUST_BE_STOPPED');
     const state = await store.read(), plan = recoveryPlan(state);
