@@ -231,6 +231,18 @@ test('Gemma format retries constrain valid combinations without rewriting decisi
   assert.ok(invalid.validationErrors.some(e => e.rules.includes('inconsistent_status_value')));
 });
 
+test('a timeout in a bounded Gemma group preserves earlier answers without recursive timeout retries', async () => {
+  const many = Array.from({ length: 19 }, (_, i) => ({ ...variables[0], id: `event_${i}` }));
+  let calls = 0; const model = 'gemma-synthetic';
+  const instance = new GatewayEvaluator({ ...base, model, fetchImpl: async (_url, options) => {
+    if (++calls > 1) return mockResponse({}, 504);
+    const ids = Object.keys(JSON.parse(options.body).body.response_format.json_schema.schema.properties.results.properties);
+    return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model }));
+  } });
+  const answer = await instance.evaluate(conversation, many);
+  assert.equal(calls, 2); assert.equal(answer.results.length, 8); assert.equal(answer.failure.code, 'AI_TRANSIENT');
+});
+
 test('refusals and content filtering require intervention, while truncated answers remain incomplete', async () => {
   for (const change of [{ refusal: 'Rejected' }, { finish_reason: 'content_filter' }, { finish_reason: 'length' }]) {
     const response = payload();

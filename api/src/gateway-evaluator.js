@@ -63,7 +63,9 @@ export class GatewayEvaluator {
         answers.push(answer);
         batches.push({ variableIds: group.map(v => v.id), responseId: answer.responseId, responseField: answer.responseField, reason });
       } catch (error) {
-        if (canDivide(error) && group.length > 1) {
+        // A timeout on an already bounded request can be an unavailable
+        // runtime. Do not multiply it into a tree of further timed-out calls.
+        if (error.code === 'AI_CONTEXT_LIMIT' && group.length > 1) {
           const middle = Math.ceil(group.length / 2); queue.unshift(group.slice(0, middle), group.slice(middle)); continue;
         }
         if (!answers.length) throw error;

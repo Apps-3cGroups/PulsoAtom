@@ -6,6 +6,7 @@ import { RECOVERY_ID, RECOVERY_JOBS, recoveryPlan, prepareRecovery, verifyPreser
 import { resumeEvaluationBatch, evaluationModelProgress } from '../src/evaluation-service.js';
 import { sourceFingerprint } from '../src/evaluation-context.js';
 import { acquireBackfillLock, persistBackfillManifest } from '../src/gemma-backfill.js';
+import { assertGemmaIncidentHealth } from '../src/gemma-incident-health.js';
 
 const productionApi = '/var/www/nodeapps/PulsoAtom/api';
 const directory = `${productionApi}/.data/incident-recovery/${RECOVERY_ID}`;
@@ -78,6 +79,9 @@ async function worker(store, registry) {
     if (manifest.status !== 'prepared') fail('WORKER_ALREADY_STARTED');
     Object.assign(manifest, { status: 'running', pid: process.pid, startedAt: new Date().toISOString() });
     await persistBackfillManifest(manifestFile, manifest);
+    const initial = await store.read(); assertStable(initial, manifest);
+    manifest.health = await assertGemmaIncidentHealth(registry.forState(initial).resolve('gemma-local'), { token: process.env.AGENT_SHARED_TOKEN });
+    await persistBackfillManifest(manifestFile, manifest);
     const guarded = { read: () => store.read(), readWithConversations: options => store.readWithConversations(options),
       transaction: fn => store.transaction(s => { assertStable(s, manifest); return fn(s); }) };
     // Three bounded recovery rounds. Each reuses valid profile answers and
@@ -122,7 +126,14 @@ async function worker(store, registry) {
     await persistBackfillManifest(manifestFile, manifest);
     console.log(JSON.stringify(status(await store.read(), manifest)));
   } catch (e) {
-    if (manifest) { Object.assign(manifest, { status: 'blocked', errorCode: safeCode(e), updatedAt: new Date().toISOString() }); await persistBackfillManifest(manifestFile, manifest); }
+    if (manifest) {
+      Object.assign(manifest, { status: 'blocked', errorCode: safeCode(e), updatedAt: new Date().toISOString() });
+      await persistBackfillManifest(manifestFile, manifest);
+      if (e.code === 'GEMMA_PROVIDER_UNAVAILABLE') await store.transaction(s => {
+        assertStable(s, manifest);
+        Object.assign(s.settings.gemmaIncidentRecovery, { status: 'blocked', errorCode: e.code, updatedAt: manifest.updatedAt });
+      });
+    }
     throw e;
   } finally { await release(); }
 }
