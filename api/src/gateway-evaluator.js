@@ -73,7 +73,11 @@ export class GatewayEvaluator {
     if (!this.configured) throw new AppError(503, 'Falta configurar el modelo local y su herramienta en el Gateway.', 'AI_CONFIGURATION');
     if (!variables.length || variables.some(v => !supportsAiVariable(v))) throw new AppError(422, 'El checklist incluye una variable no admitida por este evaluador.', 'UNSUPPORTED_VARIABLE');
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
-    const schema = this.model === 'clef-flash' ? clefFlashEvaluationSchema(variables, conversation) : evaluationSchema(variables);
+    const formatRepair = this.model.startsWith('gemma-') && options?.validationErrors?.some(e => e.rules?.length)
+      ? 'status-value-evidence-1' : null;
+    // Retry grammar encodes the existing validator contract. It permits all
+    // valid decisions, including abstention, and never repairs values in code.
+    const schema = this.model === 'clef-flash' || formatRepair ? clefFlashEvaluationSchema(variables, conversation) : evaluationSchema(variables);
     const instructions = this.model === 'clef-flash'
       ? `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}` : evaluationInstructions;
     const messages = [{ role: 'system', content: instructions }];
@@ -135,7 +139,7 @@ export class GatewayEvaluator {
           rules: ['unexpected_fields'], message: `Respuesta inválida para ${variable.id}: unexpected_fields.` });
       }
     }
-    return { ...validated, model: this.model, ...(runtimeIdentity ? { runtimeIdentity } : {}),
+    return { ...validated, model: this.model, ...(runtimeIdentity ? { runtimeIdentity } : {}), ...(formatRepair ? { formatRepair } : {}),
       responseId: envelope.requestId, responseField, usage: safeUsage(payload.usage),
       ...(this.outputSchemaVersion ? { outputSchemaVersion: this.outputSchemaVersion } : {}),
       ...(this.decisionInstructionsVersion ? { decisionInstructionsVersion: this.decisionInstructionsVersion } : {}) };
