@@ -33,8 +33,9 @@ export function prepareRecovery(state, plan, timestamp) {
   state.settings.gemmaIncidentRecovery = { id: RECOVERY_ID, date: RECOVERY_DATE, jobIds: [...RECOVERY_JOBS], status: 'prepared', preparedAt: timestamp };
   for (const job of state.jobs.filter(j => RECOVERY_JOBS.includes(j.id))) {
     job.maintenanceId = RECOVERY_ID;
-    // Service supports at most three workers; verified runtime advertises four.
-    job.concurrency = 3;
+    // Serialize the incident: the runtime intermittently rejects concurrent
+    // real requests even though its inventory advertises parallel capacity.
+    job.concurrency = 1;
     if (job.status === 'running') { job.status = 'interrupted'; job.finishedAt = timestamp; job.updatedAt = timestamp; }
   }
   for (const task of state.tasks.filter(t => RECOVERY_JOBS.includes(t.jobId) && t.status === 'running')) task.status = 'interrupted';

@@ -83,18 +83,28 @@ async function worker(store, registry) {
     // Three bounded recovery rounds. Each reuses valid profile answers and
     // invokes only missing variables; successful tasks are never selected.
     for (let round = 1; round <= 3; round++) {
+      // Restore the user's Tuesday column before cases whose latest activity
+      // moved to Wednesday, regardless of the models' eventual decisions.
+      for (const tuesdayFirst of [true, false]) {
       for (const jobId of RECOVERY_JOBS) {
         const snapshot = await store.read(); assertStable(snapshot, manifest);
         const pending = snapshot.tasks.filter(t => t.jobId === jobId && !['completed', 'deferred'].includes(t.status));
         if (!pending.length) continue;
         const ids = [...new Set(pending.map(t => t.conversationId))];
         const fresh = await store.readWithConversations({ fresh: true, conversationIds: ids });
-        const stableIds = ids.filter(id => { const c = fresh.conversations.find(c => c.id === id);
+        const unchanged = ids.filter(id => { const c = fresh.conversations.find(c => c.id === id);
           return c && pending.filter(t => t.conversationId === id).every(t => t.context.sourceHash === sourceFingerprint(c)); });
-        manifest.sourceChanged = [...new Set([...(manifest.sourceChanged || []), ...ids.filter(id => !stableIds.includes(id))])];
+        const stableIds = unchanged.filter(id => {
+          const c = fresh.conversations.find(c => c.id === id);
+          const timestamp = Date.parse(c.lastActivityAt);
+          const date = Number.isFinite(timestamp) ? new Date(timestamp - 6 * 3600000).toISOString().slice(0, 10) : null;
+          return (date === manifest.plan.activityDate) === tuesdayFirst;
+        });
+        manifest.sourceChanged = [...new Set([...(manifest.sourceChanged || []), ...ids.filter(id => !unchanged.includes(id))])];
         Object.assign(manifest, { round, currentJob: jobId, updatedAt: new Date().toISOString() });
         await persistBackfillManifest(manifestFile, manifest);
         if (stableIds.length) await (await resumeEvaluationBatch(guarded, registry, jobId, { conversationIds: stableIds })).completion;
+      }
       }
       const current = await store.read(); assertStable(current, manifest);
       const remaining = current.tasks.filter(t => RECOVERY_JOBS.includes(t.jobId) && !['completed', 'deferred'].includes(t.status));
