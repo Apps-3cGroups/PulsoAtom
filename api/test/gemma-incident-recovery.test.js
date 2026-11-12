@@ -13,6 +13,7 @@ test('recovery interrupts unfinished work and preserves all completed results, r
   prepareRecovery(s,plan,'2026-11-12T16:00:00Z');
   assert.equal(s.settings.evaluationMaintenance,RECOVERY_ID);
   assert.equal(s.settings.dailyEnabled,true);
+  assert.ok(s.jobs.every(j => j.concurrency === 2));
   assert.deepEqual(s.evaluations,before.evaluations);
   assert.deepEqual(s.tasks.filter(t=>t.status==='completed'),before.tasks.filter(t=>t.status==='completed'));
   assert.deepEqual(s.tasks.map(t=>t.profileStates),before.tasks.map(t=>t.profileStates));
