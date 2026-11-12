@@ -18,6 +18,14 @@ try {
     portalKey: process.env.GATEWAY_PORTAL_KEY || 'portal-pulso', timeoutMs: 30000 });
   const models = await client.invoke({ toolKey: profile.evaluator.toolKey, method: 'GET', path: '/v1/models', operation: 'preflight' });
   console.log(JSON.stringify({ stage: 'models', requestId: models.requestId, ids: (models.response.data || []).map(m => m.id) }));
+  const native = await client.invoke({ toolKey: profile.evaluator.toolKey, method: 'GET', path: '/api/v1/models', operation: 'preflight' });
+  console.log(JSON.stringify({ stage: 'native-instances', requestId: native.requestId,
+    models: (native.response.models || []).map(m => ({ key: /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,199}$/.test(m.key || '') && !m.key.includes('://') ? m.key : null,
+      type: ['llm', 'embedding', 'decision'].includes(m.type) ? m.type : null,
+      maxContextLength: Number.isSafeInteger(m.max_context_length) ? m.max_context_length : null,
+      loaded: (m.loaded_instances || []).map(i => ({ id: /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,199}$/.test(i.id || '') && !i.id.includes('://') ? i.id : null,
+        contextLength: Number.isSafeInteger(i.config?.context_length) ? i.config.context_length : null,
+        parallel: Number.isSafeInteger(i.config?.parallel) ? i.config.parallel : null })) })) }));
   const response = await client.invoke({ toolKey: profile.evaluator.toolKey, method: 'POST', path: '/v1/chat/completions', operation: 'preflight',
     body: { model: profile.model, messages: [{ role: 'user', content: 'Devuelve solamente el número 1.' }], temperature: 0, max_tokens: 16, stream: false } });
   console.log(JSON.stringify({ stage: 'synthetic-response', requestId: response.requestId, requested: profile.model,
