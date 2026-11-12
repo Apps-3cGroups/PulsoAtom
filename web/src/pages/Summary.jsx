@@ -75,9 +75,9 @@ export default function Summary() {
     <h1 className="visually-hidden">Resumen de conversaciones</h1>
     <div className="summary-stats-bar">
       <div className="summary-totals" aria-label="Indicadores de las conversaciones visibles" aria-busy={waiting}>
-        <span>Conversaciones <strong>{metrics?.total.toLocaleString('es-HN') ?? '—'}</strong></span>
-        <span className="summary-total-flags">Con flags <strong>{metrics?.withAlerts.toLocaleString('es-HN') ?? '—'}</strong></span>
-        <span className="summary-total-positive">Con positivos <strong>{metrics?.withPositives.toLocaleString('es-HN') ?? '—'}</strong></span>
+        <div className="summary-stat-card"><span>Conversaciones</span><strong>{metrics?.total.toLocaleString('es-HN') ?? '—'}</strong></div>
+        <div className="summary-stat-card summary-total-flags"><span>Con flags</span><strong>{metrics?.withAlerts.toLocaleString('es-HN') ?? '—'}</strong></div>
+        <div className="summary-stat-card summary-total-positive"><span>Con positivos</span><strong>{metrics?.withPositives.toLocaleString('es-HN') ?? '—'}</strong></div>
       </div>
       <div className="summary-range-actions">
         <Tooltip trigger={['hover', 'focus']} title="Cada chat aparece una vez, en el día de su última actividad registrada en Atom, aunque haya comenzado antes."><span className="summary-range" tabIndex={0}><CalendarOutlined /><span>{summaryRangeLabel(from, to)}</span></span></Tooltip>

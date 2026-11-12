@@ -1,11 +1,13 @@
 .summary-page { gap: 6px; }
-.summary-stats-bar { display: flex; align-items: center; justify-content: space-between; flex: none; flex-wrap: wrap; gap: 6px 20px; min-height: 34px; padding-inline: 2px; font-size: 14px; }
-.summary-totals { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 0; }
-.summary-totals > span { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
-.summary-totals > span + span { border-left: 1px solid var(--border-strong); margin-left: 16px; padding-left: 16px; }
-.summary-totals strong { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.summary-total-flags strong { color: var(--p1); }
-.summary-total-positive strong { color: var(--positive, #167b54); }
+.summary-stats-bar { display: flex; align-items: center; justify-content: space-between; flex: none; flex-wrap: wrap; gap: 8px 16px; font-size: 14px; }
+.summary-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; flex: 1 1 480px; min-width: 0; }
+.summary-stat-card { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.summary-stat-card > span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 14px; color: var(--secondary); }
+.summary-stat-card > strong { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.summary-stat-card.summary-total-flags { border-color: #e4b9b1; background: #fff7f4; }
+.summary-stat-card.summary-total-positive { border-color: #c1ddc9; background: #f0f8f3; }
+.summary-total-flags strong { color: #c53d31; }
+.summary-total-positive strong { color: #167b54; }
 .summary-range-actions, .summary-range { display: inline-flex; align-items: center; gap: 8px; }
 .summary-range-actions { margin-left: auto; }
 .summary-range { color: var(--muted); white-space: nowrap; font-size: 13px; }
@@ -26,9 +28,14 @@
 @media (max-width: 1599px) {
   .summary-page .summary-controls .summary-period { margin-left: 0; }
 }
+@media (max-width: 1000px) {
+  .summary-totals { flex-basis: 100%; }
+}
 @media (max-width: 700px) {
-  .summary-stats-bar { gap: 5px; font-size: 13px; }
-  .summary-totals > span + span { margin-left: 8px; padding-left: 8px; }
+  .summary-stats-bar { gap: 8px; font-size: 13px; }
+  .summary-totals { flex-basis: 100%; gap: 6px; }
+  .summary-stat-card { flex-direction: column; gap: 4px; padding: 9px; }
+  .summary-stat-card > span { font-size: 13px; }
   .summary-range-actions { margin-left: 0; }
   .summary-page .summary-controls { padding: 6px 8px; }
   .summary-map-hint { white-space: normal; }
