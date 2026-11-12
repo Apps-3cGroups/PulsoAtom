@@ -15,7 +15,7 @@ const safeBaseUrl = value => {
 const httpError = (status, operation) => new AppError(502,
   `El Gateway rechazó la solicitud al modelo local (HTTP ${status}).`,
   status === 501 && operation === 'POST /v1/systemone' ? 'AI_CONFIGURATION'
-    : [408, 429].includes(status) || status >= 500 ? 'AI_TRANSIENT' : 'AI_CONFIGURATION');
+    : [408, 429].includes(status) || status >= 500 ? 'AI_TRANSIENT' : 'AI_CONFIGURATION', { upstreamStatus: status });
 const invalidEnvelope = () => new AppError(502, 'El Gateway devolvió una respuesta inválida.', 'INVALID_AI_RESULT');
 const contextLimitCodes = new Set(['context_length_exceeded', 'context_window_exceeded', 'input_context_length_exceeded']);
 const contextLimitPatterns = [

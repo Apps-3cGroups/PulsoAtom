@@ -157,6 +157,47 @@ test('context still too small for one variable remains an explicit error', async
   await assert.rejects(instance.evaluate(conversation, [variables[0]]), code('AI_CONTEXT_LIMIT'));
 });
 
+test('Gemma splits a large checklist before requesting inference and retains full source and model identity', async () => {
+  const many = Array.from({ length: 19 }, (_, i) => ({ ...variables[0], id: `event_${i}` }));
+  const requests = [];
+  const model = 'gemma-4-26b-a4b-it-mlx';
+  const instance = new GatewayEvaluator({ ...base, model, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body; requests.push(request);
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model }));
+  } });
+  const answer = await instance.evaluate(conversation, many);
+  assert.deepEqual(answer.contextBatches.map(b => b.variableIds.length), [8, 8, 3]);
+  assert.ok(answer.contextBatches.every(b => b.reason === 'checklist-size'));
+  assert.equal(answer.results.length, many.length);
+  assert.equal(answer.model, model);
+  for (const request of requests) {
+    assert.equal(request.messages[0].content, evaluationInstructions);
+    for (const message of conversation.messages) assert.ok(request.messages.at(-1).content.includes(message.text));
+  }
+});
+
+test('a verified gateway timeout divides the checklist, but configuration failures do not', async () => {
+  for (const status of [504, 400]) {
+    const sizes = [];
+    const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body).body;
+      const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties); sizes.push(ids.length);
+      if (ids.length > 1) return mockResponse({}, status);
+      return mockResponse(envelope(payload({ results: Object.fromEntries(ids.map(id => [id, valid().results[id]])) })));
+    } });
+    if (status === 504) {
+      const answer = await instance.evaluate(conversation, variables);
+      assert.equal(answer.results.length, 2);
+      assert.ok(answer.contextBatches.every(b => b.reason === 'gateway-timeout'));
+      assert.deepEqual(sizes, [2, 1, 1]);
+    } else {
+      await assert.rejects(instance.evaluate(conversation, variables), code('AI_CONFIGURATION'));
+      assert.deepEqual(sizes, [2]);
+    }
+  }
+});
+
 test('a later context batch failure retains validated earlier answers', async () => {
   let singles = 0;
   const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {

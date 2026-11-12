@@ -38,12 +38,19 @@ export class GatewayEvaluator {
     return { catalog, models: models.response, requestId: models.requestId };
   }
   async evaluate(conversation, variables, options) {
-    try { return await this.#evaluateSingle(conversation, variables, options); }
-    catch (error) {
-      if (error.code !== 'AI_CONTEXT_LIMIT' || variables.length <= 1) throw error;
+    const canDivide = error => error.code === 'AI_CONTEXT_LIMIT'
+      || (error.code === 'AI_TRANSIENT' && error.details?.upstreamStatus === 504);
+    // The local Gemma runtime times out on the 47-item checklist. Bound its
+    // requests while retaining every source message and each variable's rules.
+    let reason = 'checklist-size';
+    if (!this.model.startsWith('gemma-') || variables.length <= 8) {
+      try { return await this.#evaluateSingle(conversation, variables, options); }
+      catch (error) {
+        if (!canDivide(error) || variables.length <= 1) throw error;
+        reason = error.code === 'AI_CONTEXT_LIMIT' ? 'context-limit' : 'gateway-timeout';
+      }
     }
-    // Keep every source message and the same decision instructions. Reduce
-    // only the checklist/schema, after an explicit provider context rejection.
+    // Only the checklist/schema is partitioned; no transcript is truncated.
     const answers = [], batches = [];
     const queue = [];
     const groupSize = Math.min(8, Math.ceil(variables.length / 2));
@@ -54,9 +61,9 @@ export class GatewayEvaluator {
       try {
         const answer = await this.#evaluateSingle(conversation, group, options);
         answers.push(answer);
-        batches.push({ variableIds: group.map(v => v.id), responseId: answer.responseId, responseField: answer.responseField });
+        batches.push({ variableIds: group.map(v => v.id), responseId: answer.responseId, responseField: answer.responseField, reason });
       } catch (error) {
-        if (error.code === 'AI_CONTEXT_LIMIT' && group.length > 1) {
+        if (canDivide(error) && group.length > 1) {
           const middle = Math.ceil(group.length / 2); queue.unshift(group.slice(0, middle), group.slice(middle)); continue;
         }
         if (!answers.length) throw error;
