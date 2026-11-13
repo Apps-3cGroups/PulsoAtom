@@ -72,6 +72,64 @@ test('outer HTTP errors are not parsed as upstream context errors and successful
   assert.deepEqual((await clientFor(envelope(payload, 200)).invoke(operation)).response, payload);
 });
 
+const metalMemoryError = '[METAL] Command buffer execution failed: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)';
+
+test('explicit upstream memory failures become a sanitized resource limit, including a complete MLX traceback', async () => {
+  const traceback = `Traceback (most recent call last):\n  File "/synthetic/private/model.py", line 123, in generate\n    private_value = "${base.token}"\nRuntimeError: ${metalMemoryError}`;
+  for (const body of [
+    { error: { code: 'out_of_memory' } }, { error: { code: 'insufficient_memory' } },
+    { message: 'RuntimeError: out of memory' }, { error: metalMemoryError },
+    { error: { message: traceback } }, { detail: { error: { message: `RuntimeError: ${metalMemoryError}` } } },
+  ]) {
+    await assert.rejects(clientFor(envelope(body)).invoke(operation), error => {
+      assert.equal(error.code, 'AI_RESOURCE_LIMIT');
+      assert.equal(error.message, 'El modelo no tiene memoria suficiente para esta solicitud. Se requiere reducir el checklist o revisar su capacidad.');
+      assert.equal(error.details, undefined);
+      assert.doesNotMatch(JSON.stringify(error) + error.message, /PRIVATE_SYNTHETIC_TOKEN|gateway\.synthetic|model\.py|00000008|Traceback|RuntimeError/);
+      return true;
+    });
+  }
+});
+
+test('ordinary 400s, quotas and quoted memory errors never become resource limits', async () => {
+  for (const body of [
+    { error: 'Bad request' }, { error: 'Invalid JSON schema: out of memory' },
+    { error: { code: 'resource_exhausted', message: 'Request quota exhausted.' } },
+    { error: { code: 'invalid_request', message: 'The memory field must be an integer.' } },
+    { error: 'The server does not report an out of memory error.' },
+    { error: `Invalid request. Quoted transcript: "${metalMemoryError}"` },
+    { error: 'Invalid request. Quoted transcript:\nRuntimeError: out of memory\nEnd of quoted input.' },
+    { error: `Quoted conversation:\n${metalMemoryError}` },
+    { error: `"${metalMemoryError}" was supplied in the user content.` },
+    { prompt: metalMemoryError }, { messages: [{ content: metalMemoryError }] },
+    { error: { content: metalMemoryError } }, { error: { details: { transcript: metalMemoryError } } },
+    { error: [{ message: metalMemoryError }] },
+    { error: { error: { error: { error: { message: metalMemoryError } } } } },
+    { error: metalMemoryError + 'x'.repeat(8192) },
+  ]) {
+    await assert.rejects(clientFor(envelope(body)).invoke(operation), { code: 'AI_CONFIGURATION' });
+  }
+});
+
+test('memory classification is confined to failed upstream chat responses', async () => {
+  const body = { error: { code: 'out_of_memory' } };
+  for (const status of [401, 403, 404]) {
+    await assert.rejects(clientFor(envelope(body, status)).invoke(operation), { code: 'AI_CONFIGURATION' });
+  }
+  for (const status of [408, 429]) {
+    await assert.rejects(clientFor(envelope(body, status)).invoke(operation), { code: 'AI_TRANSIENT' });
+  }
+  for (const changed of [{ method: 'GET', path: '/v1/models' }, { method: 'POST', path: '/v1/systemone' }]) {
+    await assert.rejects(clientFor(envelope(body, 400, changed)).invoke({ ...operation, ...changed }), { code: 'AI_CONFIGURATION' });
+  }
+  let read = false;
+  const client = new GatewayApiClient({ ...base, fetchImpl: async () => ({ status: 400, ok: false,
+    async json() { read = true; return envelope(body); } }) });
+  await assert.rejects(client.invoke(operation), { code: 'AI_CONFIGURATION' });
+  assert.equal(read, false);
+  assert.deepEqual((await clientFor(envelope(body, 200)).invoke(operation)).response, body);
+});
+
 test('a Clef case exceeding even a single-variable request stays partial without fallback or Gemma calls', async () => {
   const state = createState(false), calls = [], maintenanceId = 'synthetic-context-maintenance';
   const flags = state.catalog.filter(v => v.active && !v.retired && v.type === 'Flag' && v.method === 'IA').slice(0, 2);

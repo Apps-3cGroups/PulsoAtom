@@ -39,10 +39,36 @@ function isContextLimit(response, depth = 0) {
   return contextLimitCodes.has(response.code)
     || ['message', 'error', 'detail'].some(key => Object.hasOwn(response, key) && isContextLimit(response[key], depth + 1));
 }
-const upstreamError = (status, operation, response) => [400, 413, 422].includes(status)
-  && operation === 'POST /v1/chat/completions' && isContextLimit(response)
-  ? new AppError(422, 'La conversación supera el contexto admitido por el modelo. Queda pendiente de revisión.', 'AI_CONTEXT_LIMIT')
-  : httpError(status, operation);
+const resourceLimitCodes = new Set(['out_of_memory', 'insufficient_memory']);
+const memoryException = /^(?:RuntimeError:\s*)?(?:\[METAL\]\s+Command buffer execution failed:\s*Insufficient Memory\s*\([^\r\n]{0,150}OutOfMemory\)|(?:CUDA\s+)?out of memory(?:[.:]\s*[^\r\n]{0,400})?)\s*$/i;
+function isResourceLimit(response, depth = 0) {
+  if (typeof response === 'string') {
+    if (response.length > 8192) return false;
+    const message = response.trim();
+    if (memoryException.test(message)) return true;
+    // Accept the terminal exception of an actual Python/MLX traceback, with
+    // only the known prediction wrapper before it. Quoted input is not proof.
+    const traceback = message.indexOf('Traceback (most recent call last):');
+    if (traceback < 0) return false;
+    const prefix = message.slice(0, traceback).trim();
+    if (prefix && !/^Error in [\w .-]{1,80} prediction[:.]?\s*(?:Error in the [\w .-]{1,80} generation[:.]?\s*)?$/i.test(prefix)) return false;
+    return memoryException.test(message.split(/\r?\n/).at(-1).trim());
+  }
+  if (!response || typeof response !== 'object' || Array.isArray(response) || depth > 3) return false;
+  return resourceLimitCodes.has(response.code)
+    || ['message', 'error', 'detail'].some(key => Object.hasOwn(response, key) && isResourceLimit(response[key], depth + 1));
+}
+const upstreamError = (status, operation, response) => {
+  if (operation === 'POST /v1/chat/completions') {
+    if ([400, 413, 422].includes(status) && isContextLimit(response)) {
+      return new AppError(422, 'La conversación supera el contexto admitido por el modelo. Queda pendiente de revisión.', 'AI_CONTEXT_LIMIT');
+    }
+    if ([400, 413, 422, 500, 503].includes(status) && isResourceLimit(response)) {
+      return new AppError(503, 'El modelo no tiene memoria suficiente para esta solicitud. Se requiere reducir el checklist o revisar su capacidad.', 'AI_RESOURCE_LIMIT');
+    }
+  }
+  return httpError(status, operation);
+};
 
 export class GatewayApiClient {
   #token;

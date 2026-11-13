@@ -157,6 +157,72 @@ test('context still too small for one variable remains an explicit error', async
   await assert.rejects(instance.evaluate(conversation, [variables[0]]), code('AI_CONTEXT_LIMIT'));
 });
 
+test('Clef memory limits recursively divide only the checklist and retain every source message', async () => {
+  const flags = Array.from({ length: 4 }, (_, i) => ({ ...variables[0], id: `memory_event_${i}` }));
+  const requests = [];
+  const source = structuredClone(conversation);
+  const instance = new GatewayEvaluator({ ...base, model: 'clef-flash', fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body; requests.push(request);
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    if (ids.length > 1) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'out_of_memory' } } });
+    return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model: 'clef-flash' }));
+  } });
+  const answer = await instance.evaluate(source, flags);
+  assert.deepEqual(requests.map(request => JSON.parse(request.messages.at(-1).content).variables.length), [4, 2, 1, 1, 2, 1, 1]);
+  assert.deepEqual(answer.results.map(result => [result.variableId, result.value]), flags.map(flag => [flag.id, 1]));
+  assert.deepEqual(answer.validationErrors, []);
+  assert.equal(answer.failure, undefined);
+  assert.equal(answer.model, 'clef-flash');
+  assert.equal(answer.contextBatches.length, 4);
+  assert.ok(answer.contextBatches.every(batch => batch.reason === 'memory-limit'));
+  assert.deepEqual(answer.usage, { prompt_tokens: 400, completion_tokens: 200, total_tokens: 600 });
+  const originalMessages = JSON.parse(evaluationInput(source, flags)).mensajes;
+  for (const request of requests) {
+    const input = JSON.parse(request.messages.at(-1).content);
+    const subset = flags.filter(flag => input.variables.some(variable => variable.id === flag.id));
+    assert.deepEqual(input.mensajes, originalMessages);
+    assert.equal(request.messages.at(-1).content, evaluationInput(source, subset));
+    assert.deepEqual(request.response_format.json_schema.schema, clefFlashEvaluationSchema(subset, source));
+    assert.equal(request.messages[0].content, `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}`);
+    assert.equal(request.model, 'clef-flash');
+  }
+  assert.deepEqual(source, conversation);
+});
+
+test('a final single-variable memory failure retains earlier validated answers and never loops', async () => {
+  const calls = [];
+  const instance = new GatewayEvaluator({ ...base, model: 'clef-flash', fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body;
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties); calls.push(ids);
+    if (ids.length > 1 || ids.includes('tipo_interaccion')) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'insufficient_memory' } } });
+    return mockResponse(envelope({ ...payload({ results: { event: valid().results.event } }), model: 'clef-flash' }));
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(calls, [['event', 'tipo_interaccion'], ['event'], ['tipo_interaccion']]);
+  assert.deepEqual(answer.results.map(result => [result.variableId, result.status, result.value]), [['event', 'evaluado', 1]]);
+  assert.deepEqual(answer.results[0].evidence, [{ messageId: 'm2', quote: conversation.messages[1].text }]);
+  assert.deepEqual(answer.failure, { code: 'AI_RESOURCE_LIMIT' });
+  assert.deepEqual(answer.contextBatches.map(batch => batch.variableIds), [['event']]);
+  assert.deepEqual(answer.usage, { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 });
+  assert.deepEqual(answer.validationErrors, []);
+
+  calls.length = 0;
+  await assert.rejects(instance.evaluate(conversation, [variables[1]]), code('AI_RESOURCE_LIMIT'));
+  assert.deepEqual(calls, [['tipo_interaccion']]);
+});
+
+test('ordinary upstream 400 and quoted memory text fail once without dividing the checklist', async () => {
+  for (const message of ['Invalid JSON schema.', 'Invalid request. Quoted transcript: "RuntimeError: out of memory".']) {
+    const { instance, calls } = evaluator({ ...envelope(), ok: false, upstream_status_code: 400, response: { error: message } });
+    await assert.rejects(instance.evaluate(conversation, variables), code('AI_CONFIGURATION'));
+    assert.equal(calls.length, 1);
+    const input = JSON.parse(JSON.parse(calls[0][1].body).body.messages.at(-1).content);
+    assert.deepEqual(input.variables.map(variable => variable.id), variables.map(variable => variable.id));
+  }
+});
+
 test('Gemma splits a large checklist before requesting inference and retains full source and model identity', async () => {
   const many = Array.from({ length: 19 }, (_, i) => ({ ...variables[0], id: `event_${i}` }));
   const requests = [];
