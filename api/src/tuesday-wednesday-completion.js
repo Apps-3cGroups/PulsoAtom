@@ -6,6 +6,11 @@ export const COMPLETION_ID = '8fa643d2-0c32-4cbc-88da-14959ff877cd';
 export const COMPLETION_MODELS = ['clef-local', 'gemma-local'];
 export const COMPLETION_KEYS = { tuesday: `${COMPLETION_ID}:tuesday`, wednesday: `${COMPLETION_ID}:wednesday` };
 export const COMPLETION_EXCLUSION_REASON = 'USER_AUTHORIZED_SKIP_PROVIDER_MEMORY';
+export const THURSDAY_PRIORITY_ORDER = 'wednesday-thursday-tuesday';
+export const THURSDAY_PRIORITY_DEADLINE = '2026-11-13T18:00:00.000Z';
+const priorityHandoffId = 'thursday-2026-11-12-after-recovery';
+const priorityAuthor = 'Mario Cruz · prioridad lote 43, jueves y martes';
+const priorityModes = ['automatic_before_noon', 'manual'];
 const contextKeys = ['sourceHash', 'catalogHash', 'promptHash', 'promptVersion', 'rulesVersion'];
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value ?? null;
 const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
@@ -111,6 +116,148 @@ export function assertCompletionStable(state, registry, plan) {
   verifyPreservedResults(state, { completed: plan.protected });
   verifyCompletionExclusion(state, plan);
 }
+const priorityTimestamp = value => {
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) completionFailure('INVALID_PRIORITY_TIME');
+  return parsed.toISOString();
+};
+function priorityHandoffMatches(settings, completionScopeHash) {
+  const h = settings.thursdayHandoff;
+  return h?.id === priorityHandoffId && h.completionId === COMPLETION_ID && h.completionScopeHash === completionScopeHash
+    && /^[a-f0-9]{64}$/.test(h.scopeHash || '') && h.limitPerCountry === 200 && h.concurrency === 1
+    && h.activityDate === '2026-11-12' && h.runDate === '2026-11-13' && h.notBefore === '2026-11-13T06:01:00.000Z'
+    && h.timezone === 'America/Tegucigalpa' && same(h.countries, ['HN', 'PA']) && same(h.modelIds, COMPLETION_MODELS);
+}
+// Lightweight scheduler gate. The actual evaluation request also calls the
+// full task-proof check below before it can write a Thursday job.
+export function thursdayPriorityReleased(settings) {
+  const c = settings?.tuesdayWednesdayCompletion, p = c?.priority, release = p?.handoffRelease;
+  return c?.id === COMPLETION_ID && c.status === 'waiting_thursday' && settings.evaluationMaintenance === null
+    && c.concurrency === 1 && p?.version === 1 && p.order === THURSDAY_PRIORITY_ORDER && priorityModes.includes(p.resumeTuesday)
+    && p.deadline === THURSDAY_PRIORITY_DEADLINE && p.approvedBy === priorityAuthor
+    && Number.isFinite(Date.parse(p.approvedAt)) && Number.isFinite(Date.parse(release?.at))
+    && priorityHandoffMatches(settings, p.completionScopeHash) && p.handoffScopeHash === settings.thursdayHandoff.scopeHash
+    && typeof release.wednesdayJobId === 'string' && release.wednesdayTaskProof?.length === 86 && release.retryTaskProof?.length === 2;
+}
+export function thursdayPriorityReady(state) {
+  if (!thursdayPriorityReleased(state.settings) || !Array.isArray(state.tasks) || !Array.isArray(state.jobs)) return false;
+  const { priority: p } = state.settings.tuesdayWednesdayCompletion, release = p.handoffRelease;
+  const job = state.jobs.find(j => j.id === release.wednesdayJobId);
+  const jobs = state.jobs.filter(j => j.idempotencyKey === COMPLETION_KEYS.wednesday);
+  if (!job || jobs.length !== 1 || jobs[0].id !== job.id || job.status !== 'completed' || job.maintenanceId !== RECOVERY_ID
+    || job.purpose !== 'operational' || job.mode !== 'dual' || job.concurrency !== 1
+    || job.conversationIds?.length !== 43 || new Set(job.conversationIds).size !== 43
+    || !same(job.modelProfiles, state.settings.thursdayHandoff.profiles)) return false;
+  const proof = [...release.wednesdayTaskProof, ...release.retryTaskProof];
+  if (new Set(proof.map(item => item.id)).size !== 88 || proof.some(item => !item.id || !/^[a-f0-9]{64}$/.test(item.hash || ''))) return false;
+  const tasks = state.tasks.filter(t => t.jobId === job.id);
+  if (tasks.length !== 86 || !job.conversationIds.every(id => {
+    const pair = tasks.filter(t => t.conversationId === id);
+    return pair.length === 2 && COMPLETION_MODELS.every(profileId => pair.some(t => t.profile?.id === profileId));
+  })) return false;
+  if (release.wednesdayTaskProof.some(item => !tasks.some(t => t.id === item.id))) return false;
+  const excluded = new Set((state.settings.tuesdayWednesdayCompletion.excluded || []).map(item => item.taskId));
+  for (const item of proof) {
+    const rows = state.tasks.filter(t => t.id === item.id), task = rows[0];
+    if (rows.length !== 1 || task.status !== 'completed' || task.error || excluded.has(task.id) || digest(canonical(task)) !== item.hash) return false;
+    if (release.retryTaskProof.some(retry => retry.id === item.id)
+      && (!RECOVERY_JOBS.includes(task.jobId) || task.profile?.id !== 'gemma-local')) return false;
+  }
+  return true;
+}
+function priorityResult(state) {
+  const c = state.settings.tuesdayWednesdayCompletion, p = c.priority;
+  return { id: COMPLETION_ID, status: c.status, priorityVersion: p.version, order: p.order,
+    resumeTuesday: p.resumeTuesday, deadline: p.deadline, approvedAt: p.approvedAt,
+    ...(p.handoffRelease ? { releasedAt: p.handoffRelease.at } : {}), concurrency: c.concurrency,
+    thursdayLimitPerCountry: state.settings.thursdayHandoff.limitPerCountry };
+}
+export function prepareThursdayPriority(state, registry, plan, { expectedVersion, resumeTuesday, now = new Date() }) {
+  assertCompletionPlan(plan);
+  if (!Number.isSafeInteger(expectedVersion) || state.settings.version !== expectedVersion) completionFailure('VERSION_CONFLICT');
+  if (!priorityModes.includes(resumeTuesday)) completionFailure('INVALID_TUESDAY_RESUME');
+  const c = state.settings.tuesdayWednesdayCompletion, existing = c?.priority;
+  if (existing) {
+    if (existing.version !== 1 || existing.order !== THURSDAY_PRIORITY_ORDER || existing.resumeTuesday !== resumeTuesday
+      || existing.deadline !== THURSDAY_PRIORITY_DEADLINE || existing.completionScopeHash !== plan.integrityHash
+      || existing.handoffScopeHash !== state.settings.thursdayHandoff?.scopeHash) completionFailure('PRIORITY_CHANGED');
+    if (c.status === 'waiting_thursday') assertDeferredThursday(state, registry, plan);
+    else assertCompletionStable(state, registry, plan);
+    return { ...priorityResult(state), alreadyPrepared: true };
+  }
+  assertCompletionStable(state, registry, plan);
+  if (plan.priorMaintenance !== null || c.concurrency !== 1 || !priorityHandoffMatches(state.settings, plan.integrityHash)
+    || !same(state.settings.thursdayHandoff.profiles, plan.profiles)
+    || state.settings.thursdayHandoff.status !== 'prepared'
+    || state.jobs.some(j => j.dailyActivity?.handoffId === priorityHandoffId)) completionFailure('THURSDAY_PRIORITY_NOT_READY');
+  const at = priorityTimestamp(now);
+  c.priority = { version: 1, order: THURSDAY_PRIORITY_ORDER, resumeTuesday, deadline: THURSDAY_PRIORITY_DEADLINE,
+    completionScopeHash: plan.integrityHash, handoffScopeHash: state.settings.thursdayHandoff.scopeHash,
+    approvedAt: at, approvedBy: priorityAuthor };
+  return priorityResult(state);
+}
+export function assertDeferredThursday(state, registry, plan) {
+  assertCompletionPlan(plan);
+  if (plan.priorMaintenance !== null || !thursdayPriorityReady(state)
+    || state.settings.tuesdayWednesdayCompletion.priority.completionScopeHash !== plan.integrityHash
+    || !same(state.settings.thursdayHandoff.profiles, plan.profiles)) completionFailure('THURSDAY_PRIORITY_CHANGED');
+  // Completed history and the authorized exclusion remain immutable even while
+  // the ordinary scheduler owns the Thursday execution.
+  if (digest(state.settings.aiPolicy) !== plan.policyHash || digest(state.catalog) !== plan.catalogHash) completionFailure('CONFIGURATION_CHANGED');
+  const bound = registry.forState(state); plan.profiles.forEach(p => bound.resolve(p.id, p));
+  verifyPreservedResults(state, { completed: plan.protected }); verifyCompletionExclusion(state, plan);
+  const expected = completionRetry(plan).map(t => t.taskId).sort();
+  const actual = state.settings.tuesdayWednesdayCompletion.priority.handoffRelease.retryTaskProof.map(t => t.id).sort();
+  if (!same(actual, expected)) completionFailure('THURSDAY_PRIORITY_CHANGED');
+  assertPhaseJob(state, plan, 'wednesday');
+  return state.settings.tuesdayWednesdayCompletion.priority.handoffRelease.at;
+}
+export function deferTuesdayForThursday(state, registry, plan, now = new Date()) {
+  if (state.settings.tuesdayWednesdayCompletion?.status === 'waiting_thursday') {
+    assertDeferredThursday(state, registry, plan); return { ...priorityResult(state), alreadyDeferred: true };
+  }
+  assertCompletionStable(state, registry, plan);
+  const c = state.settings.tuesdayWednesdayCompletion, p = c.priority;
+  if (p?.version !== 1 || p.order !== THURSDAY_PRIORITY_ORDER || !priorityModes.includes(p.resumeTuesday)
+    || p.deadline !== THURSDAY_PRIORITY_DEADLINE || p.completionScopeHash !== plan.integrityHash
+    || p.handoffScopeHash !== state.settings.thursdayHandoff?.scopeHash
+    || !priorityHandoffMatches(state.settings, plan.integrityHash) || c.concurrency !== 1 || plan.priorMaintenance !== null) completionFailure('THURSDAY_PRIORITY_CHANGED');
+  if (state.jobs.some(j => ['running', 'pending', 'queued'].includes(j.status)) || state.tasks.some(t => t.status === 'running')
+    || state.attempts.some(a => a.status === 'running')) completionFailure('EVALUATION_RUNNING');
+  const job = assertPhaseJob(state, plan, 'wednesday'), tasks = job ? state.tasks.filter(t => t.jobId === job.id) : [];
+  const retry = completionRetry(plan).map(item => state.tasks.find(t => t.id === item.taskId));
+  if (!job || job.status !== 'completed' || job.concurrency !== 1 || tasks.length !== 86 || retry.length !== 2
+    || [...tasks, ...retry].some(t => !t || t.status !== 'completed' || t.error)) completionFailure('WEDNESDAY_NOT_FINISHED');
+  const at = priorityTimestamp(now), proof = rows => rows.map(t => ({ id: t.id, hash: digest(canonical(t)) }));
+  const release = { at, wednesdayJobId: job.id, wednesdayTaskProof: proof(tasks), retryTaskProof: proof(retry) };
+  const prospective = { ...state, settings: { ...state.settings, evaluationMaintenance: plan.priorMaintenance,
+    tuesdayWednesdayCompletion: { ...c, status: 'waiting_thursday', priority: { ...p, handoffRelease: release } } } };
+  assertDeferredThursday(prospective, registry, plan);
+  state.settings.evaluationMaintenance = plan.priorMaintenance;
+  Object.assign(c, { status: 'waiting_thursday', updatedAt: at, errorCode: null });
+  p.handoffRelease = release;
+  return priorityResult(state);
+}
+// The caller first refreshes Thursday source/ingestion coverage. This locked
+// transition verifies that the persisted handoff is still caught up and that
+// no scheduler/worker claimed another job meanwhile. It grants one Tuesday
+// conversation; the worker yields through deferTuesdayForThursday again.
+export function claimDeferredTuesday(state, registry, plan, now = new Date()) {
+  assertDeferredThursday(state, registry, plan);
+  const c = state.settings.tuesdayWednesdayCompletion, p = c.priority, at = priorityTimestamp(now);
+  if (p.resumeTuesday !== 'automatic_before_noon') completionFailure('TUESDAY_MANUAL_REVIEW_REQUIRED');
+  if (p.tuesdayBlocked) completionFailure('TUESDAY_REQUIRES_INTERVENTION');
+  if (at >= p.deadline) completionFailure('TUESDAY_DEADLINE_REACHED');
+  if (!['caught_up', 'completed'].includes(state.settings.thursdayHandoff.status)) completionFailure('THURSDAY_NOT_CAUGHT_UP');
+  if (state.jobs.some(j => ['running', 'pending', 'queued'].includes(j.status)) || state.tasks.some(t => t.status === 'running')
+    || state.attempts.some(a => a.status === 'running')) completionFailure('EVALUATION_RUNNING');
+  // Validate the existing maintenance invariants before mutating the draft.
+  assertCompletionStable({ ...state, settings: { ...state.settings, evaluationMaintenance: RECOVERY_ID } }, registry, plan);
+  state.settings.evaluationMaintenance = RECOVERY_ID;
+  Object.assign(c, { status: 'prepared', updatedAt: at, errorCode: null });
+  p.lastTuesdayResumeAt = at;
+  return priorityResult(state);
+}
 export function assertCompletionSource(state, plan, ids, requireNew = false) {
   const byId = new Map(completionSources(plan).map(c => [c.id, c]));
   for (const id of ids) {
@@ -205,8 +352,17 @@ export function completionStatus(state, plan, manifest = {}, workerAlive = false
   const tuesday = [...completionRetry(plan), ...plan.tuesday].map(c => c.id), wednesday = plan.wednesday.map(c => c.id);
   const finalized = state.settings.tuesdayWednesdayCompletion?.id === COMPLETION_ID && state.settings.tuesdayWednesdayCompletion.status === 'completed'
     && state.settings.evaluationMaintenance === plan.priorMaintenance && tasks.length === 422 && completed.length === 422;
-  return { id: COMPLETION_ID, status: finalized ? 'completed' : manifest.status || 'not_started', workerAlive, checkedAt: new Date().toISOString(),
-    phase: !finalized && ['retry-tuesday', 'wednesday', 'tuesday'].includes(manifest.phase) ? manifest.phase : null,
+  const waitingThursday = !finalized && thursdayPriorityReady(state);
+  const priority = state.settings.tuesdayWednesdayCompletion?.priority, blockedAt = priority?.tuesdayBlocked?.at;
+  const safeBlockedAt = typeof blockedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(blockedAt)
+    && Number.isFinite(Date.parse(blockedAt)) ? new Date(blockedAt).toISOString() : null;
+  return { id: COMPLETION_ID, status: finalized ? 'completed' : waitingThursday ? 'waiting_thursday' : manifest.status || 'not_started', workerAlive, checkedAt: new Date().toISOString(),
+    phase: waitingThursday ? 'waiting_thursday' : !finalized && ['retry-tuesday', 'wednesday', 'tuesday'].includes(manifest.phase) ? manifest.phase : null,
+    priority: priority ? { order: priority.order === THURSDAY_PRIORITY_ORDER ? priority.order : null,
+      resumeTuesday: priorityModes.includes(priority.resumeTuesday) ? priority.resumeTuesday : null,
+      deadline: priority.deadline === THURSDAY_PRIORITY_DEADLINE ? priority.deadline : null } : null,
+    tuesdayDeferredBlocked: !!priority?.tuesdayBlocked, tuesdayDeferredErrorCode: failureCode(priority?.tuesdayBlocked?.code),
+    tuesdayDeferredErrorAt: safeBlockedAt,
     requestedConversations: 213, totalConversations: 212, excludedConversations: 1, exclusions: completionExclusions(plan), completedConversations: count([...tuesday, ...wednesday]),
     totalModelTasks: 422, completedModelTasks: completed.length, remainingModelTasks: 422 - completed.length,
     tuesday: { requested: 170, total: 169, excluded: 1, completed: count(tuesday) }, wednesday: { total: 43, completed: count(wednesday) },

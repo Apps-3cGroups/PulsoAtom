@@ -465,7 +465,12 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
   // MySQL JSON may reorder object keys; normalize both reference sets without
   // changing the digest function or any historical context fingerprints.
   if (digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
-  if (state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.some(id => job.conversationIds.includes(id)))) throw new AppError(409, 'Existe una ejecución operativa posterior. Consulta el resultado vigente.', 'SUPERSEDED_JOB');
+  // A maintenance slice owns only its explicitly selected conversations. A
+  // newer result for another, already completed case must remain untouched
+  // without blocking the selected unfinished case. Full resumes keep the
+  // original whole-job supersession guard.
+  const resumeConversationIds = scoped ? conversationIds : job.conversationIds;
+  if (state.jobs.some(j => j.id !== job.id && j.purpose === 'operational' && j.createdAt > job.createdAt && j.conversationIds.some(id => resumeConversationIds.includes(id)))) throw new AppError(409, 'Existe una ejecución operativa posterior. Consulta el resultado vigente.', 'SUPERSEDED_JOB');
   const candidates = job.conversationIds.map(id => state.conversations.find(c => c.id === id)).filter(Boolean);
   const pending = state.tasks.filter(t => t.jobId === jobId && !['completed', 'deferred', ...(unfinishedOnly ? ['partial', 'failed'] : [])].includes(t.status) && (!scoped || conversationIds.includes(t.conversationId)));
   if (!pending.length) throw new AppError(409, 'La ejecución ya está completa.', 'ALREADY_COMPLETED');

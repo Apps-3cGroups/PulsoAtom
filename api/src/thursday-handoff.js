@@ -2,7 +2,8 @@ import { AppError } from './errors.js';
 import { digest, evaluationContext } from './evaluation-context.js';
 import { DAILY_ACTIVITY_MODE, activityOnDate, dailyAssignedCountries, withinDailyLimit } from './daily-activity.js';
 import { completedOperationalPair, dailyHandoffFor, assignedHandoffVersion } from './daily-equivalence.js';
-import { COMPLETION_ID, COMPLETION_MODELS, assertCompletionPlan, assertCompletionStable, finalizedCompletion, completionTasks } from './tuesday-wednesday-completion.js';
+import { COMPLETION_ID, COMPLETION_MODELS, assertCompletionPlan, assertCompletionStable, finalizedCompletion, completionTasks,
+  thursdayPriorityReleased, thursdayPriorityReady, assertDeferredThursday } from './tuesday-wednesday-completion.js';
 import { RECOVERY_ID } from './gemma-incident-recovery.js';
 import { ingestionReadiness } from './one-off-evaluations.js';
 
@@ -30,7 +31,8 @@ function completionGuard(state, registry, plan) {
   if (state.settings.tuesdayWednesdayCompletion?.id !== COMPLETION_ID) fail('COMPLETION_STATE_CHANGED', 'La recuperación esperada no está preparada.');
   if (state.settings.tuesdayWednesdayCompletion.status === 'completed') {
     if (!finalizedCompletion(state, registry, plan)) fail('COMPLETION_NOT_FINISHED', 'La recuperación aún no terminó.');
-  } else assertCompletionStable(state, registry, plan);
+  } else if (state.settings.tuesdayWednesdayCompletion.status === 'waiting_thursday') assertDeferredThursday(state, registry, plan);
+  else assertCompletionStable(state, registry, plan);
 }
 export function assertThursdayRequest(state, registry, options) {
   if (!options.dailyActivity?.handoffId) return;
@@ -40,7 +42,7 @@ export function assertThursdayRequest(state, registry, options) {
     || ![1, 2].includes(h.concurrency) || digest(options.countries) !== digest(h.countries)
     || digest(options.modelIds) !== digest(h.modelIds) || options.dailyActivity.timezone !== h.timezone
     || state.settings.tuesdayWednesdayCompletion?.id !== COMPLETION_ID
-    || state.settings.tuesdayWednesdayCompletion.status !== 'completed' || state.settings.evaluationMaintenance) {
+    || state.settings.tuesdayWednesdayCompletion.status !== 'completed' && !thursdayPriorityReady(state) || state.settings.evaluationMaintenance) {
     fail('HANDOFF_NOT_READY', 'El jueves espera que termine la recuperación autorizada.');
   }
   if (digest(canonical(state.catalog)) !== h.catalogDigest || Object.entries(contextOf(state.catalog)).some(([key, value]) => h.context[key] !== value)) fail('CATALOG_CHANGED', 'El catálogo o las instrucciones cambiaron después de preparar el jueves.');
@@ -154,16 +156,18 @@ export async function reconcileThursdayHandoff(store, { now = new Date() } = {})
   const before = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   const h = before.settings.thursdayHandoff;
   if (!h || h.id !== THURSDAY_ID || h.status === 'completed' || before.settings.evaluationMaintenance
-    || before.settings.tuesdayWednesdayCompletion?.status !== 'completed' || now.toISOString() < h.notBefore
+    || before.settings.tuesdayWednesdayCompletion?.status !== 'completed' && !thursdayPriorityReleased(before.settings) || now.toISOString() < h.notBefore
     || before.jobs.some(j => j.status === 'running') || !store.readIngestionSnapshot) return false;
   const ingestion = await store.readIngestionSnapshot(THURSDAY_INGESTION);
   if (!ingestionReadiness(ingestion, THURSDAY_INGESTION).ready) return false;
   const state = await store.readWithConversations({ fresh: true });
+  if (state.settings.tuesdayWednesdayCompletion?.status !== 'completed' && !thursdayPriorityReady(state)) return false;
   const coverage = thursdayCoverage(state, { ingestion });
   if (!coverage?.allReadyEvaluated) return false;
   return store.transaction(draft => {
     if (draft.settings.thursdayHandoff?.scopeHash !== h.scopeHash || draft.settings.evaluationMaintenance
-      || draft.jobs.some(j => j.status === 'running')) return false;
+      || draft.jobs.some(j => j.status === 'running')
+      || draft.settings.tuesdayWednesdayCompletion?.status !== 'completed' && !thursdayPriorityReady(draft)) return false;
     const checked = thursdayCoverage({ ...draft, conversations: state.conversations }, { ingestion });
     if (!checked.allReadyEvaluated) return false;
     // A completed batch is not proof that Automations will send no more batches.
