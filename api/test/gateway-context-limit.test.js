@@ -91,6 +91,29 @@ test('explicit upstream memory failures become a sanitized resource limit, inclu
   }
 });
 
+test('nested LM Studio prediction wrappers recognize only a terminal Metal memory traceback', async () => {
+  const traceback = `Traceback (most recent call last):\n  File "/synthetic/private/model.py", line 123, in generate\n    private_value = "${base.token}"\nRuntimeError: ${metalMemoryError}`;
+  const prefix = 'Error in MLX prediction: Error in the MLX generation: ';
+  for (const wrapped of [
+    `${prefix}"${traceback}"`, `${prefix}${JSON.stringify(traceback)}`,
+    `${prefix}RuntimeError('${traceback.replaceAll('\n', '\\n')}\\n')`,
+  ]) for (const status of [400, 500, 503]) {
+    await assert.rejects(clientFor(envelope({ error: wrapped }, status)).invoke(operation), error => {
+      assert.equal(error.code, 'AI_RESOURCE_LIMIT');
+      assert.equal(error.details, undefined);
+      assert.doesNotMatch(JSON.stringify(error) + error.message, /PRIVATE_SYNTHETIC_TOKEN|model\.py|Traceback|RuntimeError|00000008/);
+      return true;
+    });
+  }
+  for (const error of [
+    `Invalid schema. Quoted provider text: ${prefix}${JSON.stringify(traceback)}`,
+    `${prefix}${JSON.stringify(traceback)} but the actual error is invalid schema.`,
+    `${prefix}"${metalMemoryError}"`,
+    `${prefix}Traceback (most recent call last):\nRuntimeError: Request quota exhausted.`,
+    `${prefix}Traceback (most recent call last):\nRuntimeError: out of memory'`,
+  ]) await assert.rejects(clientFor(envelope({ error })).invoke(operation), { code: 'AI_CONFIGURATION' });
+});
+
 test('ordinary 400s, quotas and quoted memory errors never become resource limits', async () => {
   for (const body of [
     { error: 'Bad request' }, { error: 'Invalid JSON schema: out of memory' },

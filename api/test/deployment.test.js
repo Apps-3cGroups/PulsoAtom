@@ -59,10 +59,10 @@ test('Tuesday/Wednesday recovery keeps read-only operations isolated and starts 
   const allowed = workflow.match(/\$env:GEMMA_OPERATION -cnotin @\(([^)]+)\)/)?.[1];
   const readonly = workflow.match(/\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\(([^)]+)\)/)?.[1];
   const job = workflow.match(/gemma-check:\n\s+if: ([^\n]+)/)?.[1];
-  for (const verb of ['inspect', 'start', 'status']) {
+  for (const verb of ['inspect', 'start', 'stop', 'status']) {
     const operation = `tuesday-wednesday-${verb}`;
     for (const list of [options, allowed, job]) assert.ok(list.includes(operation));
-    assert.equal(readonly.includes(operation), verb !== 'start');
+    assert.equal(readonly.includes(operation), ['inspect', 'status'].includes(verb));
     assert.ok(workflow.includes(`'${operation}' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--${verb}' }`));
   }
   const production = workflow.match(/\$remoteCommand = @'\n([\s\S]*?)\n {10}'@/)?.[1];

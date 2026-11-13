@@ -255,7 +255,10 @@ export function assertCompletionMutation(before, after, plan) {
         for (const field of ['jobId', 'conversationId', 'profile', 'fallback', 'context', 'codeResults']) if (!same(row[field], changed[field])) completionFailure('TASK_IDENTITY_CHANGED');
         for (const [profile, values] of Object.entries(row.profileStates || {})) for (const result of values.results || []) {
           const retained = changed.profileStates?.[profile]?.results?.find(r => r.variableId === result.variableId);
-          if (!retained || digest(result) !== digest(retained)) completionFailure('RETAINED_RESULT_CHANGED');
+          // MySQL normalizes JSON object key order after the first attempt.
+          // Retried items still in memory must retain the same values and array
+          // order, without treating that serialization change as a new answer.
+          if (!retained || !same(result, retained)) completionFailure('RETAINED_RESULT_CHANGED');
         }
       }
       if (key === 'attempts') for (const field of ['jobId', 'taskId', 'round', 'profileId', 'provider', 'requestedModel', 'variableIds', 'startedAt']) {
