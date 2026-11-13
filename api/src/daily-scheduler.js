@@ -3,6 +3,8 @@ import { startEvaluationBatch, recoverEvaluationJobs, resumeEvaluationBatch } fr
 import { asRegistry } from './model-registry.js';
 import { DAILY_ACTIVITY_MODE, dailyActivityRequest } from './daily-activity.js';
 import { thursdayRunDate, reconcileThursdayHandoff, THURSDAY_INGESTION } from './thursday-handoff.js';
+import { thursdayPriorityReleased } from './tuesday-wednesday-completion.js';
+import { resumeDeferredTuesdayWhenReady } from './deferred-tuesday-readiness.js';
 
 export function scheduleClock(now, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -13,13 +15,13 @@ export function scheduleClock(now, timezone) {
   return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
 }
 
-export async function runDailyTick(store, evaluator, now = new Date(), skipHandoff = false) {
+export async function runDailyTick(store, evaluator, now = new Date(), skipHandoff = false, operations = {}) {
   const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   const { settings, jobs } = state;
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
   const handoff = settings.thursdayHandoff;
   if (handoff && handoff.status !== 'completed' && (now.toISOString() < handoff.notBefore
-    || settings.tuesdayWednesdayCompletion?.status !== 'completed')) return null;
+    || settings.tuesdayWednesdayCompletion?.status !== 'completed' && !thursdayPriorityReleased(settings))) return null;
   const registry = asRegistry(evaluator).forState(state);
   const clock = scheduleClock(now, settings.timezone);
   const manualRun = settings.dailyMode === DAILY_ACTIVITY_MODE && settings.dailyManualRunDate === clock.date;
@@ -53,10 +55,14 @@ export async function runDailyTick(store, evaluator, now = new Date(), skipHando
       if (draft.settings.dailyCatchupRunDate === settings.dailyCatchupRunDate) delete draft.settings.dailyCatchupRunDate;
     });
     completion.catch(error => console.error('Error en evaluación diaria de Pulso:', error.code || error.name));
+    if (!job && options.dailyActivity.handoffId) {
+      const resumed = await resumeDeferredTuesdayWhenReady(store, now, operations);
+      if (resumed) return resumed;
+    }
     // Continue checking late Thursday imports first, but an exhausted partial
     // input must not indefinitely block subsequent ordinary activity days.
     if (!job && options.dailyActivity.handoffId && !skipHandoff && now.toISOString() >= THURSDAY_INGESTION.expiresAt) {
-      return runDailyTick(store, evaluator, now, true);
+      return runDailyTick(store, evaluator, now, true, operations);
     }
     return job;
   }

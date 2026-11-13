@@ -9,7 +9,8 @@ import { acquireBackfillLock, persistBackfillManifest } from '../src/gemma-backf
 import { startEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { COMPLETION_ID, COMPLETION_KEYS, COMPLETION_MODELS, makeCompletionPlan, selectCompletionSources,
   assertOriginalIncident, assertCompletionPlan, assertCompletionStable, assertCompletionSource, completionSources, completionRetry, completionExclusions, COMPLETION_EXCLUSION_REASON,
-  prepareCompletion, setCompletionConcurrency, completionStatus, completionTasks, assertPhaseJob, finishCompletion, finalizedCompletion, completionFailure as fail } from '../src/tuesday-wednesday-completion.js';
+  prepareCompletion, setCompletionConcurrency, completionStatus, completionTasks, assertPhaseJob, finishCompletion, finalizedCompletion,
+  prepareThursdayPriority, deferTuesdayForThursday, assertDeferredThursday, claimDeferredTuesday, completionFailure as fail } from '../src/tuesday-wednesday-completion.js';
 
 const productionApi = '/var/www/nodeapps/PulsoAtom/api';
 const incidentDirectory = `${productionApi}/.data/incident-recovery/${RECOVERY_ID}`;
@@ -19,7 +20,7 @@ const manifestFile = `${directory}/manifest.json`;
 const workerApi = `${directory}/worker-api`;
 const workerScript = `${workerApi}/scripts/complete-tuesday-wednesday.js`;
 const oldWorkerScript = `${incidentDirectory}/worker-api/scripts/recover-tuesday-evaluations.js`;
-const safeCode = error => /^[A-Z_]{3,80}$/.test(error?.code || '') ? error.code : 'COMPLETION_FAILED';
+const safeCode = error => typeof error?.code === 'string' && /^[A-Z_]{3,80}(?![\s\S])/.test(error.code) ? error.code : 'COMPLETION_FAILED';
 const readJson = async file => JSON.parse(await readFile(file, 'utf8'));
 async function readManifest() { const m = await readJson(manifestFile); assertCompletionPlan(m.plan); if (m.id !== COMPLETION_ID) fail('INVALID_COMPLETION_MANIFEST'); return m; }
 async function optionalManifest() { try { return await readManifest(); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
@@ -65,7 +66,7 @@ async function stop() {
     const result = await stopOwnedWorker(manifest);
     const latest = await readManifest();
     if (latest.pid !== manifest.pid) fail('WORKER_ASSIGNMENT_CHANGED');
-    if (latest.status !== 'completed') {
+    if (!['completed', 'waiting_thursday'].includes(latest.status)) {
       Object.assign(latest, { status: 'stopped', stoppedAt: new Date().toISOString(), stopReason: 'APPLY_VERIFIED_WORKER_FIX' });
       await persistBackfillManifest(manifestFile, latest);
     }
@@ -100,7 +101,10 @@ async function freshPlan(store, registry, incident) {
 
 async function inspect(store, registry) {
   const existing = await optionalManifest();
-  if (existing) return { readOnly: true, ...completionStatus(await store.read(), existing.plan, existing, (await processState(existing.pid, workerScript)).alive) };
+  if (existing) {
+    const state = await store.read(), manifest = deferredThursdayManifest(state, registry, existing) || existing;
+    return { readOnly: true, ...completionStatus(state, existing.plan, manifest, (await processState(existing.pid, workerScript)).alive) };
+  }
   const incident = await readJson(incidentFile), { state, plan } = await freshPlan(store, registry, incident);
   return { readOnly: true, ready: true, ...completionStatus(state, plan),
     scope: { retryConversations: 2, excludedConversations: 1, newTuesdayHN: 167, newWednesday: { HN: 20, PA: 23 } }, concurrency: 1 };
@@ -149,18 +153,125 @@ export async function waitForWorkerAssignment(pid, { read = readManifest, pause 
   }
   fail('WORKER_ASSIGNMENT_TIMEOUT');
 }
+// The database checkpoint is authoritative if the subsequent manifest write
+// failed. Read-only status/inspect use this projection without writing files.
+export function deferredThursdayManifest(state, registry, manifest) {
+  if (state.settings.tuesdayWednesdayCompletion?.status !== 'waiting_thursday') return null;
+  const at = assertDeferredThursday(state, registry, manifest.plan);
+  return { ...manifest, status: 'waiting_thursday', phase: 'waiting_thursday', updatedAt: at,
+    waitingThursdayAt: at, finishedAt: null, errorCode: null };
+}
+
+export async function configureThursdayPriority(store, registry, manifest, options, { inspectWorker = processState } = {}) {
+  assertCompletionPlan(manifest.plan);
+  if (manifest.id !== COMPLETION_ID) fail('INVALID_COMPLETION_MANIFEST');
+  // Frozen workers from a prior release do not know this checkpoint. Require a
+  // stopped process so the following start copies the newly deployed code.
+  if ((await inspectWorker(manifest.pid, workerScript)).alive) fail('COMPLETION_WORKER_RUNNING');
+  return store.transaction(state => prepareThursdayPriority(state, registry, manifest.plan, options));
+}
+
+async function prioritizeThursday(store, registry, options) {
+  const release = await acquireBackfillLock(`${incidentDirectory}/launch.lock`, COMPLETION_ID);
+  try {
+    const manifest = await readManifest(), incident = await readJson(incidentFile);
+    if (!await verifyNoWorker(incident, manifest)) fail('COMPLETION_WORKER_RUNNING');
+    return await configureThursdayPriority(store, registry, manifest, options);
+  } finally { await release(); }
+}
+
+async function launchTuesdaySlice(manifest) {
+  await copyWorker();
+  Object.assign(manifest, { status: 'prepared', mode: 'tuesday-slice', pid: null, concurrency: 1,
+    errorCode: null, updatedAt: new Date().toISOString() });
+  await persistBackfillManifest(manifestFile, manifest);
+  const log = await open(`${directory}/worker.log`, 'a', 0o600);
+  try {
+    const child = spawn(process.execPath, [`--env-file=${productionApi}/.env`, workerScript, '--worker'],
+      { cwd: workerApi, env: process.env, detached: true, stdio: ['ignore', log.fd, log.fd] });
+    await recordSpawnedWorker(manifest, child);
+    return { id: COMPLETION_ID, started: true, status: 'prepared', mode: 'tuesday-slice', concurrency: 1, workerPid: child.pid };
+  } finally { await log.close(); }
+}
+
+// Called under the same launch lock as ordinary starts. The injected readiness
+// check reads the current Thursday source, not just its previous caught-up flag.
+export async function launchDeferredTuesday(store, registry, manifest, {
+  checkReadiness, inspectWorker = processState, launch = launchTuesdaySlice, now = () => new Date(),
+  recordIntent = value => persistBackfillManifest(manifestFile, value),
+} = {}) {
+  assertCompletionPlan(manifest.plan);
+  if (manifest.id !== COMPLETION_ID) fail('INVALID_COMPLETION_MANIFEST');
+  if ((await inspectWorker(manifest.pid, workerScript)).alive) return { id: COMPLETION_ID, alreadyStarted: true };
+  const readiness = await checkReadiness(now());
+  if (!readiness.ready) return { id: COMPLETION_ID, started: false, reason: safeCode({ code: readiness.reason }) };
+  // Persist the mode before claiming maintenance: an interrupted launch can be
+  // restarted as a slice even if copy/spawn fails before the next manifest save.
+  manifest.mode = 'tuesday-slice';
+  await recordIntent(manifest);
+  await store.transaction(state => claimDeferredTuesday(state, registry, manifest.plan, now()));
+  try { return await launch(manifest); }
+  catch (error) {
+    // Failed copy/spawn may release the lease only after proving no owned child
+    // survived. A spawned-but-unrecorded process is never treated as dead.
+    try {
+      if (!(await inspectWorker(manifest.pid, workerScript)).alive) {
+        await blockTuesdayAfterFailure(store, registry, manifest.plan, error, now());
+        Object.assign(manifest, deferredThursdayManifest(await store.read(), registry, manifest));
+        await recordIntent(manifest);
+      }
+    } catch { /* Unknown child/task state keeps maintenance for active review. */ }
+    throw error;
+  }
+}
+
+export async function blockTuesdayAfterFailure(store, registry, plan, error, now = new Date()) {
+  return store.transaction(state => {
+    // This guard rejects every running job/task/attempt before releasing the
+    // maintenance lease. Neither a timeout nor an unknown process proves safety.
+    const result = deferTuesdayForThursday(state, registry, plan, now);
+    state.settings.tuesdayWednesdayCompletion.priority.tuesdayBlocked = { code: safeCode(error), at: now.toISOString() };
+    return result;
+  });
+}
+
+async function resumeTuesday(store, registry, fullStore) {
+  const { readDeferredTuesdayReadiness } = await import('../src/deferred-tuesday-readiness.js');
+  const release = await acquireBackfillLock(`${incidentDirectory}/launch.lock`, COMPLETION_ID);
+  try {
+    const manifest = await readManifest(), incident = await readJson(incidentFile);
+    if (!await verifyNoWorker(incident, manifest)) return { id: COMPLETION_ID, alreadyStarted: true };
+    return await launchDeferredTuesday(store, registry, manifest, {
+      checkReadiness: now => readDeferredTuesdayReadiness(fullStore, now),
+    });
+  } finally { await release(); }
+}
+
+export async function resumeDeferredTuesday() { return main(['--resume-tuesday']); }
+
 async function start(store, registry, concurrency = 1) {
   const release = await acquireBackfillLock(`${incidentDirectory}/launch.lock`, COMPLETION_ID);
   try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const incident = await readJson(incidentFile); let manifest = await optionalManifest();
-    if (!await verifyNoWorker(incident, manifest)) return { alreadyStarted: true, ...completionStatus(await store.read(), manifest.plan, manifest, true) };
+    if (manifest?.mode === 'tuesday-slice' && concurrency !== 1) fail('INVALID_CONCURRENCY');
+    if (!await verifyNoWorker(incident, manifest)) {
+      const state = await store.read(), waiting = deferredThursdayManifest(state, registry, manifest);
+      return { alreadyStarted: true, ...completionStatus(state, manifest.plan, waiting || manifest, true) };
+    }
     if (manifest) {
-      const state = await store.read(), finishedAt = finalizedCompletion(state, registry, manifest.plan);
+      const state = await store.read(), waiting = deferredThursdayManifest(state, registry, manifest);
+      if (waiting) {
+        Object.assign(manifest, waiting);
+        await persistBackfillManifest(manifestFile, manifest);
+        return { alreadyStarted: true, reconciled: true, ...completionStatus(state, manifest.plan, manifest, false) };
+      }
+      const finishedAt = finalizedCompletion(state, registry, manifest.plan);
       if (finishedAt) {
-        const fresh = await store.readWithConversations({ fresh: true, conversationIds: completionSources(manifest.plan).map(c => c.id) });
+        const fresh = manifest.mode === 'tuesday-slice' ? state
+          : await store.readWithConversations({ fresh: true, conversationIds: completionSources(manifest.plan).map(c => c.id) });
         finalizedCompletion(fresh, registry, manifest.plan);
-        assertCompletionSource(fresh, manifest.plan, completionSources(manifest.plan).map(c => c.id));
+        if (manifest.mode !== 'tuesday-slice') assertCompletionSource(fresh, manifest.plan, completionSources(manifest.plan).map(c => c.id));
         await writeCompletedManifests(manifest, finishedAt);
         return { alreadyStarted: true, reconciled: true, ...completionStatus(fresh, manifest.plan, manifest, false) };
       }
@@ -228,8 +339,15 @@ export async function executeCompletion(store, registry, plan, { startBatch = st
     await run('retry-tuesday', selected, s => s.jobs.find(j => j.id === jobId), () => fail('RECOVERY_JOB_MISSING'));
   }
   // Populate Wednesday first; an existing Tuesday job resumes afterwards.
-  // The complete scope and Thursday's completion gate remain unchanged.
   for (const phase of ['wednesday', 'tuesday']) {
+    if (phase === 'tuesday') {
+      const state = await store.read();
+      if (state.settings.tuesdayWednesdayCompletion?.priority?.order === 'wednesday-thursday-tuesday') {
+        const deferred = await store.transaction(s => deferTuesdayForThursday(s, registry, plan));
+        await checkpoint({ status: 'waiting_thursday', phase: 'waiting_thursday' });
+        return deferred;
+      }
+    }
     const selected = plan[phase].map(c => c.id);
     await run(phase, selected, s => assertPhaseJob(s, plan, phase), async guardedStore => {
       const source = await guardedStore.readWithConversations({ fresh: true, conversationIds: selected });
@@ -242,6 +360,44 @@ export async function executeCompletion(store, registry, plan, { startBatch = st
   }
 }
 
+export async function executeTuesdaySlice(store, registry, plan, {
+  resumeBatch = resumeEvaluationBatch, checkpoint = async () => {}, now = () => new Date(),
+} = {}) {
+  const initial = await store.read();
+  assertCompletionStable(initial, registry, plan);
+  const priority = initial.settings.tuesdayWednesdayCompletion.priority;
+  if (priority?.order !== 'wednesday-thursday-tuesday' || priority.resumeTuesday !== 'automatic_before_noon'
+    || initial.settings.tuesdayWednesdayCompletion.concurrency !== 1) fail('TUESDAY_AUTOMATIC_NOT_AUTHORIZED');
+  const job = assertPhaseJob(initial, plan, 'tuesday');
+  if (!job || job.concurrency !== 1) fail('TUESDAY_JOB_CHANGED');
+  const selected = plan.tuesday.find(item => initial.tasks.some(task => task.jobId === job.id && task.conversationId === item.id && task.status !== 'completed'));
+  if (!selected) return;
+  if (now().toISOString() < priority.deadline) {
+    const ids = [selected.id];
+    const guarded = { read: () => store.read(), async readWithConversations(options) {
+      const scope = options?.conversationIds || ids;
+      if (scope.length !== 1 || scope[0] !== selected.id) fail('TUESDAY_SLICE_SCOPE_CHANGED');
+      const state = await store.readWithConversations({ ...options, fresh: true, conversationIds: ids });
+      assertCompletionStable(state, registry, plan); assertCompletionSource(state, plan, ids); return state;
+    }, transaction: fn => store.transaction(state => { assertCompletionStable(state, registry, plan); return fn(state); }) };
+    // Only the unfinished conversation's source is read. Already completed
+    // Wednesday/Tuesday sources may evolve without invalidating their answers.
+    await guarded.readWithConversations({ conversationIds: ids });
+    await checkpoint({ phase: 'tuesday', mode: 'tuesday-slice' });
+    if (now().toISOString() < priority.deadline) {
+      const execution = await resumeBatch(guarded, registry, job.id, { conversationIds: ids });
+      await execution.completion;
+      const after = await store.read();
+      if (after.tasks.some(task => task.jobId === job.id && task.conversationId === selected.id && task.status !== 'completed')) fail('TUESDAY_SLICE_INCOMPLETE');
+    }
+  }
+  const after = await store.read(), tasks = completionTasks(after, plan);
+  if (tasks.length === 422 && tasks.every(task => task.status === 'completed')) return;
+  const deferred = await store.transaction(state => deferTuesdayForThursday(state, registry, plan, now()));
+  await checkpoint({ status: 'waiting_thursday', phase: 'waiting_thursday', mode: 'tuesday-slice' });
+  return deferred;
+}
+
 async function writeCompletedManifests(manifest, finishedAt) {
   const incident = await readJson(incidentFile);
   if (incident.id !== RECOVERY_ID || incident.plan?.id !== RECOVERY_ID) fail('INCIDENT_MANIFEST_CHANGED');
@@ -251,6 +407,37 @@ async function writeCompletedManifests(manifest, finishedAt) {
   Object.assign(manifest, { status: 'completed', finishedAt, updatedAt: finishedAt, errorCode: null });
   await persistBackfillManifest(manifestFile, manifest);
 }
+
+export async function executeCompletionWorker(store, registry, manifest, {
+  execute = manifest.mode === 'tuesday-slice' ? executeTuesdaySlice : executeCompletion,
+  persist = persistBackfillManifest, writeCompleted = writeCompletedManifests,
+} = {}) {
+  try {
+    await execute(store, registry, manifest.plan, { checkpoint: async progress => {
+      Object.assign(manifest, progress, { updatedAt: new Date().toISOString() }); await persist(manifestFile, manifest);
+    } });
+    const waiting = deferredThursdayManifest(await store.read(), registry, manifest);
+    if (waiting) {
+      Object.assign(manifest, waiting);
+      await persist(manifestFile, manifest);
+      return completionStatus(await store.read(), manifest.plan, manifest, false);
+    }
+    const finishedAt = new Date().toISOString();
+    await store.transaction(s => finishCompletion(s, registry, manifest.plan, finishedAt));
+    await writeCompleted(manifest, finishedAt);
+    return completionStatus(await store.read(), manifest.plan, manifest, false);
+  } catch (error) {
+    if (manifest.mode === 'tuesday-slice') {
+      try {
+        await blockTuesdayAfterFailure(store, registry, manifest.plan, error);
+        Object.assign(manifest, deferredThursdayManifest(await store.read(), registry, manifest));
+        await persist(manifestFile, manifest);
+      } catch { /* An in-flight/unknown evaluation must not lose its lease. */ }
+    }
+    throw error;
+  }
+}
+
 async function worker(store, registry) {
   await waitForWorkerAssignment(process.pid);
   const release = await acquireBackfillLock(`${incidentDirectory}/worker.lock`, COMPLETION_ID);
@@ -259,15 +446,17 @@ async function worker(store, registry) {
     manifest = await readManifest(); if (manifest.status !== 'prepared' || manifest.pid !== process.pid) fail('WORKER_ALREADY_STARTED');
     Object.assign(manifest, { status: 'running', pid: process.pid, startedAt: manifest.startedAt || new Date().toISOString(), updatedAt: new Date().toISOString() });
     await persistBackfillManifest(manifestFile, manifest);
-    await executeCompletion(store, registry, manifest.plan, { checkpoint: async progress => {
-      Object.assign(manifest, progress, { updatedAt: new Date().toISOString() }); await persistBackfillManifest(manifestFile, manifest);
-    } });
-    const finishedAt = new Date().toISOString();
-    await store.transaction(s => finishCompletion(s, registry, manifest.plan, finishedAt));
-    await writeCompletedManifests(manifest, finishedAt);
-    console.log(JSON.stringify(completionStatus(await store.read(), manifest.plan, manifest, false)));
+    console.log(JSON.stringify(await executeCompletionWorker(store, registry, manifest)));
   } catch (error) {
     if (manifest) {
+      const waiting = deferredThursdayManifest(await store.read(), registry, manifest);
+      if (waiting) {
+        // Preserve an already committed handoff even if its filesystem update
+        // failed. A later status projects it; a later start persists it safely.
+        Object.assign(manifest, waiting);
+        await persistBackfillManifest(manifestFile, manifest).catch(() => {});
+        throw error;
+      }
       Object.assign(manifest, { status: 'blocked', errorCode: safeCode(error), updatedAt: new Date().toISOString() });
       await persistBackfillManifest(manifestFile, manifest);
       await store.transaction(s => { if (s.settings.evaluationMaintenance === RECOVERY_ID && s.settings.tuesdayWednesdayCompletion?.id === COMPLETION_ID) Object.assign(s.settings.tuesdayWednesdayCompletion, { status: 'blocked', errorCode: safeCode(error), updatedAt: manifest.updatedAt }); }).catch(() => {});
@@ -276,12 +465,22 @@ async function worker(store, registry) {
   } finally { await release(); }
 }
 
-export async function main(args) {
+export function parseCompletionArguments(args) {
+  if (args.length === 5 && args[0] === '--prioritize-thursday' && args[1] === '--expected-version'
+    && /^[1-9]\d*(?![\s\S])/.test(args[2]) && Number.isSafeInteger(Number(args[2]))
+    && args[3] === '--resume-tuesday' && ['manual', 'automatic_before_noon'].includes(args[4])) {
+    return { mode: '--prioritize-thursday', expectedVersion: Number(args[2]), resumeTuesday: args[4] };
+  }
   const concurrency = args[1] === '--concurrency=2' ? 2 : 1;
-  if (!['--inspect', '--start', '--status', '--worker', '--stop'].includes(args[0]) || args.length > 2 || args.length === 2 && (args[0] !== '--start' || !['--concurrency=1', '--concurrency=2'].includes(args[1]))) fail('INVALID_ARGUMENTS');
+  if (!['--inspect', '--start', '--status', '--worker', '--stop', '--resume-tuesday'].includes(args[0]) || args.length > 2 || args.length === 2 && (args[0] !== '--start' || !['--concurrency=1', '--concurrency=2'].includes(args[1]))) fail('INVALID_ARGUMENTS');
+  return { mode: args[0], concurrency };
+}
+
+export async function main(args) {
+  const options = parseCompletionArguments(args), { mode, concurrency } = options;
   // Stopping requires only the private manifest and OS identity. Do not open
   // either database or wait on an in-flight evaluation transaction first.
-  if (args[0] === '--stop') return stop();
+  if (mode === '--stop') return stop();
   const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
   const { MysqlStore, AtomHistoryStore } = await import('../src/store.js');
   const { CompletionStore } = await import('../src/tuesday-wednesday-completion-store.js');
@@ -290,15 +489,24 @@ export async function main(args) {
   const db = databaseConfig(), atom = atomDatabaseConfig();
   if (config.demo || db?.database !== 'dbPulsosAtom' || !atom) fail('REAL_MODE_REQUIRED');
   const existing = await optionalManifest();
-  if (args[0] === '--status' && !existing) return { id: COMPLETION_ID, status: 'not_started', workerAlive: false };
+  if (mode === '--status' && !existing) return { id: COMPLETION_ID, status: 'not_started', workerAlive: false };
+  if (['--prioritize-thursday', '--resume-tuesday'].includes(mode) && !existing) fail('COMPLETION_NOT_PREPARED');
   const base = existing ? new CompletionStore(db, existing.plan) : new MysqlStore(db);
   const store = new AtomHistoryStore(base, new AtomReader(atom, config.timezone));
+  let fullStore;
   try {
     const registry = registryFromEnv();
-    return args[0] === '--inspect' ? await inspect(store, registry) : args[0] === '--start' ? await start(store, registry, concurrency)
-      : args[0] === '--worker' ? await worker(store, registry)
-      : completionStatus(await store.read(), existing.plan, existing, (await processState(existing.pid, workerScript)).alive);
-  } finally { await store.close(); }
+    if (mode === '--inspect') return await inspect(store, registry);
+    if (mode === '--start') return await start(store, registry, concurrency);
+    if (mode === '--worker') return await worker(store, registry);
+    if (mode === '--prioritize-thursday') return await prioritizeThursday(store, registry, options);
+    if (mode === '--resume-tuesday') {
+      fullStore = new AtomHistoryStore(new MysqlStore(db), new AtomReader(atom, config.timezone));
+      return await resumeTuesday(store, registry, fullStore);
+    }
+    const state = await store.read(), manifest = deferredThursdayManifest(state, registry, existing) || existing;
+    return completionStatus(state, existing.plan, manifest, (await processState(existing.pid, workerScript)).alive);
+  } finally { await Promise.all([store.close(), fullStore?.close()]); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2)).then(result => {
   if (result) console.log(JSON.stringify(result, null, 2));

@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, tuesday-wednesday-probe, tuesday-wednesday-inspect, tuesday-wednesday-start, tuesday-wednesday-start-two, tuesday-wednesday-stop, tuesday-wednesday-status, thursday-handoff-inspect, thursday-handoff-prepare, gemma-rejection-inspect, gemma-format-preflight, gemma-tuesday-continue, gemma-tuesday-recover, gemma-tuesday-status, gemma-identity-inspect, navigation-benchmark, daily-activity-inspect, daily-activity-enable, daily-activity-run-yesterday, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, tuesday-wednesday-prioritize-thursday, tuesday-wednesday-probe, tuesday-wednesday-inspect, tuesday-wednesday-start, tuesday-wednesday-start-two, tuesday-wednesday-stop, tuesday-wednesday-status, thursday-handoff-inspect, thursday-handoff-prepare, gemma-rejection-inspect, gemma-format-preflight, gemma-tuesday-continue, gemma-tuesday-recover, gemma-tuesday-status, gemma-identity-inspect, navigation-benchmark, daily-activity-inspect, daily-activity-enable, daily-activity-run-yesterday, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       first_run_date:
@@ -23,6 +23,12 @@ on:
       expected_settings_version:
         description: 'Versión de configuración comprobada con daily-activity-inspect o thursday-handoff-inspect'
         type: string
+        required: false
+      resume_tuesday:
+        description: 'Retomar martes automáticamente antes del mediodía o dejarlo en espera'
+        type: choice
+        options: ['automatic_before_noon', 'manual']
+        default: 'automatic_before_noon'
         required: false
       expected_scope_hash:
         description: 'Huella de alcance comprobada con thursday-handoff-inspect (64 hex) '
@@ -85,7 +91,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'tuesday-wednesday-probe' || inputs.operation == 'tuesday-wednesday-inspect' || inputs.operation == 'tuesday-wednesday-start' || inputs.operation == 'tuesday-wednesday-start-two' || inputs.operation == 'thursday-handoff-prepare' || inputs.operation == 'tuesday-wednesday-stop' || inputs.operation == 'tuesday-wednesday-status' || inputs.operation == 'thursday-handoff-inspect' || inputs.operation == 'gemma-rejection-inspect' || inputs.operation == 'gemma-format-preflight' || inputs.operation == 'gemma-tuesday-continue' || inputs.operation == 'gemma-tuesday-recover' || inputs.operation == 'gemma-tuesday-status' || inputs.operation == 'gemma-identity-inspect' || inputs.operation == 'navigation-benchmark' || inputs.operation == 'daily-activity-enable' || inputs.operation == 'daily-activity-run-yesterday' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'tuesday-wednesday-probe' || inputs.operation == 'tuesday-wednesday-inspect' || inputs.operation == 'tuesday-wednesday-prioritize-thursday' || inputs.operation == 'tuesday-wednesday-start' || inputs.operation == 'tuesday-wednesday-start-two' || inputs.operation == 'thursday-handoff-prepare' || inputs.operation == 'tuesday-wednesday-stop' || inputs.operation == 'tuesday-wednesday-status' || inputs.operation == 'thursday-handoff-inspect' || inputs.operation == 'gemma-rejection-inspect' || inputs.operation == 'gemma-format-preflight' || inputs.operation == 'gemma-tuesday-continue' || inputs.operation == 'gemma-tuesday-recover' || inputs.operation == 'gemma-tuesday-status' || inputs.operation == 'gemma-identity-inspect' || inputs.operation == 'navigation-benchmark' || inputs.operation == 'daily-activity-enable' || inputs.operation == 'daily-activity-run-yesterday' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -138,6 +144,7 @@ jobs:
           ACTIVITY_DATE: ${{ inputs.activity_date }}
           EXPECTED_SETTINGS_VERSION: ${{ inputs.expected_settings_version }}
           EXPECTED_SCOPE_HASH: ${{ inputs.expected_scope_hash }}
+          RESUME_TUESDAY: ${{ inputs.resume_tuesday }}
           HANDOFF_CONCURRENCY: ${{ inputs.handoff_concurrency }}
           EVALUATION_JOB_ID: ${{ inputs.job_id }}
           EXPECTED_POLICY_VERSION: ${{ inputs.expected_policy_version }}
@@ -152,7 +159,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-start', 'tuesday-wednesday-start-two', 'thursday-handoff-prepare', 'tuesday-wednesday-stop', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-continue', 'gemma-tuesday-recover', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-enable', 'daily-activity-run-yesterday', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
+          if ($env:GEMMA_OPERATION -cnotin @('tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-prioritize-thursday', 'tuesday-wednesday-start', 'tuesday-wednesday-start-two', 'thursday-handoff-prepare', 'tuesday-wednesday-stop', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-continue', 'gemma-tuesday-recover', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-enable', 'daily-activity-run-yesterday', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
           $useCheckoutSource = $env:GEMMA_OPERATION -cin @('tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -ceq 'evaluation-batch-inspect') {
@@ -185,6 +192,9 @@ jobs:
           if ($env:GEMMA_OPERATION -ceq 'daily-activity-run-yesterday') {
             if ($env:ACTIVITY_DATE -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}(?![\s\S])' -or $env:EXPECTED_SETTINGS_VERSION -cnotmatch '^[1-9][0-9]{0,14}(?![\s\S])') { throw 'Manual daily run requires yesterday and a positive settings version.' }
           }
+          if ($env:GEMMA_OPERATION -ceq 'tuesday-wednesday-prioritize-thursday') {
+            if ($env:EXPECTED_SETTINGS_VERSION -cnotmatch '^[1-9][0-9]{0,14}(?![\s\S])' -or $env:RESUME_TUESDAY -cnotin @('manual', 'automatic_before_noon')) { throw 'Priority setup requires a settings version and a valid Tuesday resume mode.' }
+          }
           if ($env:GEMMA_OPERATION -ceq 'thursday-handoff-prepare') {
             if ($env:EXPECTED_SETTINGS_VERSION -cnotmatch '^[1-9][0-9]{0,14}(?![\s\S])') { throw 'Thursday setup requires a positive settings version.' }
             if ($env:EXPECTED_SCOPE_HASH -cnotmatch '^[a-f0-9]{64}(?![\s\S])') { throw 'Thursday scope hash must contain exactly 64 lowercase hexadecimal characters.' }
@@ -193,6 +203,7 @@ jobs:
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
             'tuesday-wednesday-probe' { $entryScript = 'scripts/inspect-tuesday-wednesday-partials.js'; $scriptArguments = '' }
             'tuesday-wednesday-inspect' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--inspect' }
+            'tuesday-wednesday-prioritize-thursday' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = "--prioritize-thursday --expected-version $($env:EXPECTED_SETTINGS_VERSION) --resume-tuesday $($env:RESUME_TUESDAY)" }
             'tuesday-wednesday-start' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--start' }
             'tuesday-wednesday-start-two' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--start --concurrency=2' }
             'tuesday-wednesday-stop' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--stop' }
