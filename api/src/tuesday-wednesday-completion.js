@@ -206,6 +206,7 @@ export function completionStatus(state, plan, manifest = {}, workerAlive = false
   const finalized = state.settings.tuesdayWednesdayCompletion?.id === COMPLETION_ID && state.settings.tuesdayWednesdayCompletion.status === 'completed'
     && state.settings.evaluationMaintenance === plan.priorMaintenance && tasks.length === 422 && completed.length === 422;
   return { id: COMPLETION_ID, status: finalized ? 'completed' : manifest.status || 'not_started', workerAlive, checkedAt: new Date().toISOString(),
+    phase: !finalized && ['retry-tuesday', 'wednesday', 'tuesday'].includes(manifest.phase) ? manifest.phase : null,
     requestedConversations: 213, totalConversations: 212, excludedConversations: 1, exclusions: completionExclusions(plan), completedConversations: count([...tuesday, ...wednesday]),
     totalModelTasks: 422, completedModelTasks: completed.length, remainingModelTasks: 422 - completed.length,
     tuesday: { requested: 170, total: 169, excluded: 1, completed: count(tuesday) }, wednesday: { total: 43, completed: count(wednesday) },

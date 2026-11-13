@@ -227,7 +227,9 @@ export async function executeCompletion(store, registry, plan, { startBatch = st
     const selected = completionRetry(plan).filter(t => t.jobId === jobId).map(t => t.id); if (!selected.length) continue;
     await run('retry-tuesday', selected, s => s.jobs.find(j => j.id === jobId), () => fail('RECOVERY_JOB_MISSING'));
   }
-  for (const phase of ['tuesday', 'wednesday']) {
+  // Populate Wednesday first; an existing Tuesday job resumes afterwards.
+  // The complete scope and Thursday's completion gate remain unchanged.
+  for (const phase of ['wednesday', 'tuesday']) {
     const selected = plan[phase].map(c => c.id);
     await run(phase, selected, s => assertPhaseJob(s, plan, phase), async guardedStore => {
       const source = await guardedStore.readWithConversations({ fresh: true, conversationIds: selected });

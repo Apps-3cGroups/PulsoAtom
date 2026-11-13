@@ -248,7 +248,7 @@ test('new-task format retries preserve answers across MySQL JSON object-key norm
   for (const task of f.state.tasks) assert.deepEqual(after.tasks.find(row => row.id === task.id), task);
   assert.deepEqual(after.evaluations.slice(0, f.state.evaluations.length), f.state.evaluations);
 });
-test('phases run retries then Tuesday167 then Wednesday43, and repeating orchestration creates nothing twice', async () => {
+test('phases run retries then Wednesday43 then Tuesday167, and repeating orchestration creates nothing twice', async () => {
   const f = prepared(), store = memory(f), operations = [];
   const complete = async (jobId, selected) => store.transaction(s => { for (const t of s.tasks.filter(t => t.jobId === jobId && selected.includes(t.conversationId))) if (t.status !== 'completed') t.status = 'completed'; s.jobs.find(j => j.id === jobId).status = s.tasks.some(t => t.jobId === jobId && t.status === 'partial') ? 'partial' : 'completed'; });
   const resumeBatch = async (_store, _registry, jobId, options) => { operations.push(['resume', options.conversationIds.length]); await complete(jobId, options.conversationIds); return { job: { id: jobId }, completion: Promise.resolve() }; };
@@ -261,11 +261,12 @@ test('phases run retries then Tuesday167 then Wednesday43, and repeating orchest
     return { job, completion: Promise.resolve(job) };
   };
   await executeCompletion(store, f.registry, f.plan, { startBatch, resumeBatch });
-  assert.deepEqual(operations, [['resume', 2], ['start', 167], ['start', 43]]);
+  assert.deepEqual(operations, [['resume', 2], ['start', 43], ['start', 167]]);
   await executeCompletion(store, f.registry, f.plan, { startBatch, resumeBatch });
   assert.equal(operations.length, 3);
   const state = await store.read(); assert.equal(completionTasks(state, f.plan).length, 422);
-  const status = completionStatus(state, f.plan, { status: 'running' }, true);
+  const status = completionStatus(state, f.plan, { status: 'running', phase: 'wednesday' }, true);
+  assert.equal(status.phase, 'wednesday');
   assert.equal(status.completedConversations, 212); assert.equal(status.remainingModelTasks, 0); assert.equal(status.preservedCompletedTasks, 725);
   const originalSettings = structuredClone(state.settings);
   finishCompletion(state, f.registry, f.plan, '2026-11-13T03:00:00Z');
@@ -278,13 +279,80 @@ test('phases run retries then Tuesday167 then Wednesday43, and repeating orchest
   assert.equal(status.totalConversations, 212); assert.equal(status.requestedConversations, 213); assert.equal(status.excludedConversations, 1);
   // Simulate a crash immediately after the database commit, before either
   // private manifest receives its final filesystem write.
-  const staleManifest = { status: 'blocked', errorCode: 'FILESYSTEM_ERROR' };
+  const staleManifest = { status: 'blocked', phase: 'wednesday', errorCode: 'FILESYSTEM_ERROR' };
   assert.equal(finalizedCompletion(state, f.registry, f.plan), '2026-11-13T03:00:00Z');
   assertCompletionSource(state, f.plan, [...f.plan.retry, ...f.plan.tuesday, ...f.plan.wednesday].map(c => c.id));
   const recovered = completionStatus(state, f.plan, staleManifest, false);
-  assert.equal(recovered.status, 'completed'); assert.equal(recovered.errorCode, null);
+  assert.equal(recovered.status, 'completed'); assert.equal(recovered.errorCode, null); assert.equal(recovered.phase, null);
   assert.equal(state.settings.evaluationMaintenance, null);
   assert.equal(finalizedCompletion(state, f.registry, f.plan), '2026-11-13T03:00:00Z');
+});
+test('Wednesday starts before resuming the existing interrupted Tuesday job and preserves every saved answer', async () => {
+  const f = prepared(), operations = [];
+  // The two older Gemma repairs are already complete at this production restart.
+  for (const retry of completionRetry(f.plan)) Object.assign(f.state.tasks.find(task => task.id === retry.taskId), { status: 'completed', error: null });
+  const tuesday = { id: 'existing-tuesday', idempotencyKey: COMPLETION_KEYS.tuesday, purpose: 'operational', mode: 'dual',
+    maintenanceId: RECOVERY_ID, conversationIds: f.plan.tuesday.map(c => c.id), modelProfiles: f.plan.profiles,
+    catalogVersions: catalogReferences(f.state.catalog), status: 'interrupted', concurrency: 1, executionOrder: 'conversation-first' };
+  f.state.jobs.push(tuesday);
+  for (const [index, source] of f.plan.tuesday.entries()) for (const profile of f.plan.profiles) {
+    const partial = index === 3 && profile.id === 'clef-local';
+    const completed = index < 3;
+    const c = f.state.conversations.find(row => row.id === source.id);
+    const results = f.state.catalog.slice(0, completed ? 2 : partial ? 1 : 0).map(v => ({ variableId: v.id, type: v.type,
+      method: v.method, status: 'evaluado', value: 0, evidence: [], reason: 'Existing Tuesday answer' }));
+    const task = { id: `existing-${source.id}-${profile.id}`, jobId: tuesday.id, conversationId: source.id, profile,
+      fallback: null, context: evaluationContext(c, f.state.catalog), codeResults: [], status: completed ? 'completed' : partial ? 'partial' : 'pending',
+      error: partial ? { code: 'AI_CONFIGURATION', message: 'Synthetic interruption' } : null,
+      evaluationId: results.length ? `existing-evaluation-${source.id}-${profile.id}` : null,
+      profileStates: { [profile.id]: { model: profile.model, results, validationErrors: [] } } };
+    f.state.tasks.push(task);
+    if (results.length) f.state.evaluations.push({ id: task.evaluationId, jobId: tuesday.id, taskId: task.id,
+      conversationId: source.id, profileId: profile.id, purpose: 'operational', partial, results: structuredClone(results) });
+  }
+  const store = memory(f), before = await store.read();
+  const completedBefore = before.tasks.filter(task => task.status === 'completed');
+  const partialBefore = before.tasks.find(task => task.jobId === tuesday.id && task.status === 'partial');
+  const startBatch = async (guarded, _registry, options) => {
+    operations.push(['start', options.idempotencyKey]);
+    assert.equal(options.idempotencyKey, COMPLETION_KEYS.wednesday);
+    assert.deepEqual(options.conversationIds, f.plan.wednesday.map(c => c.id));
+    assert.deepEqual(options.modelIds, COMPLETION_MODELS); assert.equal(options.concurrency, 1);
+    const current = await guarded.read();
+    assert.deepEqual(current.tasks.filter(task => task.jobId === tuesday.id), before.tasks.filter(task => task.jobId === tuesday.id));
+    const job = { id: 'new-wednesday', idempotencyKey: COMPLETION_KEYS.wednesday, purpose: 'operational', mode: 'dual',
+      maintenanceId: RECOVERY_ID, conversationIds: options.conversationIds, modelProfiles: f.plan.profiles, status: 'completed' };
+    await guarded.transaction(state => {
+      state.jobs.push(job);
+      state.tasks.push(...options.conversationIds.flatMap(id => f.plan.profiles.map(profile => ({ id: `wednesday-${id}-${profile.id}`,
+        jobId: job.id, conversationId: id, profile, status: 'completed' }))));
+    });
+    return { job, completion: Promise.resolve(job) };
+  };
+  const resumeBatch = async (guarded, _registry, jobId, options) => {
+    operations.push(['resume', jobId]);
+    assert.equal(jobId, tuesday.id); assert.deepEqual(options.conversationIds, tuesday.conversationIds);
+    const current = await guarded.read();
+    assert.equal(current.tasks.filter(task => task.jobId === 'new-wednesday' && task.status === 'completed').length, 86);
+    assert.equal(assertPhaseJob(current, f.plan, 'tuesday').id, tuesday.id);
+    await guarded.transaction(state => {
+      for (const task of state.tasks.filter(row => row.jobId === jobId && row.status !== 'completed')) Object.assign(task, { status: 'completed', error: null });
+      state.jobs.find(job => job.id === jobId).status = 'completed';
+    });
+    return { job: { id: jobId }, completion: Promise.resolve() };
+  };
+  await executeCompletion(store, f.registry, f.plan, { startBatch, resumeBatch });
+  assert.deepEqual(operations, [['start', COMPLETION_KEYS.wednesday], ['resume', tuesday.id]]);
+  const after = await store.read(), status = completionStatus(after, f.plan);
+  assert.equal(after.jobs.filter(job => job.idempotencyKey === COMPLETION_KEYS.tuesday).length, 1);
+  assert.equal(after.tasks.filter(task => task.jobId === tuesday.id).length, 334);
+  for (const task of completedBefore) assert.deepEqual(after.tasks.find(row => row.id === task.id), task);
+  assert.deepEqual(after.tasks.find(task => task.id === partialBefore.id).profileStates, partialBefore.profileStates);
+  assert.deepEqual(after.evaluations, before.evaluations); assert.deepEqual(after.settings, before.settings);
+  assert.deepEqual(after.tasks.find(task => task.id === f.plan.excluded[0].taskId), before.tasks.find(task => task.id === f.plan.excluded[0].taskId));
+  assert.equal(status.completedConversations, 212); assert.equal(status.completedModelTasks, 422); assert.equal(status.preservedCompletedTasks, 725);
+  await executeCompletion(store, f.registry, f.plan, { startBatch, resumeBatch });
+  assert.equal(operations.length, 2); assert.equal(f.calls.length, 0);
 });
 test('concurrency starts at one and requires ten completed fresh conversations before a controlled increase', () => {
   const f = prepared(); assert.equal(f.state.settings.tuesdayWednesdayCompletion.concurrency, 1);
