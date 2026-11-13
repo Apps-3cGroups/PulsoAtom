@@ -62,7 +62,7 @@ export const runStatusLabel = run => ({
   waiting_evaluation: 'Esperando que termine la evaluación en curso', running: 'Evaluación en curso',
   completed: 'Evaluación completada', partial: 'Evaluación finalizada con pendientes', failed: 'La evaluación requiere revisión',
   blocked: 'La corrida requiere revisión antes de continuar', not_started: 'La corrida no pudo iniciar durante la jornada',
-  superseded: 'Sustituida por la carga completa del jueves',
+  superseded: 'Sustituida por la evaluación del jueves · máximo 200 por país',
 }[run.status] || run.status);
 export function publicOneOffRuns(state) {
   return oneOffRuns(state.settings).filter(run => run.enabled).map(run => {

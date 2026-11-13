@@ -34,7 +34,7 @@ export function dailyActivityRequest(settings, runDate) {
       ...(handoff ? { handoffId: handoff.id, handoffScopeHash: handoff.scopeHash } : {}) },
     countries: [...settings.dailyCountries], modelIds: [...settings.dailyModelIds], pendingOnly: false, includeOpen: true,
     executionOrder: handoff ? 'conversation-first' : 'model-first', concurrency: handoff?.concurrency ?? settings.dailyConcurrency ?? 1,
-    ...(!handoff && settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}) };
+    ...(handoff ? { limitPerCountry: handoff.limitPerCountry } : settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}) };
 }
 export function validateDailyActivityRequest(settings, options) {
   const expected = dailyActivityRequest(settings, options.scheduleDate);
@@ -50,33 +50,51 @@ export function sameDailyCohort(job, options) {
     && digest((job.modelProfiles || []).map(p => p.id).sort()) === digest([...options.modelIds].sort());
 }
 
-// Count unique conversations across all imports for the same activity day.
-// Freeze the country on jobs so later source changes cannot replenish a quota.
-export function dailyAssignedCounts(state, options) {
-  const countries = new Map(state.conversations.map(c => [c.id, c.country]));
-  const assigned = new Map();
-  for (const job of state.jobs.filter(j => j.dailyActivity?.date === options.dailyActivity.date
-    && j.dailyActivity.timezone === options.dailyActivity.timezone)) {
+// Stable order is shared by quota selection and coverage, independent of import order.
+export const stableDailyConversations = rows => [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id), 'en', { numeric: true }));
+// Reused pairs and new tasks consume one unique ID. Jobs freeze that ledger so
+// changed or disappearing source records cannot reopen previously consumed slots.
+export function dailyAssignedCountries(state, options, { includeReusable = true } = {}) {
+  const countries = new Map((state.conversations || []).map(c => [c.id, c.country]));
+  const assigned = new Map(), handoff = dailyHandoffFor(state.settings, options);
+  const jobs = state.jobs.filter(j => j.dailyActivity?.date === options.dailyActivity.date
+    && j.dailyActivity.timezone === options.dailyActivity.timezone).sort((a, b) =>
+      String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || String(a.id).localeCompare(String(b.id)));
+  for (const job of jobs) {
+    if (handoff) for (const [id, country] of Object.entries(job.dailyQuotaCountries || {})) if (!assigned.has(id)) assigned.set(id, country);
     for (const id of job.conversationIds) {
       const country = job.conversationCountries?.[id] || countries.get(id);
       if (!country) throw new AppError(409, 'No se pudo verificar el país de una conversación ya asignada.', 'DAILY_COUNTRY_UNKNOWN');
-      assigned.set(id, country);
+      if (!assigned.has(id)) assigned.set(id, country);
     }
   }
-  const handoff = dailyHandoffFor(state.settings, options);
-  if (handoff) for (const c of state.conversations || []) {
-    if (handoff.countries.includes(c.country) && activityOnDate(c, handoff.activityDate, handoff.timezone)
-      && completedOperationalPair(state, c, handoff.profiles)) assigned.set(c.id, c.country);
+  if (handoff && includeReusable) {
+    const counts = countsOf(assigned);
+    for (const c of stableDailyConversations(state.conversations || [])) {
+      if (assigned.has(c.id) || !handoff.countries.includes(c.country)
+        || (counts[c.country] || 0) >= options.limitPerCountry
+        || !activityOnDate(c, handoff.activityDate, handoff.timezone)
+        || !completedOperationalPair(state, c, handoff.profiles)) continue;
+      assigned.set(c.id, c.country); counts[c.country] = (counts[c.country] || 0) + 1;
+    }
   }
-  return [...assigned.values()].reduce((counts, country) => ({ ...counts, [country]: (counts[country] || 0) + 1 }), {});
+  return assigned;
+}
+const countsOf = assigned => [...assigned.values()].reduce((counts, country) => ({ ...counts, [country]: (counts[country] || 0) + 1 }), {});
+export const dailyAssignedCounts = (state, options) => countsOf(dailyAssignedCountries(state, options));
+export function hasNewDailyQuotaEntries(state, options) {
+  if (!dailyHandoffFor(state.settings, options)) return false;
+  const frozen = dailyAssignedCountries(state, options, { includeReusable: false });
+  return [...dailyAssignedCountries(state, options).keys()].some(id => !frozen.has(id));
 }
 export function withinDailyLimit(state, candidates, options) {
   if (options.limitPerCountry == null) return candidates;
   if (!Number.isInteger(options.limitPerCountry) || options.limitPerCountry < 1 || options.limitPerCountry > 1000) {
     throw new AppError(422, 'El límite por país es inválido.', 'INVALID_DAILY_LIMIT');
   }
-  const used = dailyAssignedCounts(state, options);
-  return candidates.filter(c => {
+  const handoff = dailyHandoffFor(state.settings, options), assigned = dailyAssignedCountries(state, options), used = countsOf(assigned);
+  return (handoff ? stableDailyConversations(candidates) : candidates).filter(c => {
+    if (handoff && assigned.has(c.id)) return true;
     if ((used[c.country] || 0) >= options.limitPerCountry) return false;
     used[c.country] = (used[c.country] || 0) + 1;
     return true;
