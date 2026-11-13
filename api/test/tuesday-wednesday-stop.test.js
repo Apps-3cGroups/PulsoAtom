@@ -34,10 +34,20 @@ test('timeout leaves live worker untouched after SIGTERM with no SIGKILL or mani
     signal: (...args) => signals.push(args), pause: async () => { waits++; }, maxWaitMs: 300 }), error => error.code === 'WORKER_STOP_TIMEOUT');
   assert.deepEqual(signals, [[12345, 'SIGTERM']]); assert.equal(waits, 3); assert.deepEqual(value, before);
 });
-test('PID replacement while waiting stops safely without signaling the replacement', async () => {
+test('temporary empty or changed identity after SIGTERM waits for positive death proof', async () => {
+  let checks = 0, waits = 0; const signals = [];
+  const result = await stopOwnedWorker(manifest(), { inspect: async () => {
+    checks++;
+    if (checks === 2) throw Object.assign(new Error(), { code: 'WORKER_IDENTITY_CHANGED' });
+    return { alive: checks === 1 };
+  }, signal: (...args) => signals.push(args), pause: async () => { waits++; } });
+  assert.deepEqual(signals, [[12345, 'SIGTERM']]); assert.equal(checks, 3); assert.equal(waits, 1);
+  assert.deepEqual(result, { stopped: true, workerAlive: false });
+});
+test('a replacement or uncertain live PID times out without signaling the replacement or declaring death', async () => {
   let checks = 0; const signals = [];
   await assert.rejects(stopOwnedWorker(manifest(), { inspect: async () => {
     if (++checks > 1) throw Object.assign(new Error(), { code: 'WORKER_IDENTITY_CHANGED' }); return { alive: true };
-  }, signal: (...args) => signals.push(args), pause: async () => {} }), error => error.code === 'WORKER_IDENTITY_CHANGED');
+  }, signal: (...args) => signals.push(args), pause: async () => {}, maxWaitMs: 300 }), error => error.code === 'WORKER_STOP_TIMEOUT');
   assert.deepEqual(signals, [[12345, 'SIGTERM']]);
 });

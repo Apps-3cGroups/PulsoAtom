@@ -43,7 +43,14 @@ export async function stopOwnedWorker(manifest, { inspect = processState, signal
   // --worker identity must agree before sending this one graceful signal.
   try { signal(manifest.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
   for (let waited = 0; waited <= maxWaitMs; waited += 100) {
-    if (!(await inspect(manifest.pid, workerScript)).alive) return { stopped: true, workerAlive: false };
+    try {
+      if (!(await inspect(manifest.pid, workerScript)).alive) return { stopped: true, workerAlive: false };
+    } catch (error) {
+      // Linux can expose an empty cmdline while a signaled process exits.
+      // This is uncertainty, never proof of death: keep waiting for ESRCH or
+      // a zombie, send no more signals, and time out if identity stays unknown.
+      if (error.code !== 'WORKER_IDENTITY_CHANGED') throw error;
+    }
     if (waited < maxWaitMs) await pause(100);
   }
   // A still-live or changed process is never escalated to SIGKILL, and its
