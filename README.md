@@ -124,6 +124,8 @@ En modo real, un administrador autenticado puede usar las rutas `/pulsoAtom/api/
 
 Resumen permite seleccionar Crítico, Menor, Positivo, Refutado y Humano; Activas ofrece únicamente Crítico, Menor y Positivo. Ambas vistas ocultan conversaciones sin evaluación o pendientes de revisión de un modelo, y conservan las evaluadas con incidencias. Activas filtra antes de paginar y ordena por cantidad de críticos, menores, positivos y actividad reciente. Las marcas humanas vigentes mantienen su clasificación; las refutadas no aparecen en Activas.
 
+Resumen aplica un desfase de un día en Honduras: Ayer, 3 días (inicial) y 30 días terminan en el día anterior, sin incluir hoy. El viernes 13/11/2026, el mapa de 3 días muestra jueves 12, miércoles 11 y martes 10. Los filtros y el retorno desde detalle se conservan; la demo mantiene su corte sintético. Véase [Fechas del Resumen](docs/FECHAS_RESUMEN.md).
+
 Accesos → Tamaño de letra guarda una escala global de 1 a 2 en pasos de 0.1. El valor 1 conserva el tamaño original y 2 duplica los textos. Guardar aplica el cambio inmediatamente; los demás usuarios lo reciben al recargar. Restablecer a 1 modifica el formulario y requiere Guardar. La configuración visual usa una versión independiente de la programación de evaluaciones.
 
 `GET/PATCH /pulsoAtom/api/access/appearance` requiere administrador; PATCH recibe `{ fontScale, expectedVersion }` y responde `{ appearance }`. `/meta` expone solamente `appearance.fontScale`, también para el inicio de sesión. No se requiere migración estructural. `/active` acepta `figures` con categorías separadas por comas: omitirlo selecciona todas y enviarlo vacío no selecciona ninguna.

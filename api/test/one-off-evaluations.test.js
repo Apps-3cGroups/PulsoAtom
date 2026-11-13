@@ -94,6 +94,8 @@ test('Activas API paginates across countries and excludes NEW and closed chats',
  const { default: request } = await import('supertest');
  const { createApp } = await import('../src/app.js');
  const { state, store, registry } = fixture();
+ // Exercise ordinary source states independently of today's exceptional Friday window.
+ state.settings.oneOffEvaluations = [];
  state.users.push({ id: 'demo-admin', role: 'admin', active: true, name: 'QA' });
  state.countries = [{ code: 'HN', name: 'Honduras' }, { code: 'PA', name: 'Panamá' }];
  state.conversations = Array.from({ length: 30 }, (_, i) => ({ ...chat(String(i), i % 2 ? 'PA' : 'HN'), sourceState: 'ABIERTO', completed: false, sourceClosedAt: null }));

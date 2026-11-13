@@ -1,6 +1,7 @@
 import { digest, sourceFingerprint, rememberSourceFingerprint } from './evaluation-context.js';
 import { localMidnight, nextDate } from './overview-query.js';
 import { oneOffRuns } from './one-off-evaluations.js';
+import { isThursdayIngestionRun, readThursdayIngestionSnapshot } from './thursday-ingestion.js';
 import mysql from 'mysql2/promise';
 import { AppError } from './errors.js';
 
@@ -217,6 +218,7 @@ export class AtomReader {
     });
   }
   async readIngestionSnapshot(run) {
+    if (isThursdayIngestionRun(run)) return readThursdayIngestionSnapshot(this, run);
     const { batches: b, documents: d, conversations: c, countries: p } = this.tables;
     const [rows] = await this.pool.execute(`SELECT l.IdLoteIngesta AS id, l.Estado AS status, p.ISO_Code2 AS country
       FROM ${b} l LEFT JOIN ${d} d ON d.IdLoteIngesta = l.IdLoteIngesta

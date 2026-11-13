@@ -10,7 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { StyleProvider, createCache, extractStyle } from '@ant-design/cssinjs';
 import { createServer } from 'vite';
 
-let vite, cacheDir, Summary, Active, ConversationEntry, PortalContext;
+let vite, cacheDir, Summary, CompactSummaryMap, Active, ConversationEntry, PortalContext;
 before(async () => {
   cacheDir = await mkdtemp(join(tmpdir(), 'pulso-summary-overlays-'));
   vite = await createServer({
@@ -21,6 +21,7 @@ before(async () => {
     optimizeDeps: { noDiscovery: true, include: [] },
   });
   ({ default: Summary } = await vite.ssrLoadModule('/src/pages/Summary.jsx'));
+  ({ default: CompactSummaryMap } = await vite.ssrLoadModule('/src/components/CompactSummaryMap.jsx'));
   ({ default: Active, ConversationEntry } = await vite.ssrLoadModule('/src/pages/Active.jsx'));
   ({ PortalContext } = await vite.ssrLoadModule('/src/hooks.js'));
 });
@@ -55,6 +56,8 @@ for (const days of [1, 3, 30]) {
         h(PortalContext.Provider, { value: { bootstrap } }, h(Summary)))));
     assert.match(html, /aria-label="Países del resumen"/);
     assert.match(html, />Excepciones<\/span>/);
+    assert.match(html, />Ayer<\/button>/);
+    assert.doesNotMatch(html, />Hoy<\/button>/);
     assert.equal((html.match(/aria-pressed="true"/g) || []).length, 6); // five exceptions and selected period
     assert.match(html, /data-icon="down"/);
     assert.doesNotMatch(html, /data-icon="search"/);
@@ -66,6 +69,12 @@ for (const days of [1, 3, 30]) {
       `Un tooltip (${tooltip}) puede bloquear las opciones del filtro (${menu})`);
   });
 }
+
+test('the compact monthly map labels its actual last included date instead of today', () => {
+  const html = renderToString(h(CompactSummaryMap, { groups: [], days: ['2026-11-12'], visible: [], classification: 'all' }));
+  assert.match(html, /12 nov/);
+  assert.doesNotMatch(html, /Ahora|hoy/);
+});
 
 test('Activas renders only three selectable exceptions and a country arrow, including explicit empty selection', () => {
   const bootstrap = { countries: [{ code: 'PA', name: 'Panamá' }] };
