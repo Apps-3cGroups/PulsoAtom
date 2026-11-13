@@ -371,7 +371,7 @@ jobs:
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}
     name: Deploy PulsoAtom to Server 214
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 20
+    timeout-minutes: 60
     defaults:
       run:
         shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
@@ -486,8 +486,20 @@ jobs:
           TOKEN_FILE="${1:-}"
           ASKPASS=""
           MONITOR_BACKUP=""
+          LEASE_SCRIPT=""
+          LEASE_ID=""
+          TARGET_SHA="__TARGET_SHA__"
+          LEASE_OWNER="github:__RUN_ID__:__RUN_ATTEMPT__"
 
           cleanup() {
+            # Failure never releases an acquired maintenance lease automatically.
+            # This keeps new work blocked until the failed release is reviewed.
+            if [ -n "${LEASE_ID:-}" ]; then
+              echo "Deployment maintenance retained: $LEASE_ID (owner $LEASE_OWNER)" >&2
+            fi
+            if [ -n "${LEASE_SCRIPT:-}" ] && [ -f "$LEASE_SCRIPT" ]; then
+              rm -f "$LEASE_SCRIPT"
+            fi
             if [ -n "${MONITOR_BACKUP:-}" ] && [ -d "$MONITOR_BACKUP/monitor-evaluaciones" ]; then
               mkdir -p "$WEB/dist"
               cp -a "$MONITOR_BACKUP/monitor-evaluaciones" "$WEB/dist/"
@@ -527,12 +539,6 @@ jobs:
           [ "$(git remote get-url origin)" = "$REPO_URL" ] || fail "Unexpected origin URL; no changes made."
 
 
-          echo "Checking working tree before pull"
-          git status --short
-          status_output="$(git status --porcelain)"
-          if [ -n "$status_output" ]; then
-            fail "Unexpected working tree changes; inspect them before deploying."
-          fi
 
           ASKPASS="$(mktemp /tmp/pulso-atom-askpass.XXXXXX)"
           cat > "$ASKPASS" <<'ASKPASS_SCRIPT'
@@ -549,17 +555,39 @@ jobs:
           export GH_TOKEN_FILE="$TOKEN_FILE"
           export GIT_TERMINAL_PROMPT=0
 
-          echo "Pulling main with ff-only"
+          echo "Fetching the exact requested main revision before changing the checkout"
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || fail "Invalid target revision."
           PREVIOUS_HEAD="$(git rev-parse HEAD)"
-          git pull --ff-only origin main
-          [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] || fail "Local commits differ from remote main; deployment stopped."
+          git fetch origin main
+          [ "$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA" ] || fail "Main changed since dispatch; no deployment started."
+          git merge-base --is-ancestor "$PREVIOUS_HEAD" "$TARGET_SHA" || fail "Deployment must fast-forward the current checkout."
+          unset GIT_ASKPASS GH_TOKEN_FILE GIT_TERMINAL_PROMPT
+
+          # Read the guard from the approved target before touching production files.
+          LEASE_SCRIPT="$(mktemp --suffix=.mjs /tmp/pulso-deployment-lease.XXXXXX)"
+          git show "$TARGET_SHA:api/scripts/deployment-lease.mjs" > "$LEASE_SCRIPT"
+          chmod 600 "$LEASE_SCRIPT"
+          node "$LEASE_SCRIPT" --check-working-tree
 
           API_DEPLOY_REQUIRED=true
-          if [ "$PREVIOUS_HEAD" != "$(git rev-parse HEAD)" ] && git diff --quiet "$PREVIOUS_HEAD" HEAD -- api/ ecosystem.config.js web/server.js web/package.json web/package-lock.json package.json package-lock.json; then
+          if [ "$PREVIOUS_HEAD" != "$TARGET_SHA" ] && git diff --quiet "$PREVIOUS_HEAD" "$TARGET_SHA" -- api/ ecosystem.config.js web/server.js web/package.json web/package-lock.json package.json package-lock.json; then
             API_DEPLOY_REQUIRED=false
           fi
+          case "$API_DEPLOY_REQUIRED" in
+            true)
+              candidate_lease="deployment:$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
+              echo "Waiting for idle evaluation state before claiming $candidate_lease (owner $LEASE_OWNER)"
+              node --env-file="$API/.env" "$LEASE_SCRIPT" --claim --id "$candidate_lease" --revision "$TARGET_SHA" --owner "$LEASE_OWNER" --wait-idle-seconds 2700
+              LEASE_ID="$candidate_lease"
+              ;;
+          esac
 
-          unset GIT_ASKPASS GH_TOKEN_FILE GIT_TERMINAL_PROMPT
+          # Recheck the checkout after any idle wait; the lease stays retained on drift.
+          [ "$(git rev-parse HEAD)" = "$PREVIOUS_HEAD" ] || fail "Production checkout changed while waiting."
+          node "$LEASE_SCRIPT" --check-working-tree
+          echo "Fast-forwarding only after the idle lease has been acquired"
+          git merge --ff-only "$TARGET_SHA"
+          [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || fail "Deployed revision changed."
 
           if [ "$API_DEPLOY_REQUIRED" = true ]; then
             if [ "$PREVIOUS_HEAD" != "$(git rev-parse HEAD)" ] && [ -d "$API/node_modules" ] && git diff --quiet "$PREVIOUS_HEAD" HEAD -- api/package.json api/package-lock.json; then
@@ -610,6 +638,11 @@ jobs:
           printf '\n'
           curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-connrefused --max-time 15 -o /dev/null -w 'WEB HTTP %{http_code}\n' http://127.0.0.1:3000/pulsoAtom/
 
+          if [ -n "$LEASE_ID" ]; then
+            node --env-file="$API/.env" "$LEASE_SCRIPT" --release --id "$LEASE_ID" --revision "$TARGET_SHA" --owner "$LEASE_OWNER"
+            LEASE_ID=""
+          fi
+
           echo "Final git status"
           git status --short --branch
 
@@ -625,7 +658,10 @@ jobs:
               Replace('__WEB__', $env:WEB).
               Replace('__REPO_URL__', $env:REPO_URL).
               Replace('__PM2_API_APP__', $env:PM2_API_APP).
-              Replace('__PM2_WEB_APP__', $env:PM2_WEB_APP)
+              Replace('__PM2_WEB_APP__', $env:PM2_WEB_APP).
+              Replace('__TARGET_SHA__', $env:GITHUB_SHA).
+              Replace('__RUN_ID__', $env:GITHUB_RUN_ID).
+              Replace('__RUN_ATTEMPT__', $env:GITHUB_RUN_ATTEMPT)
             $remoteScript = $remoteScript -replace "`r`n", "`n" -replace "`r", "`n"
             [System.IO.File]::WriteAllText($scriptPath, $remoteScript, [System.Text.UTF8Encoding]::new($false))
 

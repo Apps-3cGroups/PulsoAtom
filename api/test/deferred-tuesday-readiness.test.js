@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readDeferredTuesdayReadiness, resumeDeferredTuesdayWhenReady } from '../src/deferred-tuesday-readiness.js';
 import { COMPLETION_ID, COMPLETION_MODELS, THURSDAY_PRIORITY_ORDER, THURSDAY_PRIORITY_DEADLINE } from '../src/tuesday-wednesday-completion.js';
+import { ingestionSnapshot, ingestionBatch } from './helpers/thursday-ingestion-fixture.js';
 
 function fixture() {
   const hash = 'a'.repeat(64), scope = 'b'.repeat(64);
@@ -16,8 +17,8 @@ function fixture() {
       completionScopeHash: scope, scopeHash: hash, limitPerCountry: 200, concurrency: 1,
       activityDate: '2026-11-12', runDate: '2026-11-13', notBefore: '2026-11-13T06:01:00.000Z',
       timezone: 'America/Tegucigalpa', countries: ['HN', 'PA'], modelIds: COMPLETION_MODELS } }, jobs: [] };
-  const ingestion = { batches: [{ id: 'hn', countries: ['HN'], status: 'LISTO' }, { id: 'pa', countries: ['PA'], status: 'LISTO' }] };
-  const current = { ingestionReady: true, allReadyEvaluated: true, errors: {}, byCountry: {
+  const ingestion = ingestionSnapshot();
+  const current = { ingestionReady: true, ingestionSettled: true, allReadyEvaluated: true, errors: {}, byCountry: {
     HN: { eligibleConversations: 200, remainingConversations: 0, unavailableConversations: 0, outsideLimitConversations: 12 },
     PA: { eligibleConversations: 100, remainingConversations: 0, unavailableConversations: 0, outsideLimitConversations: 0 } } };
   const calls = [], store = {
@@ -71,4 +72,29 @@ test('changes between the initial settings snapshot and fresh source read preven
     const state = await read(options); state.jobs.push({ status: 'running' }); return state;
   };
   assert.equal((await readDeferredTuesdayReadiness(f.store, time, { coverage: f.coverage })).reason, 'EVALUATION_RUNNING');
+});
+
+test('terminal partial ingestion allows one Tuesday slice while preserving ingestion failure warnings', async () => {
+  const f = fixture();
+  f.ingestion.batches = ['HN', 'PA'].map(country => ingestionBatch({ id: country, countries: [country],
+    status: 'PARCIAL', expectedDocuments: 21, processedDocuments: 20, failedDocuments: 1 }));
+  f.current.ingestionReady = false; f.current.ingestionSettled = true;
+  const result = await readDeferredTuesdayReadiness(f.store, time, { coverage: f.coverage });
+  assert.equal(result.ready, true); assert.equal(result.ingestion.ready, false); assert.equal(result.ingestion.settled, true);
+  assert.equal(result.ingestion.failedDocuments, 2); assert.equal(result.coverage.ingestionReady, false);
+  assert.equal(f.calls.filter(call => call[0] === 'ingestion').length, 2);
+  f.current.errors.AI_INCOMPLETE = 1;
+  assert.equal((await readDeferredTuesdayReadiness(f.store, time, { coverage: f.coverage })).ready, false);
+});
+
+test('new ingestion during the source read prevents Tuesday even when old coverage is complete', async () => {
+  for (const change of [
+    f => f.ingestion.batches.push(ingestionBatch({ id: 'new-active', status: 'PROCESANDO', finishedAt: null })),
+    f => f.ingestion.batches.push(ingestionBatch({ id: 'new-complete' })),
+    f => { f.ingestion.batches[0].updatedAt = '2026-11-13 01:00:00.000000'; },
+  ]) {
+    const f = fixture(), read = f.store.readWithConversations;
+    f.store.readWithConversations = async options => { const state = await read(options); change(f); return state; };
+    assert.equal((await readDeferredTuesdayReadiness(f.store, time, { coverage: f.coverage })).reason, 'THURSDAY_INGESTION_CHANGED');
+  }
 });

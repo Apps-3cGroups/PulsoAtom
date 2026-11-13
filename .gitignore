@@ -233,3 +233,6 @@ coverage/
 .DS_Store
 playwright-report/
 test-results/
+
+# Private index backups from the verified static portal installer.
+/web/.static-backups/
