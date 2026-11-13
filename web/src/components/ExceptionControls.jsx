@@ -1,3 +1,4 @@
+import { countryLabel, countryMatchesSearch } from '../services/presentationText';
 import { Select } from 'antd';
 import { DownOutlined } from '@ant-design/icons';
 import { Mark } from './common';
@@ -13,8 +14,8 @@ export function ExceptionsFilter({ kinds, selected, onToggle }) {
 }
 
 export function CountrySelect({ countries, value, onChange, label }) {
-  return <Select mode="multiple" maxTagCount="responsive" allowClear showSearch optionFilterProp="label"
+  return <Select mode="multiple" maxTagCount="responsive" allowClear showSearch optionFilterProp="label" filterOption={countryMatchesSearch}
     aria-label={label} placeholder="Países" suffixIcon={<DownOutlined className="country-select-chevron" />}
-    value={value} onChange={onChange} options={countries.map(c => ({ label: c.name, value: c.code }))}
+    value={value} onChange={onChange} options={countries.map(c => ({ label: countryLabel(c.code, c.name), value: c.code }))}
     className="country-multiselect country-dropdown" styles={{ popup: { root: { zIndex: 1100 } } }} />;
 }

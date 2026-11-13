@@ -1,3 +1,4 @@
+import { catalogText } from '../services/presentationText';
 import { classificationOf } from '../services/flags';
 import { modelResultStatus } from '../services/modelReview';
 import { Tag } from 'antd';
@@ -30,6 +31,6 @@ export default function FlagModelComparison({ variable, demo }) {
       </article>;
     })}</div>
     {comparison.detections === 2 && <p className="flag-evidence-note">{comparison.commonEvidence ? 'Ambos modelos citan al menos un mensaje en común.' : 'Los modelos citan mensajes diferentes.'}</p>}
-    <details className="flag-criterion"><summary>Criterio evaluado · versión {variable.version}</summary><p>{variable.definition}</p>{variable.condition && <p>{variable.condition}</p>}</details>
+    <details className="flag-criterion"><summary>Criterio evaluado · versión {variable.version}</summary><p>{catalogText(variable.definition)}</p>{variable.condition && <p>{catalogText(variable.condition)}</p>}</details>
   </section>;
 }
