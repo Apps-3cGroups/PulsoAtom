@@ -11,7 +11,13 @@ const decode=v=>typeof v==='string'?JSON.parse(v):v;
 const allowed=new Set('the a an is are was were to of for with in on from and or than when but this that not does can cannot failed failure error invalid input output prompt context length window tokens token max_tokens n_keep n_ctx model schema json grammar format request response maximum minimum exceeded exceeds limit too large small long short load loaded loading memory available unavailable prediction predicting generate generation decoding keep truncation truncate overflow overflows trying first please reduce number exceeds exceed messages message system user assistant role roles content expected found required properties additionalproperties array object integer string boolean null oneof anyof allof type items enum const property must be has have got supported unsupported support schema json_schema response_format constraint constraints size total requested available remaining insufficient internal validation value values syntax identifier eos bos chat template mismatch only at least greater less than equal context_length_exceeded context_window_exceeded input_context_length_exceeded status invalid_request_error bad_request'.split(' '));
 function classify(value,depth=0){
  if(depth>4)return null;
- if(typeof value==='string')return {bytes:Buffer.byteLength(value),sha256:createHash('sha256').update(value).digest('hex'),pattern:value.slice(0,3000).toLowerCase().split(/\s+/).map(w=>/^\d{1,7}$/.test(w)?w:allowed.has(w.replace(/[^a-z_]/g,''))?w.replace(/[^a-z_]/g,''):'[redacted]').join(' ')};
+ if(typeof value==='string')return {bytes:Buffer.byteLength(value),sha256:createHash('sha256').update(value).digest('hex'),pattern:value.slice(0,3000).toLowerCase().split(/\s+/).map(w=>/^\d{1,7}$/.test(w)?w:allowed.has(w.replace(/[^a-z_]/g,''))?w.replace(/[^a-z_]/g,''):'[redacted]').join(' '),memoryShape:{
+   providerPredictionPrefix:/^Error in [\w .-]{1,80} prediction[:.]/i.test(value),traceback:value.includes('Traceback (most recent call last):'),
+   newlineCount:(value.match(/\n/g)||[]).length,escapedNewlines:(value.match(/\\n/g)||[]).length,
+   metalException:value.includes('[METAL] Command buffer execution failed: Insufficient Memory'),outOfMemoryCallback:value.includes('kIOGPUCommandBufferCallbackErrorOutOfMemory'),
+   terminalException:/RuntimeError:\s*\[METAL\][^\r\n]*OutOfMemory\)\s*$/.test(value),
+   exceptionSuffix: value.slice(-250).split(/\s+/).map(w=>/^(?:RuntimeError:|\[METAL\]|Command|buffer|execution|failed:|Insufficient|Memory|\(00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory\))$/.test(w)?w:'[redacted]').join(' ')
+ }};
  if(!value||typeof value!=='object'||Array.isArray(value))return null;
  return Object.fromEntries(['message','error','detail','code','type','param'].filter(k=>Object.hasOwn(value,k)).map(k=>[k,classify(value[k],depth+1)]));
 }
