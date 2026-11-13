@@ -38,16 +38,18 @@ export class GatewayEvaluator {
     return { catalog, models: models.response, requestId: models.requestId };
   }
   async evaluate(conversation, variables, options) {
-    const canDivide = error => error.code === 'AI_CONTEXT_LIMIT'
+    const boundedFailure = error => ['AI_CONTEXT_LIMIT', 'AI_RESOURCE_LIMIT'].includes(error.code);
+    const canDivide = error => boundedFailure(error)
       || (error.code === 'AI_TRANSIENT' && error.details?.upstreamStatus === 504);
-    // The local Gemma runtime times out on the 47-item checklist. Bound its
-    // requests while retaining every source message and each variable's rules.
+    // These local runtimes can exceed time/memory limits on the full checklist.
+    // Bound their first request while retaining all source and variable rules.
     let reason = 'checklist-size';
-    if (!this.model.startsWith('gemma-') || variables.length <= 8) {
+    const partitionChecklist = this.model.startsWith('gemma-') || this.model === 'clef-flash';
+    if (!partitionChecklist || variables.length <= 8) {
       try { return await this.#evaluateSingle(conversation, variables, options); }
       catch (error) {
         if (!canDivide(error) || variables.length <= 1) throw error;
-        reason = error.code === 'AI_CONTEXT_LIMIT' ? 'context-limit' : 'gateway-timeout';
+        reason = error.code === 'AI_CONTEXT_LIMIT' ? 'context-limit' : error.code === 'AI_RESOURCE_LIMIT' ? 'memory-limit' : 'gateway-timeout';
       }
     }
     // Only the checklist/schema is partitioned; no transcript is truncated.
@@ -65,7 +67,7 @@ export class GatewayEvaluator {
       } catch (error) {
         // A timeout on an already bounded request can be an unavailable
         // runtime. Do not multiply it into a tree of further timed-out calls.
-        if (error.code === 'AI_CONTEXT_LIMIT' && group.length > 1) {
+        if (boundedFailure(error) && group.length > 1) {
           const middle = Math.ceil(group.length / 2); queue.unshift(group.slice(0, middle), group.slice(middle)); continue;
         }
         if (!answers.length) throw error;

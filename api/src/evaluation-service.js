@@ -19,7 +19,7 @@ const readHistory = (store, conversationIds) => store.readWithConversations
 const requestIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/;
 const nativeFailureCodes = new Set(['AI_CONFIGURATION', 'AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT',
   'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED', 'AI_SAFETY_REFUSAL', 'AI_INCOMPLETE', 'UNSUPPORTED_VARIABLE',
-  'EMPTY_CONVERSATION', 'UNSUPPORTED_INPUT', 'INPUT_CAPACITY_EXCEEDED', 'INVALID_GATEWAY_CATALOG', 'MODEL_UNAVAILABLE', 'AI_CONTEXT_LIMIT']);
+  'EMPTY_CONVERSATION', 'UNSUPPORTED_INPUT', 'INPUT_CAPACITY_EXCEEDED', 'INVALID_GATEWAY_CATALOG', 'MODEL_UNAVAILABLE', 'AI_CONTEXT_LIMIT', 'AI_RESOURCE_LIMIT']);
 
 // Native decisions use a separate protocol and instruction contract. Keep this
 // metadata outside the shared context so legacy Gemma fingerprints stay intact.
