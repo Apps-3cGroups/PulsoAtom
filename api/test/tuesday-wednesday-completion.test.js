@@ -101,6 +101,56 @@ test('maintenance preparation preserves scheduling, permissions and completed an
   assert.equal(f.state.settings.dailyEnabled, true); assert.equal(f.state.settings.dailyLimitPerCountry, 200); assert.equal(f.state.settings.version, 17);
   assert.deepEqual(f.state.settings.appearance, before.settings.appearance); assert.equal(f.state.settings.evaluationMaintenance, RECOVERY_ID);
 });
+test('status exposes bounded failure diagnostics without provider messages, source text or changed counts', () => {
+  const f = prepared(), target = f.state.tasks.find(task => task.id === completionRetry(f.plan)[0].taskId);
+  const baseline = completionStatus(f.state, f.plan);
+  target.error.message = 'PRIVATE_PROVIDER_TOKEN https://private.invalid HTTP 400 PRIVATE_TRANSCRIPT';
+  f.state.attempts.push({ taskId: target.id, startedAt: '2026-11-13T04:07:24.000Z', finishedAt: '2026-11-13T04:09:00.000Z',
+    error: { message: 'PRIVATE_ATTEMPT_BODY' }, request: 'PRIVATE_RAW_SOURCE' });
+  const before = structuredClone(f.state), planBefore = structuredClone(f.plan);
+  const status = completionStatus(f.state, f.plan);
+  const detail = status.failureDetails.find(row => row.conversationId === target.conversationId);
+  assert.deepEqual(detail, { conversationId: target.conversationId, profileId: 'gemma-local', status: 'partial',
+    errorCode: 'AI_CONFIGURATION', upstreamHttpStatus: 400, retainedVariableCount: 1, lastAttemptAt: '2026-11-13T04:09:00.000Z' });
+  assert.equal(status.failureDetails.length, 2);
+  assert.ok(status.failureDetails.every(row => row.conversationId !== f.plan.excluded[0].id));
+  assert.doesNotMatch(JSON.stringify(status), /PRIVATE_|private\.invalid/);
+  for (const key of ['completedConversations', 'completedModelTasks', 'remainingModelTasks', 'totalModelTasks', 'totalConversations',
+    'tuesday', 'wednesday', 'progress', 'errors', 'preservedCompletedTasks']) assert.deepEqual(status[key], baseline[key]);
+  assert.deepEqual(f.state, before); assert.deepEqual(f.plan, planBefore);
+});
+test('failure diagnostics redact invalid scalars and restrict HTTP status extraction', () => {
+  const f = prepared(), target = f.state.tasks.find(task => task.id === completionRetry(f.plan)[0].taskId);
+  target.conversationId = 'PRIVATE_ID\n<script>';
+  target.profile = { ...target.profile, id: 'PRIVATE_PROFILE' };
+  target.status = 'PRIVATE_STATUS';
+  target.error = { code: 'AI_CONFIGURATION', message: 'PRIVATE_ERROR HTTP 999 HTTP 4000' };
+  f.state.attempts.push({ taskId: target.id, startedAt: 'PRIVATE_TIMESTAMP', finishedAt: '2026-11-13T04:09:00.000Z\nPRIVATE_TIMESTAMP' });
+  let status = completionStatus(f.state, f.plan);
+  assert.deepEqual(status.failureDetails[0], { conversationId: null, profileId: null, status: 'unknown', errorCode: 'AI_CONFIGURATION', upstreamHttpStatus: null });
+  assert.doesNotMatch(JSON.stringify(status), /PRIVATE_/);
+  target.status = 'partial'; target.error.code = 'PRIVATE_CODE\n<script>';
+  status = completionStatus(f.state, f.plan);
+  assert.equal(status.failureDetails[0].errorCode, null);
+  assert.doesNotMatch(JSON.stringify(status), /PRIVATE_/);
+  target.conversationId = 'PRIVATE_ID\n'; target.status = 'PRIVATE_STATUS'; target.error.code = 'PRIVATE_CODE\n';
+  status = completionStatus(f.state, f.plan);
+  assert.equal(status.failureDetails[0].conversationId, null); assert.equal(status.failureDetails[0].errorCode, null);
+  assert.equal(status.errors.unknown, 1); assert.doesNotMatch(JSON.stringify(status), /PRIVATE_/);
+});
+test('failure diagnostics cap output at ten without capping aggregate failure counts', () => {
+  const f = prepared();
+  f.state.jobs.push({ id: 'diagnostic-job', idempotencyKey: COMPLETION_KEYS.tuesday });
+  for (let index = 0; index < 12; index++) f.state.tasks.push({ id: `diagnostic-${index}`, jobId: 'diagnostic-job',
+    conversationId: `tuesday-${index}`, profile: { id: 'clef-local' }, status: 'failed', error: { code: 'AI_CONFIGURATION', message: 'PRIVATE_ERROR HTTP 401' } });
+  for (const status of ['completed', 'pending', 'running']) f.state.tasks.push({ id: `ignored-${status}`, jobId: 'diagnostic-job',
+    conversationId: `ignored-${status}`, profile: { id: 'clef-local' }, status, error: { code: 'AI_CONFIGURATION', message: 'PRIVATE_ERROR HTTP 403' } });
+  const status = completionStatus(f.state, f.plan);
+  assert.equal(status.failureDetails.length, 10); assert.equal(status.errors.AI_CONFIGURATION, 14);
+  assert.equal(status.completedModelTasks, 1); assert.equal(status.remainingModelTasks, 421);
+  assert.ok(status.failureDetails.every(row => !row.conversationId?.startsWith('ignored-')));
+  assert.doesNotMatch(JSON.stringify(status), /PRIVATE_/);
+});
 test('manifest and frozen context reject drift before execution or duplicate assignment', () => {
   const f = prepared();
   for (const mutate of [p => p.tuesday.pop(), p => { p.retry[0].sourceHash = 'changed'; }, p => { p.protected[0].taskHash = 'changed'; }, p => { p.priorMaintenance = RECOVERY_ID; }]) {

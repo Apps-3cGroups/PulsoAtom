@@ -8,6 +8,8 @@ El resumen oculta por defecto las conversaciones sin evaluar o pendientes de una
 
 ## Corrida excepcional
 
+Actualización del 12/11/2026: la solicitud vigente sustituye la ejecución de las 10:30 por la continuación completa del jueves. Al preparar `settings.thursdayHandoff`, la entrada excepcional queda `superseded` y no puede ejecutarse por el scheduler ni por una solicitud directa. Se conserva su regla de vigencia en Activas. El alcance se determina por actividad del jueves en HN/PA, sin cupo; espera que termine la recuperación del martes/miércoles y las 00:01 del viernes. La descripción siguiente documenta la programación original de la migración, ya sustituida al preparar la continuación.
+
 La migración 003 agrega `settings.oneOffEvaluations` sin cambiar la programación diaria. Viernes 13/11/2026, desde 10:30 America/Tegucigalpa (16:30 UTC), HN y PA, Clef y Gemma, 200 conversaciones por país, concurrencia 2. La selección se realiza por lotes de ingesta iniciados ese viernes, no por fechas de mensajes. Se requiere carga LISTO en ambos países y se espera cualquier lote relevante incompleto. Los lotes sin país determinado bloquean la selección hasta poder identificarlos.
 
 El scheduler respeta mantenimiento y trabajos en curso, congela IDs de conversación/documento/lote en el trabajo y en configuración y utiliza una clave de idempotencia fija. Reanuda tareas inconclusas tras un reinicio. Una modificación incompatible de fuente/modelo/checklist queda visible como bloqueo y no se fuerza la reanudación.

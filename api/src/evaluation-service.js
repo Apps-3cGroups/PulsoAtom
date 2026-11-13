@@ -9,6 +9,8 @@ import { asRegistry } from './model-registry.js';
 import { catalogReferences, digest, ensureEvaluationState, evaluationContext, selectedEvaluation, sourceFingerprint } from './evaluation-context.js';
 import { startEvaluationHeartbeat } from './evaluation-heartbeat.js';
 import { activityOnDate, validateDailyActivityRequest, sameDailyCohort, withinDailyLimit } from './daily-activity.js';
+import { assignedHandoffVersion, dailyHandoffFor } from './daily-equivalence.js';
+import { assertThursdayRequest, withoutThursdayDuplicates } from './thursday-handoff.js';
 
 const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE'].includes(error.code);
 const running = new Map();
@@ -86,9 +88,13 @@ export async function recoverEvaluationJobs(store) {
 function pickCandidates(state, options) {
   let candidates = eligibleConversations(state, options);
   if (options.dailyActivity) {
-    const assigned = new Set(state.jobs.filter(job => sameDailyCohort(job, options)).flatMap(job => job.conversationIds));
-    candidates = candidates.filter(c => options.countries.includes(c.country) && !assigned.has(c.id)
+    const previous = state.jobs.filter(job => sameDailyCohort(job, options));
+    const assigned = new Set(previous.flatMap(job => job.conversationIds));
+    const alreadyAssigned = c => dailyHandoffFor(state.settings, options)
+      ? assignedHandoffVersion(state, c, options, previous) : assigned.has(c.id);
+    candidates = candidates.filter(c => options.countries.includes(c.country) && !alreadyAssigned(c)
       && activityOnDate(c, options.dailyActivity.date, options.dailyActivity.timezone));
+    candidates = withoutThursdayDuplicates(state, candidates, options);
   }
   if (options.conversationIds) {
     if (!Array.isArray(options.conversationIds) || !options.conversationIds.length || new Set(options.conversationIds).size !== options.conversationIds.length) throw new AppError(422, 'La lista de conversaciones para revisión es inválida.', 'INVALID_RECHECK');
@@ -126,7 +132,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const purpose = options.purpose || 'operational';
-  if (options.dailyActivity) validateDailyActivityRequest(state.settings, options);
+  if (options.dailyActivity) { validateDailyActivityRequest(state.settings, options); assertThursdayRequest(state, registry, options); }
   if (options.largeBatch && (options.largeBatch !== true || purpose !== 'operational' || options.scheduleDate
     || !options.maintenanceId || state.settings.evaluationMaintenance !== options.maintenanceId)) {
     throw new AppError(422, 'Los lotes ampliados requieren un mantenimiento explícito y coincidente.', 'INVALID_LARGE_BATCH');
@@ -188,11 +194,19 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     if (options.idempotencyKey && draft.jobs.some(j => j.idempotencyKey === options.idempotencyKey)) throw new AppError(409, 'Esta ejecución ya se registró. Consulta su progreso.', 'DUPLICATE_EXECUTION');
     if (options.dailyActivity) {
       validateDailyActivityRequest(draft.settings, options);
+      assertThursdayRequest(draft, registry, options);
+      if (withoutThursdayDuplicates(draft, candidates, options).length !== candidates.length) {
+        throw new AppError(409, 'Una conversación acaba de completar ambos modelos. Se actualizará la selección sin duplicarla.', 'DAILY_ALREADY_STARTED');
+      }
       if (withinDailyLimit(draft, candidates, options).length !== candidates.length) throw new AppError(409, 'El cupo diario ya fue asignado.', 'DAILY_ALREADY_STARTED');
       const previous = draft.jobs.filter(j => sameDailyCohort(j, options));
-      if ((!candidates.length && previous.length) || previous.some(j => j.conversationIds.some(id => candidates.some(c => c.id === id)))) {
+      const alreadyAssigned = dailyHandoffFor(draft.settings, options)
+        ? candidates.some(c => assignedHandoffVersion(draft, c, options, previous))
+        : previous.some(j => j.conversationIds.some(id => candidates.some(c => c.id === id)));
+      if ((!candidates.length && previous.length) || alreadyAssigned) {
         throw new AppError(409, 'Las conversaciones ya están asignadas a la ejecución diaria.', 'DAILY_ALREADY_STARTED');
       }
+      if (options.dailyActivity.handoffId && candidates.length) Object.assign(draft.settings.thursdayHandoff, { status: 'running', updatedAt: now() });
     } else if (options.scheduleDate) {
       if (!draft.settings.dailyEnabled || draft.settings.dailyStartedAt !== options.sourceChangedAfter) throw new AppError(409, 'La programación diaria cambió.', 'SCHEDULE_CHANGED');
       if (draft.jobs.some(j => j.scheduleDate === options.scheduleDate)) throw new AppError(409, 'La ejecución diaria ya se inició.', 'DAILY_ALREADY_STARTED');

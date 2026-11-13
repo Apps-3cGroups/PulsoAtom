@@ -2,6 +2,7 @@ import { runOneOffTick } from './one-off-scheduler.js';
 import { startEvaluationBatch, recoverEvaluationJobs, resumeEvaluationBatch } from './evaluation-service.js';
 import { asRegistry } from './model-registry.js';
 import { DAILY_ACTIVITY_MODE, dailyActivityRequest } from './daily-activity.js';
+import { thursdayRunDate, reconcileThursdayHandoff, THURSDAY_INGESTION } from './thursday-handoff.js';
 
 export function scheduleClock(now, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -12,17 +13,21 @@ export function scheduleClock(now, timezone) {
   return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
 }
 
-export async function runDailyTick(store, evaluator, now = new Date()) {
+export async function runDailyTick(store, evaluator, now = new Date(), skipHandoff = false) {
   const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   const { settings, jobs } = state;
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
+  const handoff = settings.thursdayHandoff;
+  if (handoff && handoff.status !== 'completed' && (now.toISOString() < handoff.notBefore
+    || settings.tuesdayWednesdayCompletion?.status !== 'completed')) return null;
   const registry = asRegistry(evaluator).forState(state);
   const clock = scheduleClock(now, settings.timezone);
   const manualRun = settings.dailyMode === DAILY_ACTIVITY_MODE && settings.dailyManualRunDate === clock.date;
   if (!manualRun && clock.time < settings.dailyTime) return null;
   if (settings.dailyMode === DAILY_ACTIVITY_MODE) {
     if (!manualRun && clock.date < settings.dailyStartDate) return null;
-    const options = dailyActivityRequest(settings, settings.dailyCatchupRunDate || clock.date);
+    const preparedDate = skipHandoff ? null : thursdayRunDate(settings, now);
+    const options = dailyActivityRequest(settings, preparedDate || settings.dailyCatchupRunDate || clock.date);
     for (const id of options.modelIds) registry.resolve(id);
     await recoverEvaluationJobs(store);
     const current = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
@@ -43,10 +48,16 @@ export async function runDailyTick(store, evaluator, now = new Date()) {
       throw error;
     }
     const { job, completion } = execution;
+    if (!job && options.dailyActivity.handoffId) await reconcileThursdayHandoff(store, { now });
     if (!job && settings.dailyCatchupRunDate) await store.transaction(draft => {
       if (draft.settings.dailyCatchupRunDate === settings.dailyCatchupRunDate) delete draft.settings.dailyCatchupRunDate;
     });
     completion.catch(error => console.error('Error en evaluación diaria de Pulso:', error.code || error.name));
+    // Continue checking late Thursday imports first, but an exhausted partial
+    // input must not indefinitely block subsequent ordinary activity days.
+    if (!job && options.dailyActivity.handoffId && !skipHandoff && now.toISOString() >= THURSDAY_INGESTION.expiresAt) {
+      return runDailyTick(store, evaluator, now, true);
+    }
     return job;
   }
   if (!registry.policyAvailable(state) || jobs.some(job => job.scheduleDate === clock.date)) return null;

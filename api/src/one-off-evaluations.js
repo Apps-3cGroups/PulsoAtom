@@ -37,7 +37,7 @@ export function validateOneOffRequest(state, options, candidates) {
   const invalid = () => { throw new AppError(409, 'La corrida excepcional cambió o su selección no es válida.', 'ONE_OFF_CHANGED'); };
   const currentTime = (options.oneOffClock || (() => new Date()))().toISOString();
   if (run && currentTime >= run.expiresAt) throw new AppError(409, 'La jornada terminó antes de que pudiera iniciar.', 'ONE_OFF_EXPIRED');
-  if (!run?.enabled || !request.requestedAt || request.requestedAt < run.notBefore || request.requestedAt >= run.expiresAt
+  if (!run?.enabled || run.executionSupersededBy || !request.requestedAt || request.requestedAt < run.notBefore || request.requestedAt >= run.expiresAt
     || options.purpose && options.purpose !== 'operational' || options.dailyActivity || options.scheduleDate || options.largeBatch
     || options.pendingOnly !== false || options.includeOpen !== true || options.executionOrder !== 'model-first'
     || options.concurrency !== run.concurrency || JSON.stringify(options.modelIds) !== JSON.stringify(run.modelIds)
@@ -62,6 +62,7 @@ export const runStatusLabel = run => ({
   waiting_evaluation: 'Esperando que termine la evaluación en curso', running: 'Evaluación en curso',
   completed: 'Evaluación completada', partial: 'Evaluación finalizada con pendientes', failed: 'La evaluación requiere revisión',
   blocked: 'La corrida requiere revisión antes de continuar', not_started: 'La corrida no pudo iniciar durante la jornada',
+  superseded: 'Sustituida por la carga completa del jueves',
 }[run.status] || run.status);
 export function publicOneOffRuns(state) {
   return oneOffRuns(state.settings).filter(run => run.enabled).map(run => {
