@@ -5,7 +5,7 @@ import { ModelRegistry } from '../src/model-registry.js';
 import { catalogReferences, evaluationContext, digest } from '../src/evaluation-context.js';
 import { RECOVERY_ID, RECOVERY_JOBS, recoveryPlan } from '../src/gemma-incident-recovery.js';
 import { COMPLETION_ID, COMPLETION_MODELS, makeCompletionPlan, prepareCompletion } from '../src/tuesday-wednesday-completion.js';
-import { prepareThursdayHandoff, assertThursdayRequest, thursdayCoverage, reconcileThursdayHandoff, thursdayRunDate, THURSDAY_ID, THURSDAY_INGESTION } from '../src/thursday-handoff.js';
+import { prepareThursdayHandoff, inspectThursdayHandoff, assertThursdayRequest, thursdayCoverage, reconcileThursdayHandoff, thursdayRunDate, THURSDAY_ID, THURSDAY_INGESTION } from '../src/thursday-handoff.js';
 import { dailyActivityRequest } from '../src/daily-activity.js';
 import { startEvaluationBatch } from '../src/evaluation-service.js';
 import { runDailyTick } from '../src/daily-scheduler.js';
@@ -106,12 +106,12 @@ test('durable preparation preserves protected recovery and future cap, cancels o
   assert.deepEqual(s.settings.tuesdayWednesdayCompletion, f.state.settings.tuesdayWednesdayCompletion);
   assert.equal(s.settings.evaluationMaintenance, RECOVERY_ID); assert.equal(s.settings.version, 18);
   assert.equal(s.settings.dailyLimitPerCountry, 200); assert.equal(s.settings.dailyConcurrency, 1);
-  assert.equal(s.settings.dailyCatchupRunDate, undefined); assert.equal(s.settings.thursdayHandoff.limitPerCountry, null);
+  assert.equal(s.settings.dailyCatchupRunDate, undefined); assert.equal(s.settings.thursdayHandoff.limitPerCountry, 200);
   assert.equal(s.settings.thursdayHandoff.approvedBy.includes('Mario'), true); assert.equal(s.settings.thursdayHandoffAudit.length, 1);
-  assert.equal((await request(f.store)).executionOrder, 'conversation-first'); assert.equal((await request(f.store)).limitPerCountry, undefined);
+  assert.equal((await request(f.store)).executionOrder, 'conversation-first'); assert.equal((await request(f.store)).limitPerCountry, 200);
   assert.equal((await request(f.store, '2026-11-14')).limitPerCountry, 200);
   const oneoff = s.settings.oneOffEvaluations[0]; assert.equal(oneoff.enabled, true); assert.equal(oneoff.executionSupersededBy, THURSDAY_ID);
-  assert.equal(publicOneOffRuns(s)[0].statusLabel, 'Sustituida por la carga completa del jueves');
+  assert.equal(publicOneOffRuns(s)[0].statusLabel, 'Sustituida por la evaluación del jueves · máximo 200 por país');
   assert.ok(activeReason({ ...thursday('closed'), completed: true, ingestionBatchId: 'new', ingestionStartedAt: '2026-11-13T08:00:00Z' }, s.settings, new Date('2026-11-13T17:00:00Z')));
   assert.equal(await runOneOffTick(f.store, f.registry, new Date('2026-11-13T17:00:00Z')), false);
   assert.throws(() => validateOneOffRequest(s, { oneOffRun: { id: oneoff.id }, oneOffClock: () => new Date('2026-11-13T17:00:00Z') }), e => e.code === 'ONE_OFF_CHANGED');
@@ -144,12 +144,22 @@ test('MySQL recursive object-key ordering preserves new handoff contract and old
   const altered = structuredClone(state); altered.settings.dailyCountries = ['HN'];
   assert.throws(() => assertThursdayRequest(altered, f.registry, dailyActivityRequest(altered.settings, '2026-11-13')), e => e.code === 'HANDOFF_NOT_READY');
 });
-test('Thursday selection has no200 country cap while ordinary future daily keeps it', async () => {
+test('Thursday caps200 unique IDs per country across imports and permits updated source at full quota', async () => {
   const f = await runtime(Array.from({ length: 201 }, (_, i) => thursday(`hn-${i}`)));
   const execution = await startEvaluationBatch(f.store, f.registry, await request(f.store));
-  assert.equal(execution.job.caseCount, 201); assert.equal(execution.job.total, 402); assert.equal(execution.job.limitPerCountry, null);
-  await execution.completion; assert.equal(f.calls.length, 402);
+  assert.equal(execution.job.caseCount, 200); assert.equal(execution.job.total, 400); assert.equal(execution.job.limitPerCountry, 200);
+  await execution.completion; assert.equal(f.calls.length, 400);
   const s = await f.store.read(); assert.equal(s.settings.dailyLimitPerCountry, 200); assert.equal(s.jobs[0].status, 'completed');
+  assert.equal(Object.keys(s.jobs[0].dailyQuotaCountries).length, 200);
+  assert.equal(thursdayCoverage(s).byCountry.HN.eligibleConversations, 200);
+  assert.equal(thursdayCoverage(s).byCountry.HN.outsideLimitConversations, 1);
+  assert.equal(thursdayCoverage(s).byCountry.HN.remainingConversations, 0);
+  assert.equal(await run(f), null);
+  await f.store.transaction(s => { s.conversations.push(thursday('new-pa', 'PA')); s.conversations.find(c => c.id === 'hn-0').messages[0].text += ' changed'; });
+  const updated = await run(f); assert.deepEqual(updated.conversationIds, ['hn-0', 'new-pa']); assert.equal(f.calls.length, 404);
+  assert.equal(await run(f), null);
+  assert.equal(await reconcileThursdayHandoff(f.store, { now: new Date('2026-11-14T07:00:00Z') }), true);
+  assert.equal((await f.store.read()).settings.thursdayHandoff.status, 'completed');
 });
 test('actual dual evaluations are reused across jobs and new imports run incrementally', async () => {
   const f = await runtime();
@@ -232,4 +242,33 @@ test('a Thursday partial keeps its coverage open without blocking later ordinary
   await f.store.transaction(s => s.conversations.push(thursday('late-thursday')));
   const late = await runDailyTick(f.store, f.registry, new Date('2026-11-14T08:00:00Z'));
   assert.deepEqual(late.conversationIds, ['late-thursday']); assert.equal(late.dailyActivity.handoffId, THURSDAY_ID); await drain(f.store);
+});
+
+test('persisted unlimited v20 is reported accurately and blocked until audited cap200 preparation v21', async () => {
+  const f = await preparedHandoff();
+  await f.store.transaction(s => { s.settings.version = 20; s.settings.thursdayHandoff.limitPerCountry = null; });
+  const old = await f.store.read();
+  assert.equal(inspectThursdayHandoff(old, f.registry, f.plan).limitPerCountry, null);
+  assert.throws(() => assertThursdayRequest(old, f.registry, dailyActivityRequest(old.settings, '2026-11-13')), e => e.code === 'HANDOFF_NOT_READY');
+  const result = await prepareThursdayHandoff(f.store, f.registry, f.plan, { expectedVersion: 20, expectedScopeHash: f.plan.integrityHash, concurrency: 1 });
+  assert.equal(result.settingsVersion, 21); assert.equal(result.limitPerCountry, 200);
+  const updated = await f.store.read();
+  assert.equal(inspectThursdayHandoff(updated, f.registry, f.plan).limitPerCountry, 200);
+  assert.equal(updated.settings.thursdayHandoffAudit.at(-1).previous.handoff.limitPerCountry, null);
+  assert.equal(updated.settings.evaluationMaintenance, RECOVERY_ID);
+  for (const key of ['catalog', 'tasks', 'evaluations', 'jobs', 'operationalRefs']) assert.deepEqual(updated[key], old[key]);
+});
+test('empty reuse-only jobs durably consume quota including later equivalent imports', async () => {
+  const f = await runtime([thursday('reused-a')]);
+  const historical = async id => { const e = await startEvaluationBatch(f.store, f.registry, { modelIds: COMPLETION_MODELS, conversationIds: [id], pendingOnly: false, includeOpen: true }); await e.completion; };
+  await historical('reused-a');
+  const first = await run(f); assert.equal(first.total, 0); assert.deepEqual(first.dailyQuotaCountries, { 'reused-a': 'HN' });
+  assert.equal(await run(f), null); assert.equal(f.calls.length, 2);
+  await f.store.transaction(s => s.conversations.push(thursday('reused-b'))); await historical('reused-b');
+  const later = await run(f); assert.equal(later.total, 0); assert.deepEqual(later.dailyQuotaCountries, { 'reused-a': 'HN', 'reused-b': 'HN' });
+  assert.equal(await run(f), null); assert.equal(f.calls.length, 4);
+  await f.store.transaction(s => { s.conversations = s.conversations.filter(c => c.id !== 'reused-b'); });
+  const coverage = thursdayCoverage(await f.store.read());
+  assert.equal(coverage.byCountry.HN.eligibleConversations, 2); assert.equal(coverage.byCountry.HN.unavailableConversations, 1);
+  assert.equal(coverage.byCountry.HN.remainingConversations, 1);
 });

@@ -1,6 +1,6 @@
 import { AppError } from './errors.js';
 import { digest, evaluationContext } from './evaluation-context.js';
-import { DAILY_ACTIVITY_MODE, activityOnDate } from './daily-activity.js';
+import { DAILY_ACTIVITY_MODE, activityOnDate, dailyAssignedCountries, withinDailyLimit } from './daily-activity.js';
 import { completedOperationalPair, dailyHandoffFor, assignedHandoffVersion } from './daily-equivalence.js';
 import { COMPLETION_ID, COMPLETION_MODELS, assertCompletionPlan, assertCompletionStable, finalizedCompletion, completionTasks } from './tuesday-wednesday-completion.js';
 import { RECOVERY_ID } from './gemma-incident-recovery.js';
@@ -11,7 +11,7 @@ export const THURSDAY_ACTIVITY = '2026-11-12';
 export const THURSDAY_RUN_DATE = '2026-11-13';
 export const THURSDAY_NOT_BEFORE = '2026-11-13T06:01:00.000Z';
 export const THURSDAY_INGESTION = Object.freeze({ countries: ['HN', 'PA'], ingestionFrom: '2026-11-13T06:00:00.000Z', expiresAt: '2026-11-14T06:00:00.000Z' });
-const author = 'Mario Cruz · solicitud de carga completa del jueves';
+const author = 'Mario Cruz · jueves con máximo de 200 conversaciones por país';
 const fail = (code, message) => { throw new AppError(409, message, code); };
 const contract = h => ({ id: h.id, activityDate: h.activityDate, runDate: h.runDate, timezone: h.timezone,
   completionId: h.completionId, completionScopeHash: h.completionScopeHash, notBefore: h.notBefore,
@@ -36,7 +36,7 @@ export function assertThursdayRequest(state, registry, options) {
   if (!options.dailyActivity?.handoffId) return;
   const h = dailyHandoffFor(state.settings, options);
   if (!h || h.id !== THURSDAY_ID || h.activityDate !== THURSDAY_ACTIVITY || h.runDate !== THURSDAY_RUN_DATE
-    || handoffHash(h) !== h.scopeHash || h.completionId !== COMPLETION_ID || h.limitPerCountry !== null
+    || handoffHash(h) !== h.scopeHash || h.completionId !== COMPLETION_ID || h.limitPerCountry !== 200 || options.limitPerCountry !== 200
     || ![1, 2].includes(h.concurrency) || digest(options.countries) !== digest(h.countries)
     || digest(options.modelIds) !== digest(h.modelIds) || options.dailyActivity.timezone !== h.timezone
     || state.settings.tuesdayWednesdayCompletion?.id !== COMPLETION_ID
@@ -70,6 +70,7 @@ export async function prepareThursdayHandoff(store, registry, plan, { expectedVe
     }
     const old = state.settings.thursdayHandoff;
     if (old && old.id !== THURSDAY_ID) fail('HANDOFF_CHANGED', 'Existe otra entrega pendiente.');
+    if (old && old.limitPerCountry !== 200 && state.jobs.some(j => j.dailyActivity?.handoffId === old.id)) fail('HANDOFF_ALREADY_STARTED', 'El cambio de cupo requiere que el jueves todavía no haya comenzado.');
     if (old && state.jobs.some(j => j.dailyActivity?.handoffId === old.id && j.status === 'running')) fail('EVALUATION_RUNNING', 'La ejecución del jueves ya está en curso.');
     const bound = registry.forState(state), profiles = COMPLETION_MODELS.map(id => bound.snapshot(bound.resolve(id)));
     if (profiles.some(p => p.provider !== 'gateway' || p.demo) || new Set(profiles.map(p => p.model)).size !== 2) fail('LOCAL_MODELS_REQUIRED', 'Se requieren Clef y Gemma locales y distintos.');
@@ -77,16 +78,16 @@ export async function prepareThursdayHandoff(store, registry, plan, { expectedVe
     const handoff = { id: THURSDAY_ID, version: (old?.version || 0) + 1, status: 'prepared', activityDate: THURSDAY_ACTIVITY,
       runDate: THURSDAY_RUN_DATE, timezone: 'America/Tegucigalpa', completionId: COMPLETION_ID,
       completionScopeHash: plan.integrityHash, notBefore: THURSDAY_NOT_BEFORE, countries: ['HN', 'PA'], modelIds: [...COMPLETION_MODELS],
-      profiles, context: contextOf(state.catalog), catalogDigest: digest(canonical(state.catalog)), limitPerCountry: null, concurrency,
+      profiles, context: contextOf(state.catalog), catalogDigest: digest(canonical(state.catalog)), limitPerCountry: 200, concurrency,
       preparedAt: old?.preparedAt || timestamp, updatedAt: timestamp, approvedAt: timestamp, approvedBy: author };
     handoff.scopeHash = handoffHash(handoff);
     const settings = state.settings;
     const previous = { version: settings.version, dailyEnabled: settings.dailyEnabled, dailyMode: settings.dailyMode,
       dailyTime: settings.dailyTime, dailyStartDate: settings.dailyStartDate, dailyCatchupRunDate: settings.dailyCatchupRunDate,
-      handoff: old ? { version: old.version, scopeHash: old.scopeHash, concurrency: old.concurrency } : null };
+      handoff: old ? { version: old.version, scopeHash: old.scopeHash, concurrency: old.concurrency, limitPerCountry: old.limitPerCountry } : null };
     settings.thursdayHandoff = handoff;
     settings.thursdayHandoffAudit = [...(settings.thursdayHandoffAudit || []), { action: old ? 'update' : 'prepare', author,
-      timestamp, expectedVersion, expectedScopeHash, scopeHash: handoff.scopeHash, concurrency, previous }];
+      timestamp, expectedVersion, expectedScopeHash, scopeHash: handoff.scopeHash, concurrency, limitPerCountry: 200, previous }];
     Object.assign(settings, { dailyEnabled: true, dailyMode: DAILY_ACTIVITY_MODE, dailyTime: '00:01', timezone: handoff.timezone,
       dailyStartDate: settings.dailyStartDate && settings.dailyStartDate < THURSDAY_RUN_DATE ? settings.dailyStartDate : THURSDAY_RUN_DATE,
       dailyStartedAt: settings.dailyStartedAt || timestamp, dailyCountries: [...handoff.countries], dailyModelIds: [...handoff.modelIds],
@@ -95,11 +96,11 @@ export async function prepareThursdayHandoff(store, registry, plan, { expectedVe
     if (settings.dailyCatchupRunDate && settings.dailyCatchupRunDate !== THURSDAY_RUN_DATE) delete settings.dailyCatchupRunDate;
     for (const run of settings.oneOffEvaluations || []) if (run.id === 'friday-2026-11-13-hn-pa') {
       if (state.jobs.some(j => j.oneOffRun?.id === run.id)) fail('ONE_OFF_ALREADY_STARTED', 'La corrida de las 10:30 ya tiene una ejecución.');
-      Object.assign(run, { executionSupersededBy: THURSDAY_ID, status: 'superseded', reason: 'Sustituida por la evaluación incremental completa del jueves.', updatedAt: timestamp });
+      Object.assign(run, { executionSupersededBy: THURSDAY_ID, status: 'superseded', reason: 'Sustituida por la evaluación incremental del jueves, con máximo de 200 conversaciones por país.', updatedAt: timestamp });
     }
     return { id: handoff.id, status: handoff.status, settingsVersion: settings.version, scopeHash: handoff.scopeHash,
       completionScopeHash: plan.integrityHash, activityDate: handoff.activityDate, runDate: handoff.runDate,
-      concurrency, limitPerCountry: null, approvedBy: author, approvedAt: timestamp, maintenanceRetained: settings.evaluationMaintenance === RECOVERY_ID };
+      concurrency, limitPerCountry: 200, approvedBy: author, approvedAt: timestamp, maintenanceRetained: settings.evaluationMaintenance === RECOVERY_ID };
   });
 }
 export function thursdayCoverage(state, { ingestion = null } = {}) {
@@ -108,12 +109,20 @@ export function thursdayCoverage(state, { ingestion = null } = {}) {
   const source = (state.conversations || []).filter(c => c.messages?.length && h.countries.includes(c.country) && activityOnDate(c, h.activityDate, h.timezone));
   const jobs = state.jobs.filter(j => j.dailyActivity?.handoffId === h.id);
   const assigned = new Set(jobs.flatMap(j => j.conversationIds));
-  const options = { scheduleDate: h.runDate, dailyActivity: { handoffId: h.id, handoffScopeHash: h.scopeHash } };
+  const options = { scheduleDate: h.runDate, limitPerCountry: 200, dailyActivity: {
+    date: h.activityDate, timezone: h.timezone, handoffId: h.id, handoffScopeHash: h.scopeHash } };
+  const quota = dailyAssignedCountries(state, options);
+  for (const c of withinDailyLimit(state, source, options)) if (!quota.has(c.id)) quota.set(c.id, c.country);
   const byCountry = Object.fromEntries(h.countries.map(country => {
-    const rows = source.filter(c => c.country === country), complete = rows.filter(c => completedOperationalPair(state, c, h.profiles));
-    return [country, { readyConversations: rows.length, completedConversations: complete.length,
-      reusedCompleted: complete.filter(c => !assigned.has(c.id)).length, remainingConversations: rows.length - complete.length,
-      unassignedConversations: rows.filter(c => !assignedHandoffVersion(state, c, options, jobs) && !completedOperationalPair(state, c, h.profiles)).length }];
+    const rows = source.filter(c => c.country === country), scoped = source.filter(c => quota.get(c.id) === country);
+    const complete = scoped.filter(c => completedOperationalPair(state, c, h.profiles));
+    const target = [...quota.values()].filter(value => value === country).length;
+    return [country, { readyConversations: rows.length, eligibleConversations: target,
+      completedConversations: complete.length, reusedCompleted: complete.filter(c => !assigned.has(c.id)).length,
+      remainingConversations: target - complete.length,
+      outsideLimitConversations: rows.filter(c => !quota.has(c.id)).length,
+      unavailableConversations: target - scoped.length,
+      unassignedConversations: scoped.filter(c => !assignedHandoffVersion(state, c, options, jobs) && !completedOperationalPair(state, c, h.profiles)).length }];
   }));
   const readiness = ingestion ? ingestionReadiness(ingestion, THURSDAY_INGESTION) : null;
   const errors = {};
@@ -130,12 +139,12 @@ export function inspectThursdayHandoff(state, registry, plan, { ingestion = null
   try { completionGuard(state, registry, plan); } catch (error) { blockedReason = error.code || 'HANDOFF_BLOCKED'; }
   const h = state.settings.thursdayHandoff;
   const preview = h || { id: THURSDAY_ID, activityDate: THURSDAY_ACTIVITY, countries: ['HN', 'PA'],
-    profiles: plan.profiles, timezone: 'America/Tegucigalpa' };
+    profiles: plan.profiles, timezone: 'America/Tegucigalpa', runDate: THURSDAY_RUN_DATE, limitPerCountry: 200 };
   return { checkedAt: now.toISOString(), readOnly: true, settingsVersion: state.settings.version,
     completionScopeHash: plan.integrityHash, completionId: COMPLETION_ID, completionStatus: state.settings.tuesdayWednesdayCompletion?.status,
     maintenanceActive: !!state.settings.evaluationMaintenance, priorMaintenanceClear: plan.priorMaintenance === null,
     preparationBlockedReason: blockedReason, activityDate: THURSDAY_ACTIVITY, runDate: THURSDAY_RUN_DATE,
-    notBefore: THURSDAY_NOT_BEFORE, limitPerCountry: null, futureDailyLimitPerCountry: state.settings.dailyLimitPerCountry ?? null,
+    notBefore: THURSDAY_NOT_BEFORE, limitPerCountry: h ? h.limitPerCountry : 200, futureDailyLimitPerCountry: state.settings.dailyLimitPerCountry ?? null,
     status: h?.status || 'not_prepared', concurrency: h?.concurrency ?? null,
     scopeHash: h?.scopeHash || null, approvedBy: h?.approvedBy || null, approvedAt: h?.approvedAt || null,
     oneOffSuperseded: (state.settings.oneOffEvaluations || []).some(r => r.id === 'friday-2026-11-13-hn-pa' && r.executionSupersededBy === THURSDAY_ID),
