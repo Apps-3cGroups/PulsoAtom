@@ -8,7 +8,7 @@ import { RECOVERY_ID, RECOVERY_JOBS } from '../src/gemma-incident-recovery.js';
 import { acquireBackfillLock, persistBackfillManifest } from '../src/gemma-backfill.js';
 import { startEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { COMPLETION_ID, COMPLETION_KEYS, COMPLETION_MODELS, makeCompletionPlan, selectCompletionSources,
-  assertOriginalIncident, assertCompletionPlan, assertCompletionStable, assertCompletionSource, completionSources,
+  assertOriginalIncident, assertCompletionPlan, assertCompletionStable, assertCompletionSource, completionSources, completionRetry, completionExclusions, COMPLETION_EXCLUSION_REASON,
   prepareCompletion, setCompletionConcurrency, completionStatus, completionTasks, assertPhaseJob, finishCompletion, finalizedCompletion, completionFailure as fail } from '../src/tuesday-wednesday-completion.js';
 
 const productionApi = '/var/www/nodeapps/PulsoAtom/api';
@@ -66,7 +66,7 @@ async function inspect(store, registry) {
   if (existing) return { readOnly: true, ...completionStatus(await store.read(), existing.plan, existing, (await processState(existing.pid, workerScript)).alive) };
   const incident = await readJson(incidentFile), { state, plan } = await freshPlan(store, registry, incident);
   return { readOnly: true, ready: true, ...completionStatus(state, plan),
-    scope: { retryConversations: 3, newTuesdayHN: 167, newWednesday: { HN: 20, PA: 23 } }, concurrency: 1 };
+    scope: { retryConversations: 2, excludedConversations: 1, newTuesdayHN: 167, newWednesday: { HN: 20, PA: 23 } }, concurrency: 1 };
 }
 async function copyWorker() {
   const source = fileURLToPath(new URL('../', import.meta.url));
@@ -157,7 +157,8 @@ async function start(store, registry, concurrency = 1) {
       const child = spawn(process.execPath, [`--env-file=${productionApi}/.env`, workerScript, '--worker'],
         { cwd: workerApi, env: process.env, detached: true, stdio: ['ignore', log.fd, log.fd] });
       await recordSpawnedWorker(manifest, child);
-      return { started: true, id: COMPLETION_ID, workerPid: child.pid, totalConversations: 213, totalModelTasks: 423, preservedCompletedTasks: 725, concurrency };
+      return { started: true, id: COMPLETION_ID, workerPid: child.pid, requestedConversations: 213, totalConversations: 212, excludedConversations: 1,
+        exclusions: completionExclusions(manifest.plan), totalModelTasks: 422, preservedCompletedTasks: 725, concurrency };
     } finally { await log.close(); }
   } finally { await release(); }
 }
@@ -186,7 +187,7 @@ export async function executeCompletion(store, registry, plan, { startBatch = st
     fail('COMPLETION_RETRIES_EXHAUSTED');
   };
   for (const jobId of RECOVERY_JOBS) {
-    const selected = plan.retry.filter(t => t.jobId === jobId).map(t => t.id); if (!selected.length) continue;
+    const selected = completionRetry(plan).filter(t => t.jobId === jobId).map(t => t.id); if (!selected.length) continue;
     await run('retry-tuesday', selected, s => s.jobs.find(j => j.id === jobId), () => fail('RECOVERY_JOB_MISSING'));
   }
   for (const phase of ['tuesday', 'wednesday']) {
@@ -205,7 +206,8 @@ export async function executeCompletion(store, registry, plan, { startBatch = st
 async function writeCompletedManifests(manifest, finishedAt) {
   const incident = await readJson(incidentFile);
   if (incident.id !== RECOVERY_ID || incident.plan?.id !== RECOVERY_ID) fail('INCIDENT_MANIFEST_CHANGED');
-  Object.assign(incident, { status: 'completed', errorCode: null, updatedAt: finishedAt });
+  Object.assign(incident, { status: 'partial', errorCode: null, updatedAt: finishedAt, completedAt: null,
+    exclusions: completionExclusions(manifest.plan), exclusionReason: COMPLETION_EXCLUSION_REASON });
   await persistBackfillManifest(incidentFile, incident);
   Object.assign(manifest, { status: 'completed', finishedAt, updatedAt: finishedAt, errorCode: null });
   await persistBackfillManifest(manifestFile, manifest);

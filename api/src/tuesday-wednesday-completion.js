@@ -5,6 +5,7 @@ import { RECOVERY_ID, RECOVERY_JOBS, recoveryPlan, verifyPreservedResults } from
 export const COMPLETION_ID = '8fa643d2-0c32-4cbc-88da-14959ff877cd';
 export const COMPLETION_MODELS = ['clef-local', 'gemma-local'];
 export const COMPLETION_KEYS = { tuesday: `${COMPLETION_ID}:tuesday`, wednesday: `${COMPLETION_ID}:wednesday` };
+export const COMPLETION_EXCLUSION_REASON = 'USER_AUTHORIZED_SKIP_PROVIDER_MEMORY';
 const contextKeys = ['sourceHash', 'catalogHash', 'promptHash', 'promptVersion', 'rulesVersion'];
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value ?? null;
 const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
@@ -13,7 +14,7 @@ const day = value => Number.isFinite(Date.parse(value)) ? new Date(Date.parse(va
 const ownJob = job => RECOVERY_JOBS.includes(job.id) || Object.values(COMPLETION_KEYS).includes(job.idempotencyKey);
 const immutablePlan = plan => ({ format: plan.format, id: plan.id, createdAt: plan.createdAt, maintenanceId: plan.maintenanceId,
   priorMaintenance: plan.priorMaintenance, profiles: plan.profiles, policyHash: plan.policyHash, catalogHash: plan.catalogHash,
-  retry: plan.retry, tuesday: plan.tuesday, wednesday: plan.wednesday, protected: plan.protected });
+  retry: plan.retry, excluded: plan.excluded, tuesday: plan.tuesday, wednesday: plan.wednesday, protected: plan.protected });
 
 export function assertOriginalIncident(state, incident, workerAlive = false) {
   if (incident?.id !== RECOVERY_ID || incident.plan?.id !== RECOVERY_ID || !['blocked', 'partial', 'completed'].includes(incident.status)
@@ -63,9 +64,17 @@ export function makeCompletionPlan(state, registry, incident, timestamp = new Da
     return { ...source, taskId: task.id, jobId: task.jobId, profileId: task.profile.id };
   });
   const recovery = recoveryPlan(state);
+  const excludedTasks = selected.retry.filter(task => task.profile.id === 'clef-local');
+  if (excludedTasks.length !== 1) completionFailure('EXCLUSION_SCOPE_CHANGED');
+  const excluded = excludedTasks.map(task => {
+    const evaluation = state.evaluations.find(row => row.id === task.evaluationId);
+    if (!evaluation) completionFailure('EXCLUSION_SCOPE_CHANGED');
+    return { id: task.conversationId, taskId: task.id, profileId: task.profile.id, reason: COMPLETION_EXCLUSION_REASON,
+      taskHash: digest(task), evaluationId: evaluation.id, evaluationHash: digest(evaluation) };
+  });
   const plan = { format: 1, id: COMPLETION_ID, createdAt: timestamp, maintenanceId: RECOVERY_ID,
     priorMaintenance: incident.plan.priorMaintenance, profiles, policyHash: digest(state.settings.aiPolicy), catalogHash: digest(state.catalog),
-    retry, tuesday: selected.tuesday.map(freeze), wednesday: selected.wednesday.map(freeze),
+    retry, excluded, tuesday: selected.tuesday.map(freeze), wednesday: selected.wednesday.map(freeze),
     protected: recovery.completed };
   plan.integrityHash = digest(immutablePlan(plan));
   return plan;
@@ -77,10 +86,20 @@ export function assertCompletionPlan(plan) {
     || plan.retry?.length !== 3 || plan.tuesday?.length !== 167 || plan.wednesday?.length !== 43
     || all.length !== 213 || new Set(all.map(c => c.id)).size !== 213 || plan.protected?.length !== 725
     || plan.profiles?.length !== 2 || !COMPLETION_MODELS.every((id, i) => plan.profiles[i].id === id)
+    || plan.excluded?.length !== 1 || plan.excluded[0].profileId !== 'clef-local' || plan.excluded[0].reason !== COMPLETION_EXCLUSION_REASON
+    || !plan.retry.some(task => task.id === plan.excluded[0].id && task.taskId === plan.excluded[0].taskId && task.profileId === 'clef-local')
     || [RECOVERY_ID, COMPLETION_ID].includes(plan.priorMaintenance)
     || digest(immutablePlan(plan)) !== plan.integrityHash) completionFailure('INVALID_COMPLETION_MANIFEST');
 }
 export const completionSources = plan => [...plan.retry, ...plan.tuesday, ...plan.wednesday];
+export const completionRetry = plan => plan.retry.filter(task => !plan.excluded.some(excluded => excluded.taskId === task.taskId));
+export const completionExclusions = plan => plan.excluded.map(({ id, taskId, profileId, reason }) => ({ conversationId: id, taskId, profileId, reason }));
+export function verifyCompletionExclusion(state, plan) {
+  for (const excluded of plan.excluded) {
+    const task = state.tasks.find(row => row.id === excluded.taskId), evaluation = state.evaluations.find(row => row.id === excluded.evaluationId);
+    if (!task || !evaluation || digest(task) !== excluded.taskHash || digest(evaluation) !== excluded.evaluationHash) completionFailure('EXCLUDED_RECORD_CHANGED');
+  }
+}
 export function assertCompletionStable(state, registry, plan) {
   assertCompletionPlan(plan);
   if (state.settings.evaluationMaintenance !== RECOVERY_ID || state.settings.tuesdayWednesdayCompletion?.id !== COMPLETION_ID) completionFailure('MAINTENANCE_CHANGED');
@@ -88,10 +107,14 @@ export function assertCompletionStable(state, registry, plan) {
   const bound = registry.forState(state); plan.profiles.forEach(p => bound.resolve(p.id, p));
   if (state.jobs.some(j => j.status === 'running' && !ownJob(j))) completionFailure('OTHER_JOB_RUNNING');
   verifyPreservedResults(state, { completed: plan.protected });
+  verifyCompletionExclusion(state, plan);
 }
 export function assertCompletionSource(state, plan, ids, requireNew = false) {
   const byId = new Map(completionSources(plan).map(c => [c.id, c]));
   for (const id of ids) {
+    // The authorized exclusion retains its audit snapshot and saved-result
+    // hashes, but later Atom changes must not block the eligible cohort.
+    if (plan.excluded.some(excluded => excluded.id === id)) continue;
     const expected = byId.get(id), sources = state.conversations.filter(c => c.id === id);
     if (!expected || sources.length !== 1 || !sources[0].messages?.length) completionFailure('SOURCE_CHANGED');
     const actual = evaluationContext(sources[0], state.catalog);
@@ -108,13 +131,15 @@ export function prepareCompletion(state, registry, plan, timestamp) {
     && state.settings.tuesdayWednesdayCompletion.id !== COMPLETION_ID) completionFailure('MAINTENANCE_CHANGED');
   if (state.jobs.some(j => j.status === 'running')) completionFailure('EVALUATION_RUNNING');
   verifyPreservedResults(state, { completed: plan.protected });
+  verifyCompletionExclusion(state, plan);
   const bound = registry.forState(state); plan.profiles.forEach(p => bound.resolve(p.id, p));
   if (digest(state.settings.aiPolicy) !== plan.policyHash || digest(state.catalog) !== plan.catalogHash) completionFailure('CONFIGURATION_CHANGED');
   for (const group of [plan.tuesday, plan.wednesday]) {
     if (group.some(c => state.tasks.some(t => t.conversationId === c.id) || state.evaluations.some(e => e.conversationId === c.id))) completionFailure('CONVERSATION_ALREADY_ASSIGNED');
   }
   state.settings.tuesdayWednesdayCompletion = { id: COMPLETION_ID, status: 'prepared', preparedAt: timestamp,
-    conversations: 213, additionalConversations: 210, requestedScope: { tuesday: 170, wednesday: 43 }, concurrency: 1 };
+    conversations: 212, requestedConversations: 213, additionalConversations: 210, requestedScope: { tuesday: 170, wednesday: 43 },
+    excluded: completionExclusions(plan), eligibleScope: { tuesday: 169, wednesday: 43 }, concurrency: 1 };
   for (const job of state.jobs.filter(j => RECOVERY_JOBS.includes(j.id) && j.status !== 'completed')) job.concurrency = 1;
 }
 
@@ -133,7 +158,7 @@ export function setCompletionConcurrency(state, plan, concurrency) {
 }
 
 export function completionTasks(state, plan) {
-  const retries = new Set(plan.retry.map(t => t.taskId));
+  const retries = new Set(completionRetry(plan).map(t => t.taskId));
   const keys = new Set(Object.values(COMPLETION_KEYS));
   const jobIds = new Set(state.jobs.filter(j => keys.has(j.idempotencyKey)).map(j => j.id));
   return state.tasks.filter(t => retries.has(t.id) || jobIds.has(t.jobId));
@@ -150,19 +175,20 @@ export function assertPhaseJob(state, plan, phase) {
 }
 export function completionStatus(state, plan, manifest = {}, workerAlive = false) {
   assertCompletionPlan(plan);
+  verifyCompletionExclusion(state, plan);
   const tasks = completionTasks(state, plan), completed = tasks.filter(t => t.status === 'completed');
   const count = ids => ids.filter(id => {
     const retry = plan.retry.find(t => t.id === id);
     const selected = retry ? tasks.filter(t => t.id === retry.taskId) : tasks.filter(t => t.conversationId === id);
     return selected.length === (retry ? 1 : 2) && selected.every(t => t.status === 'completed');
   }).length;
-  const tuesday = [...plan.retry, ...plan.tuesday].map(c => c.id), wednesday = plan.wednesday.map(c => c.id);
+  const tuesday = [...completionRetry(plan), ...plan.tuesday].map(c => c.id), wednesday = plan.wednesday.map(c => c.id);
   const finalized = state.settings.tuesdayWednesdayCompletion?.id === COMPLETION_ID && state.settings.tuesdayWednesdayCompletion.status === 'completed'
-    && state.settings.evaluationMaintenance === plan.priorMaintenance && tasks.length === 423 && completed.length === 423;
+    && state.settings.evaluationMaintenance === plan.priorMaintenance && tasks.length === 422 && completed.length === 422;
   return { id: COMPLETION_ID, status: finalized ? 'completed' : manifest.status || 'not_started', workerAlive, checkedAt: new Date().toISOString(),
-    totalConversations: 213, completedConversations: count([...tuesday, ...wednesday]),
-    totalModelTasks: 423, completedModelTasks: completed.length, remainingModelTasks: 423 - completed.length,
-    tuesday: { total: 170, completed: count(tuesday) }, wednesday: { total: 43, completed: count(wednesday) },
+    requestedConversations: 213, totalConversations: 212, excludedConversations: 1, exclusions: completionExclusions(plan), completedConversations: count([...tuesday, ...wednesday]),
+    totalModelTasks: 422, completedModelTasks: completed.length, remainingModelTasks: 422 - completed.length,
+    tuesday: { requested: 170, total: 169, excluded: 1, completed: count(tuesday) }, wednesday: { total: 43, completed: count(wednesday) },
     progress: COMPLETION_MODELS.map(profileId => ({ profileId, completed: completed.filter(t => t.profile.id === profileId).length,
       running: tasks.filter(t => t.profile.id === profileId && t.status === 'running').length,
       partial: tasks.filter(t => t.profile.id === profileId && ['partial', 'failed'].includes(t.status)).length })),
@@ -182,19 +208,21 @@ export function finalizedCompletion(state, registry, plan) {
   if (digest(state.settings.aiPolicy) !== plan.policyHash || digest(state.catalog) !== plan.catalogHash) completionFailure('CONFIGURATION_CHANGED');
   const bound = registry.forState(state); plan.profiles.forEach(p => bound.resolve(p.id, p));
   verifyPreservedResults(state, { completed: plan.protected });
+  verifyCompletionExclusion(state, plan);
   const tasks = completionTasks(state, plan);
-  if (tasks.length !== 423 || tasks.some(t => t.status !== 'completed')) completionFailure('COMPLETION_STATE_CHANGED');
+  if (tasks.length !== 422 || tasks.some(t => t.status !== 'completed')) completionFailure('COMPLETION_STATE_CHANGED');
   for (const phase of ['tuesday', 'wednesday']) assertPhaseJob(state, plan, phase);
   return timestamp;
 }
 export function finishCompletion(state, registry, plan, timestamp) {
   assertCompletionStable(state, registry, plan);
   const tasks = completionTasks(state, plan);
-  if (tasks.length !== 423 || tasks.some(t => t.status !== 'completed')) completionFailure('COMPLETION_NOT_FINISHED');
+  if (tasks.length !== 422 || tasks.some(t => t.status !== 'completed')) completionFailure('COMPLETION_NOT_FINISHED');
   for (const phase of ['tuesday', 'wednesday']) assertPhaseJob(state, plan, phase);
   state.settings.evaluationMaintenance = plan.priorMaintenance;
   Object.assign(state.settings.tuesdayWednesdayCompletion, { status: 'completed', finishedAt: timestamp });
-  if (state.settings.gemmaIncidentRecovery?.id === RECOVERY_ID) Object.assign(state.settings.gemmaIncidentRecovery, { status: 'completed', completedAt: timestamp });
+  if (state.settings.gemmaIncidentRecovery?.id === RECOVERY_ID) Object.assign(state.settings.gemmaIncidentRecovery, {
+    status: 'partial', completedAt: null, updatedAt: timestamp, exclusions: completionExclusions(plan), exclusionReason: COMPLETION_EXCLUSION_REASON });
 }
 
 // Enforced before SQL persistence: no caller may mutate an unrelated job, a
@@ -207,7 +235,7 @@ export function assertCompletionMutation(before, after, plan) {
     if (!allowedSettings.has(key) && !same(before.settings[key], after.settings[key])) completionFailure('UNRELATED_SETTING_CHANGED');
   }
   if (![RECOVERY_ID, plan.priorMaintenance].includes(after.settings.evaluationMaintenance) || after.settings.tuesdayWednesdayCompletion?.id !== COMPLETION_ID) completionFailure('MAINTENANCE_CHANGED');
-  const targetIds = new Set(completionSources(plan).map(c => c.id));
+  const targetIds = new Set(completionSources(plan).filter(c => !plan.excluded.some(excluded => excluded.id === c.id)).map(c => c.id));
   const ownJobs = new Set(after.jobs.filter(ownJob).map(j => j.id));
   for (const key of ['jobs', 'tasks', 'attempts', 'evaluations', 'operationalRefs']) {
     const next = new Map(after[key].map(r => [r.id, r]));
@@ -243,4 +271,5 @@ export function assertCompletionMutation(before, after, plan) {
     }
   }
   verifyPreservedResults(after, { completed: plan.protected });
+  verifyCompletionExclusion(after, plan);
 }

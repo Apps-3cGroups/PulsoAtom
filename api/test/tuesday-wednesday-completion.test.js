@@ -11,7 +11,7 @@ import { RECOVERY_ID, RECOVERY_JOBS, recoveryPlan } from '../src/gemma-incident-
 import { resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { COMPLETION_ID, COMPLETION_KEYS, COMPLETION_MODELS, makeCompletionPlan, assertCompletionPlan,
   assertCompletionSource, assertOriginalIncident, prepareCompletion, finishCompletion, completionStatus,
-  assertCompletionMutation, assertPhaseJob, completionTasks, finalizedCompletion, setCompletionConcurrency } from '../src/tuesday-wednesday-completion.js';
+  assertCompletionMutation, assertPhaseJob, completionTasks, finalizedCompletion, setCompletionConcurrency, completionRetry, COMPLETION_EXCLUSION_REASON } from '../src/tuesday-wednesday-completion.js';
 import { executeCompletion, processState, recordSpawnedWorker, waitForWorkerAssignment, persistPrivateBackup } from '../scripts/complete-tuesday-wednesday.js';
 
 const fail = (fn, code) => assert.throws(fn, e => e.code === code);
@@ -74,12 +74,14 @@ function memory(f) {
     assertCompletionMutation(before, draft, f.plan); current = draft; return structuredClone(result); }); queue = run.catch(() => {}); return run; } };
 }
 
-test('plan freezes exactly 3 retries + 167 Tuesday + 43 Wednesday and excludes 725 completed tasks', () => {
+test('plan freezes three partial records, excludes Clef by authorization, and preserves 725 completed tasks', () => {
   const f = fixture(), before = structuredClone(f.state), plan = makeCompletionPlan(f.state, f.registry, f.incident);
   assertCompletionPlan(plan); assert.equal(plan.protected.length, 725); assert.equal(plan.tuesday.length, 167); assert.equal(plan.wednesday.length, 43);
   assert.deepEqual(plan.retry.map(r => r.profileId).sort(), ['clef-local', 'gemma-local', 'gemma-local']);
   assert.equal(JSON.stringify(plan).includes('PRIVATE_'), false); assert.deepEqual(f.state, before); assert.equal(f.calls.length, 0);
   assert.equal(plan.priorMaintenance, null);
+  assert.equal(plan.excluded.length, 1); assert.equal(plan.excluded[0].profileId, 'clef-local');
+  assert.equal(plan.excluded[0].reason, COMPLETION_EXCLUSION_REASON); assert.equal(completionRetry(plan).length, 2);
 });
 test('scope rejects changed counts, missing imports, duplicate IDs, prior tasks and source changes', () => {
   for (const mutate of [s => s.conversations.pop(), s => s.conversations.push(conversation('extra')), s => { s.conversations.at(-1).ingestionBatchId = '238'; },
@@ -109,6 +111,11 @@ test('manifest and frozen context reject drift before execution or duplicate ass
   fail(() => assertCompletionSource(f.state, f.plan, selected, true), 'CONVERSATION_ALREADY_ASSIGNED');
   f.state.tasks.pop(); f.state.conversations.find(c => c.id === selected[0]).messages[0].text += ' changed';
   fail(() => assertCompletionSource(f.state, f.plan, selected), 'SOURCE_CHANGED');
+  const excludedId = f.plan.excluded[0].id;
+  f.state.conversations.find(c => c.id === excludedId).messages[0].text += ' changed after exclusion';
+  assertCompletionSource(f.state, f.plan, [excludedId]);
+  const altered = structuredClone(f.state); altered.tasks.find(t => t.id === f.plan.excluded[0].taskId).status = 'pending';
+  fail(() => assertCompletionMutation(f.state, altered, f.plan), 'PROTECTED_RECORD_CHANGED');
 });
 test('mutation guard blocks unrelated data, completed tasks, saved answers, identities and retained variable loss', () => {
   const f = prepared();
@@ -119,7 +126,7 @@ test('mutation guard blocks unrelated data, completed tasks, saved answers, iden
     s => s.jobs.push({ id: 'foreign', idempotencyKey: 'not-this-cohort' }), s => s.tasks.splice(0, 1)]) {
     const draft = structuredClone(f.state); mutate(draft); assert.throws(() => assertCompletionMutation(f.state, draft, f.plan));
   }
-  const draft = structuredClone(f.state); draft.tasks.find(t => t.status === 'partial').status = 'pending';
+  const draft = structuredClone(f.state); draft.tasks.find(t => t.id === completionRetry(f.plan)[0].taskId).status = 'pending';
   assertCompletionMutation(f.state, draft, f.plan);
   const foreign = structuredClone(f.state), target = f.plan.retry[0].id;
   foreign.jobs.push({ id: 'foreign-job', status: 'completed' });
@@ -130,19 +137,23 @@ test('mutation guard blocks unrelated data, completed tasks, saved answers, iden
     fail(() => assertCompletionMutation(foreign, altered, f.plan), 'PROTECTED_RECORD_CHANGED');
   }
 });
-test('real resume reuses retained valid variables and never invokes either completed task again', async () => {
+test('real resume invokes only the two Gemma partials and preserves the excluded Clef and every completed task', async () => {
   const f = prepared(), store = memory(f), before = await store.read();
-  const execution = await resumeEvaluationBatch(store, f.registry, RECOVERY_JOBS[1], { conversationIds: f.plan.retry.map(r => r.id) });
+  const execution = await resumeEvaluationBatch(store, f.registry, RECOVERY_JOBS[1], { conversationIds: completionRetry(f.plan).map(r => r.id) });
   await execution.completion;
-  assert.equal(f.calls.length, 3); assert.ok(f.calls.every(c => c.variables.length === 1 && c.variables[0] === f.state.catalog[1].id));
+  assert.equal(f.calls.length, 2); assert.ok(f.calls.every(c => c.profileId === 'gemma-local')); assert.ok(f.calls.every(c => c.variables.length === 1 && c.variables[0] === f.state.catalog[1].id));
   const after = await store.read();
-  assert.ok(f.plan.retry.every(r => after.tasks.find(t => t.id === r.taskId).status === 'completed'), JSON.stringify(after.tasks.filter(t=>f.plan.retry.some(r=>r.taskId===t.id)).map(t=>({id:t.id,status:t.status,error:t.error}))));
+  assert.ok(completionRetry(f.plan).every(r => after.tasks.find(t => t.id === r.taskId).status === 'completed'), JSON.stringify(after.tasks.filter(t=>f.plan.retry.some(r=>r.taskId===t.id)).map(t=>({id:t.id,status:t.status,error:t.error}))));
   for (const old of before.tasks.filter(t => t.status === 'completed')) assert.deepEqual(after.tasks.find(t => t.id === old.id), old);
-  assert.equal(after.evaluations.length, before.evaluations.length + 3);
+  assert.equal(after.evaluations.length, before.evaluations.length + 2);
+  const excluded = f.plan.excluded[0];
+  assert.deepEqual(after.tasks.find(t => t.id === excluded.taskId), before.tasks.find(t => t.id === excluded.taskId));
+  assert.deepEqual(after.evaluations.find(e => e.id === excluded.evaluationId), before.evaluations.find(e => e.id === excluded.evaluationId));
+  assert.equal(after.jobs.find(j => j.id === RECOVERY_JOBS[1]).status, 'partial');
 });
 test('phases run retries then Tuesday167 then Wednesday43, and repeating orchestration creates nothing twice', async () => {
   const f = prepared(), store = memory(f), operations = [];
-  const complete = async (jobId, selected) => store.transaction(s => { for (const t of s.tasks.filter(t => t.jobId === jobId && selected.includes(t.conversationId))) if (t.status !== 'completed') t.status = 'completed'; s.jobs.find(j => j.id === jobId).status = 'completed'; });
+  const complete = async (jobId, selected) => store.transaction(s => { for (const t of s.tasks.filter(t => t.jobId === jobId && selected.includes(t.conversationId))) if (t.status !== 'completed') t.status = 'completed'; s.jobs.find(j => j.id === jobId).status = s.tasks.some(t => t.jobId === jobId && t.status === 'partial') ? 'partial' : 'completed'; });
   const resumeBatch = async (_store, _registry, jobId, options) => { operations.push(['resume', options.conversationIds.length]); await complete(jobId, options.conversationIds); return { job: { id: jobId }, completion: Promise.resolve() }; };
   const startBatch = async (_store, _registry, options) => {
     operations.push(['start', options.conversationIds.length]); assert.equal(options.concurrency, 1); assert.equal(options.largeBatch, true);
@@ -153,16 +164,21 @@ test('phases run retries then Tuesday167 then Wednesday43, and repeating orchest
     return { job, completion: Promise.resolve(job) };
   };
   await executeCompletion(store, f.registry, f.plan, { startBatch, resumeBatch });
-  assert.deepEqual(operations, [['resume', 3], ['start', 167], ['start', 43]]);
+  assert.deepEqual(operations, [['resume', 2], ['start', 167], ['start', 43]]);
   await executeCompletion(store, f.registry, f.plan, { startBatch, resumeBatch });
   assert.equal(operations.length, 3);
-  const state = await store.read(); assert.equal(completionTasks(state, f.plan).length, 423);
+  const state = await store.read(); assert.equal(completionTasks(state, f.plan).length, 422);
   const status = completionStatus(state, f.plan, { status: 'running' }, true);
-  assert.equal(status.completedConversations, 213); assert.equal(status.remainingModelTasks, 0); assert.equal(status.preservedCompletedTasks, 725);
+  assert.equal(status.completedConversations, 212); assert.equal(status.remainingModelTasks, 0); assert.equal(status.preservedCompletedTasks, 725);
   const originalSettings = structuredClone(state.settings);
   finishCompletion(state, f.registry, f.plan, '2026-11-13T03:00:00Z');
   assert.equal(state.settings.evaluationMaintenance, null); assert.equal(state.settings.dailyEnabled, originalSettings.dailyEnabled);
-  assert.equal(state.settings.gemmaIncidentRecovery.status, 'completed');
+  assert.equal(state.settings.gemmaIncidentRecovery.status, 'partial');
+  assert.equal(state.settings.gemmaIncidentRecovery.exclusionReason, COMPLETION_EXCLUSION_REASON);
+  assert.equal(state.settings.gemmaIncidentRecovery.exclusions[0].taskId, f.plan.excluded[0].taskId);
+  assert.equal(state.tasks.find(t => t.id === f.plan.excluded[0].taskId).status, 'partial');
+  assert.deepEqual(status.tuesday, { requested: 170, total: 169, excluded: 1, completed: 169 });
+  assert.equal(status.totalConversations, 212); assert.equal(status.requestedConversations, 213); assert.equal(status.excludedConversations, 1);
   // Simulate a crash immediately after the database commit, before either
   // private manifest receives its final filesystem write.
   const staleManifest = { status: 'blocked', errorCode: 'FILESYSTEM_ERROR' };
