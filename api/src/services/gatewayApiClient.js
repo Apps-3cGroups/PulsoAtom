@@ -50,6 +50,11 @@ function isResourceLimit(response, depth = 0) {
     // only the known prediction wrapper before it. Quoted input is not proof.
     const traceback = message.indexOf('Traceback (most recent call last):');
     if (traceback < 0) return false;
+    // LM Studio can wrap the Python exception in nested quoted generation
+    // errors, escaping newlines. Require all three provider/runtime signals,
+    // and only closing punctuation after the terminal Metal exception.
+    if (/^Error in [\w .-]{1,80} prediction\b/i.test(message)
+      && /(?:RuntimeError:\s*)?\[METAL\]\s+Command buffer execution failed:\s*Insufficient Memory\s*\([^\r\n]{0,150}OutOfMemory\)(?:\s|\\[nr]|['"\\)\]}]){0,160}$/i.test(message.slice(-500))) return true;
     const prefix = message.slice(0, traceback).trim();
     if (prefix && !/^Error in [\w .-]{1,80} prediction[:.]?\s*(?:Error in the [\w .-]{1,80} generation[:.]?\s*)?$/i.test(prefix)) return false;
     return memoryException.test(message.split(/\r?\n/).at(-1).trim());

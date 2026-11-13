@@ -8,7 +8,7 @@ import { catalogV5 } from '../src/catalog-v5.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { catalogReferences, evaluationContext, digest } from '../src/evaluation-context.js';
 import { RECOVERY_ID, RECOVERY_JOBS, recoveryPlan } from '../src/gemma-incident-recovery.js';
-import { resumeEvaluationBatch } from '../src/evaluation-service.js';
+import { runEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { COMPLETION_ID, COMPLETION_KEYS, COMPLETION_MODELS, makeCompletionPlan, assertCompletionPlan,
   assertCompletionSource, assertOriginalIncident, prepareCompletion, finishCompletion, completionStatus,
   assertCompletionMutation, assertPhaseJob, completionTasks, finalizedCompletion, setCompletionConcurrency, completionRetry, COMPLETION_EXCLUSION_REASON } from '../src/tuesday-wednesday-completion.js';
@@ -150,6 +150,53 @@ test('real resume invokes only the two Gemma partials and preserves the excluded
   assert.deepEqual(after.tasks.find(t => t.id === excluded.taskId), before.tasks.find(t => t.id === excluded.taskId));
   assert.deepEqual(after.evaluations.find(e => e.id === excluded.evaluationId), before.evaluations.find(e => e.id === excluded.evaluationId));
   assert.equal(after.jobs.find(j => j.id === RECOVERY_JOBS[1]).status, 'partial');
+});
+test('new-task format retries preserve answers across MySQL JSON object-key normalization', async () => {
+  const normalizeJson = value => Array.isArray(value) ? value.map(normalizeJson) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalizeJson(value[key])])) : value;
+  const f = fixture();
+  f.state = normalizeJson(f.state);
+  f.incident.plan = { ...recoveryPlan(f.state), priorMaintenance: null };
+  f.plan = makeCompletionPlan(f.state, f.registry, f.incident, '2026-11-13T01:00:00Z');
+  prepareCompletion(f.state, f.registry, f.plan, '2026-11-13T01:00:01Z');
+  let current = structuredClone(f.state), queue = Promise.resolve();
+  const store = { async read() { await queue; return structuredClone(current); }, async readWithConversations(options) {
+    await queue; const state = structuredClone(current);
+    state.conversations = state.conversations.filter(c => options?.conversationIds?.includes(c.id)); return state;
+  }, transaction(fn) { const execution = queue.then(async () => {
+    const before = structuredClone(current), draft = structuredClone(current), answer = await fn(draft);
+    assertCompletionMutation(before, draft, f.plan);
+    current = normalizeJson(draft); return structuredClone(answer);
+  }); queue = execution.catch(() => {}); return execution; } };
+  const calls = new Map(), firstAnswers = new Map();
+  for (const profile of f.registry.profiles) profile.evaluator.evaluate = async (_conversation, variables) => {
+    const seen = calls.get(profile.id) || []; seen.push(variables.map(variable => variable.id)); calls.set(profile.id, seen);
+    if (seen.length === 2) {
+      const before = await store.read(), draft = structuredClone(before);
+      const retained = draft.tasks.find(task => task.conversationId === f.plan.tuesday[0].id && task.profile.id === profile.id);
+      retained.profileStates[profile.id].results[0].value = 0;
+      fail(() => assertCompletionMutation(before, draft, f.plan), 'RETAINED_RESULT_CHANGED');
+    }
+    const pending = seen.length === 1 ? variables.slice(0, 1) : variables;
+    const results = pending.map(variable => ({ variableId: variable.id, type: variable.type, method: variable.method,
+      status: 'evaluado', value: 1, reason: 'Valid retained decision.', evidence: [{ messageId: 'message', quote: 'Synthetic evidence.' }] }));
+    if (seen.length === 1) firstAnswers.set(profile.id, structuredClone(results[0]));
+    return { model: profile.model, results, validationErrors: [] };
+  };
+  const selected = f.plan.tuesday[0].id;
+  const job = await runEvaluationBatch(store, f.registry, { purpose: 'operational', modelIds: COMPLETION_MODELS,
+    conversationIds: [selected], pendingOnly: true, includeOpen: true, max: 1,
+    maintenanceId: RECOVERY_ID, idempotencyKey: COMPLETION_KEYS.tuesday, concurrency: 1 });
+  assert.equal(job.status, 'completed');
+  const after = await store.read(), newTasks = after.tasks.filter(task => task.jobId === job.id);
+  assert.equal(newTasks.length, 2);
+  assert.ok(newTasks.every(task => task.status === 'completed' && task.error === null));
+  for (const task of newTasks) {
+    assert.deepEqual(calls.get(task.profile.id), [f.state.catalog.map(variable => variable.id), [f.state.catalog[1].id]]);
+    assert.deepEqual(task.profileStates[task.profile.id].results.find(result => result.variableId === f.state.catalog[0].id), firstAnswers.get(task.profile.id));
+  }
+  for (const task of f.state.tasks) assert.deepEqual(after.tasks.find(row => row.id === task.id), task);
+  assert.deepEqual(after.evaluations.slice(0, f.state.evaluations.length), f.state.evaluations);
 });
 test('phases run retries then Tuesday167 then Wednesday43, and repeating orchestration creates nothing twice', async () => {
   const f = prepared(), store = memory(f), operations = [];

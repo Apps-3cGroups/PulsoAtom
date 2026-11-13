@@ -35,6 +35,36 @@ export async function processState(pid, expectedScript, { read = readFile, kill 
     return { alive: true };
   } catch (e) { if (['ENOENT', 'ESRCH'].includes(e.code)) return { alive: false }; throw e; }
 }
+export async function stopOwnedWorker(manifest, { inspect = processState, signal = process.kill,
+  pause = ms => new Promise(resolve => setTimeout(resolve, ms)), maxWaitMs = 8000 } = {}) {
+  if (manifest?.id !== COMPLETION_ID) fail('INVALID_COMPLETION_MANIFEST');
+  if (!(await inspect(manifest.pid, workerScript)).alive) return { stopped: false, alreadyStopped: true, workerAlive: false };
+  // No PID is accepted from the CLI. The private manifest and exact script /
+  // --worker identity must agree before sending this one graceful signal.
+  try { signal(manifest.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  for (let waited = 0; waited <= maxWaitMs; waited += 100) {
+    if (!(await inspect(manifest.pid, workerScript)).alive) return { stopped: true, workerAlive: false };
+    if (waited < maxWaitMs) await pause(100);
+  }
+  // A still-live or changed process is never escalated to SIGKILL, and its
+  // manifest/locks remain untouched so a subsequent start cannot replace it.
+  fail('WORKER_STOP_TIMEOUT');
+}
+async function stop() {
+  const release = await acquireBackfillLock(`${incidentDirectory}/launch.lock`, COMPLETION_ID);
+  try {
+    const manifest = await optionalManifest();
+    if (!manifest) return { id: COMPLETION_ID, status: 'not_started', workerAlive: false };
+    const result = await stopOwnedWorker(manifest);
+    const latest = await readManifest();
+    if (latest.pid !== manifest.pid) fail('WORKER_ASSIGNMENT_CHANGED');
+    if (latest.status !== 'completed') {
+      Object.assign(latest, { status: 'stopped', stoppedAt: new Date().toISOString(), stopReason: 'APPLY_VERIFIED_WORKER_FIX' });
+      await persistBackfillManifest(manifestFile, latest);
+    }
+    return { id: COMPLETION_ID, status: latest.status, workerPid: latest.pid, ...result };
+  } finally { await release(); }
+}
 async function verifyNoWorker(incident, manifest) {
   if ((await processState(incident.pid, oldWorkerScript)).alive) fail('INCIDENT_WORKER_RUNNING');
   if (manifest && (await processState(manifest.pid, workerScript)).alive) return false;
@@ -239,7 +269,10 @@ async function worker(store, registry) {
 
 export async function main(args) {
   const concurrency = args[1] === '--concurrency=2' ? 2 : 1;
-  if (!['--inspect', '--start', '--status', '--worker'].includes(args[0]) || args.length > 2 || args.length === 2 && (args[0] !== '--start' || !['--concurrency=1', '--concurrency=2'].includes(args[1]))) fail('INVALID_ARGUMENTS');
+  if (!['--inspect', '--start', '--status', '--worker', '--stop'].includes(args[0]) || args.length > 2 || args.length === 2 && (args[0] !== '--start' || !['--concurrency=1', '--concurrency=2'].includes(args[1]))) fail('INVALID_ARGUMENTS');
+  // Stopping requires only the private manifest and OS identity. Do not open
+  // either database or wait on an in-flight evaluation transaction first.
+  if (args[0] === '--stop') return stop();
   const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
   const { MysqlStore, AtomHistoryStore } = await import('../src/store.js');
   const { CompletionStore } = await import('../src/tuesday-wednesday-completion-store.js');
