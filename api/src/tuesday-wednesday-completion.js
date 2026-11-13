@@ -12,6 +12,8 @@ const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical
 export const completionFailure = code => { throw new AppError(409, 'La operación se detuvo y conserva los resultados existentes.', code); };
 const day = value => Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value) - 6 * 3600000).toISOString().slice(0, 10) : null;
 const ownJob = job => RECOVERY_JOBS.includes(job.id) || Object.values(COMPLETION_KEYS).includes(job.idempotencyKey);
+const failureStatus = status => ['partial', 'failed', 'interrupted', 'deferred'].includes(status) ? status : 'unknown';
+const failureCode = code => typeof code === 'string' && /^[A-Z_]{3,80}(?![\s\S])/.test(code) ? code : null;
 const immutablePlan = plan => ({ format: plan.format, id: plan.id, createdAt: plan.createdAt, maintenanceId: plan.maintenanceId,
   priorMaintenance: plan.priorMaintenance, profiles: plan.profiles, policyHash: plan.policyHash, catalogHash: plan.catalogHash,
   retry: plan.retry, excluded: plan.excluded, tuesday: plan.tuesday, wednesday: plan.wednesday, protected: plan.protected });
@@ -173,6 +175,24 @@ export function assertPhaseJob(state, plan, phase) {
     || state.tasks.filter(t => t.jobId === job.id).length !== ids.length * 2) completionFailure('COMPLETION_JOB_CHANGED');
   return job;
 }
+function completionFailureDetails(state, tasks) {
+  const iso = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z(?![\s\S])/.test(value)
+    && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+  return tasks.filter(task => !['completed', 'pending', 'running'].includes(task.status)).slice(0, 10).map(task => {
+    const profileId = COMPLETION_MODELS.includes(task.profile?.id) ? task.profile.id : null;
+    const retained = profileId && task.profileStates?.[profileId]?.results;
+    const http = typeof task.error?.message === 'string' ? task.error.message.match(/\bHTTP ([1-5][0-9]{2})(?![0-9])/) : null;
+    const lastAttemptAt = (state.attempts || []).filter(attempt => attempt.taskId === task.id)
+      .flatMap(attempt => [iso(attempt.finishedAt), iso(attempt.startedAt)]).filter(Boolean).sort().at(-1);
+    // Only allowlisted scalars leave this diagnostic. Provider messages, saved
+    // results, validation details and conversation content remain private.
+    return { conversationId: typeof task.conversationId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}(?![\s\S])/.test(task.conversationId) ? task.conversationId : null,
+      profileId, status: failureStatus(task.status), errorCode: failureCode(task.error?.code),
+      upstreamHttpStatus: http ? Number(http[1]) : null,
+      ...(Array.isArray(retained) ? { retainedVariableCount: retained.length } : {}),
+      ...(lastAttemptAt ? { lastAttemptAt } : {}) };
+  });
+}
 export function completionStatus(state, plan, manifest = {}, workerAlive = false) {
   assertCompletionPlan(plan);
   verifyCompletionExclusion(state, plan);
@@ -193,8 +213,8 @@ export function completionStatus(state, plan, manifest = {}, workerAlive = false
       running: tasks.filter(t => t.profile.id === profileId && t.status === 'running').length,
       partial: tasks.filter(t => t.profile.id === profileId && ['partial', 'failed'].includes(t.status)).length })),
     errors: tasks.filter(t => !['completed', 'pending', 'running'].includes(t.status)).reduce((out, t) => {
-      const code = /^[A-Z_]{3,80}$/.test(t.error?.code || '') ? t.error.code : t.status; out[code] = (out[code] || 0) + 1; return out;
-    }, {}), preservedCompletedTasks: verifyPreservedResults(state, { completed: plan.protected }),
+      const code = failureCode(t.error?.code) || failureStatus(t.status); out[code] = (out[code] || 0) + 1; return out;
+    }, {}), failureDetails: completionFailureDetails(state, tasks), preservedCompletedTasks: verifyPreservedResults(state, { completed: plan.protected }),
     maintenanceActive: state.settings.evaluationMaintenance === RECOVERY_ID, concurrency: state.settings.tuesdayWednesdayCompletion?.concurrency || 1, startedAt: manifest.startedAt || null,
     updatedAt: manifest.updatedAt || null, finishedAt: finalized ? state.settings.tuesdayWednesdayCompletion.finishedAt : manifest.finishedAt || null, errorCode: finalized ? null : manifest.errorCode || null };
 }

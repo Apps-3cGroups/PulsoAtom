@@ -14,6 +14,7 @@ export async function runOneOffTick(store, evaluator, at = new Date(), operation
   await recoverEvaluationJobs(store);
   const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   for (const run of oneOffRuns(state.settings).filter(r => r.enabled)) {
+    if (run.executionSupersededBy) continue;
     const job = state.jobs.find(j => j.oneOffRun?.id === run.id);
     if (job) {
       if (job.status === 'interrupted' && !state.jobs.some(j => j.status === 'running') && !state.settings.evaluationMaintenance && run.status !== 'blocked') {

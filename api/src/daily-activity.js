@@ -1,5 +1,6 @@
 import { AppError } from './errors.js';
 import { digest } from './evaluation-context.js';
+import { completedOperationalPair, dailyHandoffFor } from './daily-equivalence.js';
 
 export const DAILY_ACTIVITY_MODE = 'previous-day-activity';
 export function previousDate(date) {
@@ -28,10 +29,12 @@ export function dailyActivityRequest(settings, runDate) {
     countries: settings.dailyCountries, modelIds: settings.dailyModelIds,
     ...(settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}),
     ...(settings.dailyConcurrency != null ? { concurrency: settings.dailyConcurrency } : {}) };
-  return { scheduleDate: runDate, dailyActivity: { date: previousDate(runDate), timezone: settings.timezone, configurationHash: digest(snapshot) },
+  const handoff = settings.thursdayHandoff?.runDate === runDate ? settings.thursdayHandoff : null;
+  return { scheduleDate: runDate, dailyActivity: { date: previousDate(runDate), timezone: settings.timezone, configurationHash: digest(handoff ? { ...snapshot, handoff: handoff.scopeHash } : snapshot),
+      ...(handoff ? { handoffId: handoff.id, handoffScopeHash: handoff.scopeHash } : {}) },
     countries: [...settings.dailyCountries], modelIds: [...settings.dailyModelIds], pendingOnly: false, includeOpen: true,
-    executionOrder: 'model-first', concurrency: settings.dailyConcurrency ?? 1,
-    ...(settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}) };
+    executionOrder: handoff ? 'conversation-first' : 'model-first', concurrency: handoff?.concurrency ?? settings.dailyConcurrency ?? 1,
+    ...(!handoff && settings.dailyLimitPerCountry != null ? { limitPerCountry: settings.dailyLimitPerCountry } : {}) };
 }
 export function validateDailyActivityRequest(settings, options) {
   const expected = dailyActivityRequest(settings, options.scheduleDate);
@@ -59,6 +62,11 @@ export function dailyAssignedCounts(state, options) {
       if (!country) throw new AppError(409, 'No se pudo verificar el país de una conversación ya asignada.', 'DAILY_COUNTRY_UNKNOWN');
       assigned.set(id, country);
     }
+  }
+  const handoff = dailyHandoffFor(state.settings, options);
+  if (handoff) for (const c of state.conversations || []) {
+    if (handoff.countries.includes(c.country) && activityOnDate(c, handoff.activityDate, handoff.timezone)
+      && completedOperationalPair(state, c, handoff.profiles)) assigned.set(c.id, c.country);
   }
   return [...assigned.values()].reduce((counts, country) => ({ ...counts, [country]: (counts[country] || 0) + 1 }), {});
 }
