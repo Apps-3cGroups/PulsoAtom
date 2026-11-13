@@ -243,6 +243,40 @@ test('Gemma splits a large checklist before requesting inference and retains ful
   }
 });
 
+test('exact Clef Flash splits 47 variables before its first request and preserves source, rules and validated answers', async () => {
+  const many = Array.from({ length: 47 }, (_, i) => ({ ...variables[0], id: `clef_event_${i}`, definition: `Regla específica ${i}.` }));
+  for (const model of ['clef-flash', 'clef-flash-next']) {
+    const requests = [], source = structuredClone(conversation), original = structuredClone(source);
+    const instance = new GatewayEvaluator({ ...base, model, fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body).body; requests.push(request);
+      const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+      return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model }));
+    } });
+    const answer = await instance.evaluate(source, many);
+    const partitioned = model === 'clef-flash';
+    assert.deepEqual(requests.map(request => JSON.parse(request.messages.at(-1).content).variables.length), partitioned ? [8, 8, 8, 8, 8, 7] : [47]);
+    assert.deepEqual(answer.results.map(result => [result.variableId, result.value]), many.map(variable => [variable.id, 1]));
+    assert.deepEqual(answer.validationErrors, []); assert.equal(answer.failure, undefined); assert.equal(answer.model, model);
+    if (partitioned) {
+      assert.deepEqual(answer.contextBatches.map(batch => batch.variableIds).flat(), many.map(variable => variable.id));
+      assert.ok(answer.contextBatches.every(batch => batch.reason === 'checklist-size'));
+      assert.equal(answer.outputSchemaVersion, CLEF_FLASH_OUTPUT_SCHEMA_VERSION);
+      assert.equal(answer.decisionInstructionsVersion, CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION);
+      assert.deepEqual(answer.usage, { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 });
+    } else assert.equal(answer.contextBatches, undefined);
+    for (const request of requests) {
+      const ids = JSON.parse(request.messages.at(-1).content).variables.map(variable => variable.id);
+      const subset = many.filter(variable => ids.includes(variable.id));
+      assert.equal(request.messages.at(-1).content, evaluationInput(source, subset));
+      assert.deepEqual(JSON.parse(request.messages.at(-1).content).mensajes, JSON.parse(evaluationInput(original, many)).mensajes);
+      assert.deepEqual(request.response_format.json_schema.schema, partitioned ? clefFlashEvaluationSchema(subset, source) : evaluationSchema(subset));
+      assert.equal(request.messages[0].content, partitioned ? `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}` : evaluationInstructions);
+      assert.equal(request.model, model);
+    }
+    assert.deepEqual(source, original);
+  }
+});
+
 test('a verified gateway timeout divides the checklist, but configuration failures do not', async () => {
   for (const status of [504, 400]) {
     const sizes = [];
