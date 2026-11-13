@@ -53,6 +53,24 @@ test('la API rechaza montar el portal en la raíz del dominio', () => {
 
 const workflowPath = new URL('../../.github/workflows/deploy-pulso-atom.yml', import.meta.url);
 
+test('Tuesday/Wednesday recovery keeps read-only operations isolated and starts only the deployed revision', async () => {
+  const workflow = await readFile(workflowPath, 'utf8');
+  const options = workflow.match(/options: \[([^\]]+)\]/)?.[1];
+  const allowed = workflow.match(/\$env:GEMMA_OPERATION -cnotin @\(([^)]+)\)/)?.[1];
+  const readonly = workflow.match(/\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\(([^)]+)\)/)?.[1];
+  const job = workflow.match(/gemma-check:\n\s+if: ([^\n]+)/)?.[1];
+  for (const verb of ['inspect', 'start', 'status']) {
+    const operation = `tuesday-wednesday-${verb}`;
+    for (const list of [options, allowed, job]) assert.ok(list.includes(operation));
+    assert.equal(readonly.includes(operation), verb !== 'start');
+    assert.ok(workflow.includes(`'${operation}' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--${verb}' }`));
+  }
+  const production = workflow.match(/\$remoteCommand = @'\n([\s\S]*?)\n {10}'@/)?.[1];
+  assert.ok(production.indexOf('"$actual_sha" = "__EXPECTED_SHA__"') < production.indexOf('exec node'));
+  assert.match(production, /if \[ '__OPERATION__' = 'gemma-tuesday-recover' \]; then/);
+  assert.doesNotMatch(production, /tuesday-wednesday-start.*pm2/);
+});
+
 test('deploy preserves worker dependencies for source-only releases and installs when required', async () => {
   const workflow = await readFile(workflowPath, 'utf8');
   // Execute the actual deployment block. Stubs model Git's path-sensitive diff
