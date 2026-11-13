@@ -1,3 +1,4 @@
+import { catalogText } from '../services/presentationText';
 import { useState } from 'react';
 import { Alert, Button, Checkbox, Select } from 'antd';
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined } from '@ant-design/icons';
@@ -56,7 +57,7 @@ export function ConversationFlagDetails({ conversation, variable: v, index, onSh
     {v.review && <div className="flag-human-record"><b>{v.review.action === 'refutar' ? 'Refutación humana' : 'Flag humano'}</b><p>{v.review.comment}</p><small>{v.review.authorName} · {dateText(v.review.createdAt)} · {timeText(v.review.createdAt)}{v.verdict?.id === v.review.id ? ` · ${v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}` : ''}</small></div>}
     {!conversation.rawModelView && v.verdict && v.verdict.id !== v.review?.id && <div className="review-note"><b>Dictamen: {{ present: 'evento presente', absent: 'evento ausente', insufficient: 'contexto insuficiente', reverted: 'revertido' }[v.verdict.outcome]}</b><p>{v.verdict.comment}</p><small>{v.verdict.authorName} · {dateText(v.verdict.createdAt)} · {v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}</small></div>}
     {v.result.error && <Alert showIcon type="warning" message="Esta variable tuvo un error técnico" description={v.result.reason} />}
-    {comparison ? <FlagModelComparison variable={v} demo={conversation.demo} /> : <><div className="flag-criterion"><b>Criterio evaluado</b><p>{v.definition}</p>{v.condition && <p>{v.condition}</p>}</div><p className="muted">{v.result.reason || 'Sin justificación registrada.'}</p>{v.result.comparison?.codeOnly && <p className="muted">Resultado calculado por código; no representa dos votos de IA.</p>}</>}
+    {comparison ? <FlagModelComparison variable={v} demo={conversation.demo} /> : <><div className="flag-criterion"><b>Criterio evaluado</b><p>{catalogText(v.definition)}</p>{v.condition && <p>{catalogText(v.condition)}</p>}</div><p className="muted">{v.result.reason || 'Sin justificación registrada.'}</p>{v.result.comparison?.codeOnly && <p className="muted">Resultado calculado por código; no representa dos votos de IA.</p>}</>}
     {savedEvidence.length > 0 && <section className="flag-linked-messages" aria-label="Evidencia guardada"><h3>Evidencia guardada</h3>{savedEvidence.map(({ evidence, source }, position) => {
       const message = !sourceChanged && evidence.messageId != null ? messages.find(item => String(item.id) === String(evidence.messageId)) : null;
       const content = <><span>{evidence.quote || 'Sin cita textual guardada.'}</span><span className="evidence-meta"><span>{source}{evidence.messageId != null ? ` · Mensaje ${evidence.messageId}` : ''}</span>{message && <><span>Ver en la conversación</span><ArrowRightOutlined /></>}</span></>;

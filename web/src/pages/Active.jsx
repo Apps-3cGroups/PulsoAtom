@@ -1,3 +1,4 @@
+import { countryLabel } from '../services/presentationText';
 import { conversationLink } from '../services/conversationNavigation';
 import { useEffect } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
@@ -60,7 +61,7 @@ export function ConversationEntry({ conversation: c, showCountry, returnTo, visi
   const pending = evaluationNeedsAttention(c) || c.sourceChanged;
   const clientLabel = `${c.client.name || 'Sin nombre'}${c.client.phoneLast4 ? ` …${c.client.phoneLast4}` : ''}`;
   return <Link className={`active-conversation-card ${attention ? 'has-flag' : ''}`} to={conversationLink(c.id, returnTo)} aria-label={`Ver conversación de ${c.client.name}, atendida por ${c.agent.name}, ${dateText(c.startedAt)}, ${timeText(c.startedAt)}`}>
-    <header><div><h3 title={c.agent.name}>{c.agent.name}</h3>{showCountry && <div className="active-card-country">{c.countryName || c.country}</div>}</div><span className={`active-card-status ${attention ? 'flagged' : ''}`}>{attention ? 'Con flags' : pending ? 'Pendiente' : 'OK'}</span></header>
+    <header><div><h3 title={c.agent.name}>{c.agent.name}</h3>{showCountry && <div className="active-card-country">{countryLabel(c.country, c.countryName)}</div>}</div><span className={`active-card-status ${attention ? 'flagged' : ''}`}>{attention ? 'Con flags' : pending ? 'Pendiente' : 'OK'}</span></header>
     <div className="active-card-body">
       {c.activeReason?.code === 'friday-cohort' && <span className="active-pending">{c.activeReason.label}</span>}
       {marks.length > 0 && <ul className="active-flags">{marks.map(m => <li key={m.id}><Mark kind={classificationOf(m)} /><span>{m.name}</span></li>)}</ul>}

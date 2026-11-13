@@ -27,7 +27,7 @@ function Participation({ assistant, client, counts, children }) {
   const total = available ? assistant + client : null;
   const teamShare = total > 0 ? assistant / total : 0;
   return <article className="metric-participation-card">
-    <div className="metric-participation-heading"><h3>Quién escribió</h3><Explain label="Mensajes del día">Cuenta los mensajes del cliente y del equipo (Agente humano + Bot). Excluye eventos técnicos y emisores sin identificar. Las proporciones muestran participación, no calidad de atención.</Explain></div>
+    <div className="metric-participation-heading"><h3>Quién escribió</h3><Explain label="Mensajes del día">Cuenta los mensajes del cliente y del equipo (agente humano + bot). Excluye eventos técnicos y emisores sin identificar. Las proporciones muestran participación, no calidad de atención.</Explain></div>
     <div className="metric-participation-visual">
       <div className="metric-message-ring" role="img" aria-label={available ? `${numeric(total)} ${total === 1 ? 'mensaje' : 'mensajes'}: ${numeric(client)} del cliente y ${numeric(assistant)} del equipo` : 'Distribución de mensajes no disponible'}>
         <svg viewBox="0 0 132 132" aria-hidden="true"><circle cx="66" cy="66" r="55" className="metric-ring-base" />{total > 0 && <><circle cx="66" cy="66" r="55" pathLength="100" className="metric-ring-client" /><circle cx="66" cy="66" r="55" pathLength="100" strokeDasharray={`${teamShare * 100} 100`} className="metric-ring-team" /></>}</svg>

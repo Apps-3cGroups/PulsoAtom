@@ -3,6 +3,8 @@ import { App, Alert, Button, Form, Input, Select, Switch, Tag } from 'antd';
 import { ClockCircleOutlined } from '@ant-design/icons';
 import { saveSchedule, verifySchedule, scheduleValues, sameSchedule } from '../services/schedule.js';
 
+const timezoneLabel = value => value === 'America/Mexico_City' ? 'Ciudad de México' : value.replace('America/', '').replaceAll('_', ' ');
+
 export default function ScheduleCard({ data, isAdmin, onSaved }) {
   const [form] = Form.useForm();
   const [saved, setSaved] = useState(data.settings);
@@ -62,14 +64,14 @@ export default function ScheduleCard({ data, isAdmin, onSaved }) {
     <Form form={form} layout="vertical" onFinish={save} initialValues={scheduleValues(data.settings)}
       onValuesChange={(_, values) => setDraft(scheduleValues(values))} disabled={!isAdmin || saving || !!pending}>
       <div className="schedule-toggle">
-        <div><b>Programación diaria</b><span aria-live="polite">{pending ? 'Último estado confirmado' : 'Estado guardado'}: {saved.dailyEnabled ? `activa · ${saved.dailyTime} · ${saved.timezone.replace('America/', '').replaceAll('_', ' ')}` : 'inactiva'}</span>
+        <div><b>Programación diaria</b><span aria-live="polite">{pending ? 'Último estado confirmado' : 'Estado guardado'}: {saved.dailyEnabled ? `activa · ${saved.dailyTime} · ${timezoneLabel(saved.timezone)}` : 'inactiva'}</span>
           {(dirty || pending) && <Tag className="schedule-draft-tag">{pending ? 'Guardado por confirmar' : draft.dailyEnabled !== saved.dailyEnabled ? draft.dailyEnabled ? 'Activación sin guardar' : 'Desactivación sin guardar' : 'Horario sin guardar'}</Tag>}
         </div>
         <Form.Item name="dailyEnabled" valuePropName="checked" noStyle><Switch disabled={!ready || !isAdmin || saving || !!pending} aria-label="Activar evaluación diaria" /></Form.Item>
       </div>
       <div className="form-two-columns">
         <Form.Item name="dailyTime" label="Hora de inicio" rules={[{ required: true, pattern: /^([01]\d|2[0-3]):[0-5]\d$/, message: 'Selecciona una hora válida.' }]}><Input type="time" aria-label="Hora de evaluación diaria" /></Form.Item>
-        <Form.Item name="timezone" label="Zona horaria" rules={[{ required: true }]}><Select aria-label="Zona horaria de evaluación" options={['America/Tegucigalpa', 'America/Mexico_City', 'America/Guatemala', 'America/Costa_Rica', 'UTC'].map(value => ({ value, label: value.replace('America/', '').replaceAll('_', ' ') }))} /></Form.Item>
+        <Form.Item name="timezone" label="Zona horaria" rules={[{ required: true }]}><Select aria-label="Zona horaria de evaluación" options={['America/Tegucigalpa', 'America/Mexico_City', 'America/Guatemala', 'America/Costa_Rica', 'UTC'].map(value => ({ value, label: timezoneLabel(value) }))} /></Form.Item>
       </div>
       <div className="schedule-hint"><ClockCircleOutlined /><span>{previousDay ? 'Cada conversación recibe dos revisiones independientes. Los fallos quedan visibles en el historial de ejecuciones.' : 'Al activar, el histórico anterior queda fuera de la programación. Los lotes a demanda pueden evaluarlo.'}</span></div>
       <div className="evaluation-card-bottom">{isAdmin ? pending
