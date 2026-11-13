@@ -1,67 +1,88 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ACTIVITY_DATE, MonitorError, createApi, createCollector, createPoller, portalBase, summarize } from '../progress.js';
+import { COMPLETION_ID, RECOVERY_ID, RECOVERY_JOBS, MonitorError, createApi, createCollector, createPoller, portalBase, summarize } from '../progress.js';
 const ids = ['clef-local', 'gemma-local'];
-const counts = (profileId, total, completed = 0, partial = 0, running = 0) => ({ profileId, total, completed, partial, failed: 0, running, pending: total - completed - partial - running });
-function job(id, country, total, progress) {
-  const conversationIds = Array.from({ length: total }, (_, i) => `${id}-${i}`);
-  return { id, purpose: 'operational', status: 'running', dailyActivity: { date: ACTIVITY_DATE, timezone: 'America/Tegucigalpa' },
-    conversationIds, conversationCountries: Object.fromEntries(conversationIds.map(id => [id, country])),
-    modelProfiles: ids.map(id => ({ id })), modelProgress: progress, updatedAt: '2026-11-10T16:00:00Z' };
+const now = '2026-11-13T03:00:00.000Z';
+const counts = (profileId, total, completed = 0, partial = 0, running = 0, failed = 0) => ({ profileId, total, completed, partial, failed, running, pending: total - completed - partial - running - failed });
+function job(id, total, progress, key) {
+  return { id, purpose: 'operational', status: 'running', conversationIds: Array.from({ length: total }, (_, i) => `${id}-${i}`),
+    modelProfiles: ids.map(id => ({ id })), modelProgress: progress, idempotencyKey: key,
+    createdAt: now, updatedAt: now };
 }
-const fixture = () => [
-  { ...job('first', 'HN', 15, [counts(ids[0], 15, 15), counts(ids[1], 15, 10, 5)]), status: 'partial' },
-  job('current', 'HN', 185, [counts(ids[0], 185, 153, 1, 2), counts(ids[1], 185)]),
-];
-test('la corrida del 11 usa actividad del 10 y cuenta lo pendiente fuera del primer lote de 52', () => {
-  assert.equal(ACTIVITY_DATE, '2026-11-10');
-  const data = summarize({ jobs: [job('today', 'HN', 52, [counts(ids[0],52,51,1),counts(ids[1],52,22,1,2)])] });
-  assert.equal(data.target, 364); assert.equal(data.total, 728);
-  assert.deepEqual([data.completed,data.partial,data.running,data.pending], [73,2,2,651]);
-  assert.equal(data.models[0].processed,52); assert.equal(data.models[1].processed,23);
-  assert.equal(data.countries[0].unassigned,148); assert.equal(data.countries[1].unassigned,164);
-  assert.equal(data.finished,false);
+function fixture({ retriesDone = false, phase, finished = false } = {}) {
+  const jobs = [job(RECOVERY_JOBS[0], 52, ids.map(id => counts(id, 52, 52))),
+    job(RECOVERY_JOBS[1], 312, [counts(ids[0], 312, 311, 1), counts(ids[1], 312, retriesDone ? 312 : 310, retriesDone ? 0 : 2)])];
+  jobs[0].status = 'completed'; jobs[1].status = 'partial';
+  for (const [key, total] of [['tuesday', 167], ['wednesday', 43]]) if (phase === key || finished) {
+    jobs.push(job(`new-${key}`, total, ids.map(id => counts(id, total, finished ? total : 0)), `${COMPLETION_ID}:${key}`));
+    if (finished) jobs.at(-1).status = 'completed';
+  }
+  return { jobs, settings: { evaluationMaintenance: finished ? null : RECOVERY_ID,
+    tuesdayWednesdayCompletion: { id: COMPLETION_ID, status: finished ? 'completed' : 'running', concurrency: 1 } } };
+}
+test('scope remains 212 conversations and 422 reviews, excludes old Clef and all 725 preserved reviews', () => {
+  const data = summarize(fixture(), now);
+  assert.deepEqual([data.target, data.requested, data.excluded, data.preserved, data.total], [212, 213, 1, 725, 422]);
+  assert.deepEqual([data.completed, data.partial, data.failed, data.running, data.pending], [0, 2, 0, 0, 420]);
+  assert.deepEqual(data.models.map(model => [model.total, model.completed, model.partial, model.pending]), [[210, 0, 0, 210], [212, 0, 2, 210]]);
+  assert.equal(data.percent, 0); assert.equal(data.finished, false); assert.equal(data.paused, false);
+  assert.equal(data.completedConversations, undefined);
+  assert.deepEqual(data.phases.map(phase => [phase.target, phase.totalReviews, phase.unassigned, phase.counts.pending]), [[169, 336, 167, 334], [43, 86, 43, 86]]);
 });
-test('incorpora cargas posteriores de Panamá hasta el cupo de 200 al asignarse', () => {
-  const data=summarize({ jobs:[...fixture(),job('more-pa','PA',200,[counts(ids[0],200),counts(ids[1],200)])] });
-  assert.equal(data.target,400); assert.equal(data.total,800);
-  assert.equal(data.countries[1].target,200); assert.equal(data.countries[1].unassigned,0);
+test('counts two Gemma retries once, and includes Wednesday pending before that batch exists', () => {
+  const payload = fixture({ retriesDone: true, phase: 'tuesday' }), tuesday = payload.jobs.at(-1);
+  tuesday.modelProgress = [counts(ids[0], 167, 5, 0, 1), counts(ids[1], 167, 4, 1)];
+  const data = summarize(payload, now);
+  assert.deepEqual([data.completed, data.partial, data.running, data.pending], [11, 1, 1, 409]);
+  assert.deepEqual(data.models.map(model => [model.completed, model.total]), [[5, 210], [6, 212]]);
+  assert.equal(data.percent, 11 / 422 * 100); assert.equal(data.paused, false); assert.equal(data.models[0].active, true);
+  assert.equal(data.phases[0].counts.completed, 11); assert.equal(data.phases[1].counts.pending, 86);
+  assert.equal(data.phases[1].unassigned, 43); assert.equal(data.completedConversations, undefined);
 });
-test('suma los lotes de Honduras, incluye Panamá por asignar y separa parciales de completas', () => {
-  const jobs = fixture();
-  jobs[1].deferredConversationIds = ['outside']; jobs[1].conversationCountries.outside = 'HN';
-  const data = summarize({ jobs });
-  assert.equal(data.target, 364); assert.equal(data.total, 728);
-  assert.deepEqual([data.completed, data.partial, data.running, data.pending], [178, 6, 2, 542]);
-  assert.equal(data.models[0].processed, 169); assert.equal(data.models[0].pending, 193);
-  assert.equal(data.models[1].processed, 15); assert.equal(data.models[1].pending, 349);
-  assert.equal(data.models[0].status, 'En curso'); assert.equal(data.models[1].status, 'Pendiente');
-  assert.equal(data.countries[0].assigned, 200); assert.equal(data.countries[1].unassigned, 164);
-  assert.equal(data.countries[1].counts.pending, 328); assert.equal(data.deferred, 1);
-  assert.equal(data.finished, false);
+test('only fully completed 422 reviews plus committed completion finish the monitor', () => {
+  const payload = fixture({ retriesDone: true, finished: true });
+  let data = summarize(payload, now); assert.equal(data.finished, true); assert.equal(data.percent, 100); assert.equal(data.partial, 0);
+  assert.deepEqual(data.phases.map(phase => phase.counts.completed), [336, 86]);
+  assert.equal(data.models[0].completed, 210); assert.equal(data.models[1].completed, 212);
+  payload.settings.tuesdayWednesdayCompletion.status = 'running'; data = summarize(payload, now); assert.equal(data.finished, false);
+  payload.jobs.at(-1).modelProgress[1] = counts(ids[1], 43, 42, 1);
+  payload.settings.tuesdayWednesdayCompletion.status = 'completed'; data = summarize(payload, now);
+  assert.equal(data.finished, false); assert.equal(data.completed, 421); assert.equal(data.partial, 1); assert.ok(data.percent < 100);
 });
-test('incorpora el nuevo lote de Panamá automáticamente y cierra solo cuando terminan ambos modelos', () => {
-  const jobs = fixture(); jobs[1].modelProgress = [counts(ids[0],185,184,1), counts(ids[1],185,185)]; jobs[1].status = 'partial';
-  const pa = job('panama', 'PA', 164, [counts(ids[0],164,164), counts(ids[1],164,163,0,1)]); jobs.push(pa);
-  let data = summarize({ jobs }); assert.equal(data.finished, false); assert.equal(data.unassigned, 0); assert.equal(data.models[1].active, true);
-  pa.modelProgress[1] = counts(ids[1],164,164); pa.status = 'completed';
-  data = summarize({ jobs }); assert.equal(data.finished, true); assert.equal(data.processed,728); assert.equal(data.percent,100); assert.equal(data.partial,6);
+test('ignores unrelated runs and rejects duplicate membership, corrupted totals and missing baselines', () => {
+  const payload = fixture(); payload.jobs.push({ id: 'irrelevant', dailyActivity: { date: '2026-11-10' }, idempotencyKey: 'another-run:tuesday' });
+  assert.equal(summarize(payload, now).total, 422);
+  for (const mutate of [p => p.jobs.pop(), p => p.jobs.push(p.jobs[0]), p => { p.jobs[1].modelProgress[1].completed--; },
+    p => { p.jobs[1].modelProgress[1] = counts(ids[1], 312, 309, 3); },
+    p => { p.jobs[1].conversationIds[0] = p.jobs[0].conversationIds[0]; }]) {
+    const invalid = fixture(); mutate(invalid); assert.throws(() => summarize(invalid, now), MonitorError);
+  }
+  const duplicate = fixture({ phase: 'tuesday' }); duplicate.jobs.push({ ...duplicate.jobs.at(-1), id: 'duplicate-key' });
+  assert.throws(() => summarize(duplicate, now), MonitorError);
 });
-test('excluye otros días y rechaza conversaciones duplicadas, países desconocidos y totales inválidos', () => {
-  const jobs=fixture(); const other=job('other','HN',1,[counts(ids[0],1),counts(ids[1],1)]);other.dailyActivity.date='2026-11-09';
-  assert.equal(summarize({jobs:[...jobs,other]}).target,364);
-  assert.throws(()=>summarize({jobs:[...jobs,jobs[0]]}),MonitorError);
-  jobs[1].modelProgress[0].pending++; assert.throws(()=>summarize({jobs}),MonitorError);
-  const unknown=fixture();delete unknown[1].conversationCountries[unknown[1].conversationIds[0]];assert.throws(()=>summarize({jobs:unknown}),MonitorError);
+test('own maintenance is not a pause; heartbeat identifies stale running work and explicit blocks', () => {
+  const payload = fixture({ retriesDone: true, phase: 'tuesday' }), tuesday = payload.jobs.at(-1);
+  tuesday.modelProgress[0] = counts(ids[0], 167, 0, 0, 1);
+  let data = summarize(payload, now); assert.equal(data.paused, false); assert.equal(data.stalled, false); assert.equal(data.models[0].active, true);
+  tuesday.updatedAt = '2026-11-13T02:40:00.000Z'; data = summarize(payload, now);
+  assert.equal(data.stalled, true); assert.equal(data.models[0].active, false); assert.equal(data.paused, false);
+  payload.settings.tuesdayWednesdayCompletion.status = 'blocked'; tuesday.status = 'partial';
+  data = summarize(payload, now); assert.equal(data.blocked, true); assert.equal(data.paused, false);
+  assert.equal(summarize(fixture({ retriesDone: true }), now).interrupted, false);
 });
-test('el país no se inventa para lotes mixtos; el avance global se conserva', () => {
-  const jobs=fixture();jobs[1].conversationCountries[jobs[1].conversationIds[0]]='PA';
-  const data=summarize({jobs});assert.equal(data.processed,184);assert.ok(data.countries.every(c=>!c.modelBreakdownAvailable));
+test('collector uses one authenticated read and returns no conversation membership or answer data', async () => {
+  const calls = [], collect = createCollector(async route => { calls.push(route); return fixture(); });
+  const data = await collect(); assert.deepEqual(calls, ['/evaluations']);
+  assert.ok(data.batches.every(batch => !('conversationIds' in batch) && !('modelProfiles' in batch)));
 });
-test('un solo GET autenticado obtiene los agregados; no lee respuestas ni inicia evaluaciones', async () => {
-  const calls=[];const collect=createCollector(async path=>{calls.push(path);return{jobs:fixture()};});
-  const snapshot=await collect();assert.deepEqual(calls,['/evaluations']);assert.equal(snapshot.models.length,2);
-  assert.ok(snapshot.batches.every(b=>!('conversationIds' in b)&&!('modelProfiles' in b)));
+test('prepared workers use their start time and cannot look healthy indefinitely between phases', () => {
+  const payload = fixture({ retriesDone: true });
+  payload.jobs.forEach(job => { job.updatedAt = '2026-11-13T01:00:00.000Z'; });
+  Object.assign(payload.settings.tuesdayWednesdayCompletion, { status: 'prepared', preparedAt: now });
+  let data = summarize(payload, '2026-11-13T03:01:00.000Z');
+  assert.equal(data.preparing, true); assert.equal(data.stalled, false); assert.equal(data.activity, now);
+  data = summarize(payload, '2026-11-13T03:20:00.000Z');
+  assert.equal(data.preparing, false); assert.equal(data.stalled, true); assert.equal(data.paused, false);
 });
 test('cliente conserva la sesión del portal y distingue acceso vencido de error de servidor', async () => {
   assert.equal(portalBase('/pulsoAtom/monitor-evaluaciones/index.html'),'/pulsoAtom');

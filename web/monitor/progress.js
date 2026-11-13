@@ -1,10 +1,9 @@
 export const POLL_MS = 30_000;
-export const RUN_DATE = '2026-11-11';
-export const ACTIVITY_DATE = '2026-11-10';
-// Verified ready conversations for this activity date: HN 367, PA 164.
-// Apply the daily country cap; later assigned batches can raise the PA target.
-export const COUNTRIES = [{ code: 'HN', name: 'Honduras', target: 200 }, { code: 'PA', name: 'Panamá', target: 164 }];
-export const MODELS = [{ id: 'clef-local', label: 'Clef', model: 'clef-flash' }, { id: 'gemma-local', label: 'Gemma', model: 'gemma-4-26b-a4b-it-mlx' }];
+export const COMPLETION_ID = '8fa643d2-0c32-4cbc-88da-14959ff877cd';
+export const RECOVERY_ID = '5db71f86-2186-49a8-b715-722f93e8fc41';
+export const RECOVERY_JOBS = ['340c1fcb-dc19-42a2-91af-e494eb52d753', 'ee30980f-df37-4592-bae9-3090f49f5e3e'];
+export const STALE_ACTIVITY_MS = 10 * 60_000;
+export const MODELS = [{ id: 'clef-local', label: 'Clef', model: 'clef-flash', total: 210 }, { id: 'gemma-local', label: 'Gemma', model: 'gemma-4-26b-a4b-it-mlx', total: 212 }];
 export class MonitorError extends Error {
   constructor(message, status = 0) { super(message); this.status = status; }
 }
@@ -50,89 +49,85 @@ export function createPoller({ collect, onStart, onData, onError, onEnd, schedul
 }
 
 const statuses = ['completed', 'partial', 'failed', 'running', 'pending'];
-const terminal = new Set(['completed', 'partial', 'failed']);
-const blank = () => Object.fromEntries(statuses.map(s => [s, 0]));
-const processed = value => value.completed + value.partial + value.failed;
-const add = (to, from) => statuses.forEach(s => { to[s] += from[s]; });
-
+const blank = () => Object.fromEntries(statuses.map(status => [status, 0]));
+const add = (to, from) => statuses.forEach(status => { to[status] += from[status]; });
+const invalid = () => { throw new MonitorError('No pudimos verificar el avance de esta recuperación. Conservamos la última lectura.'); };
+function readProgress(job, expected) {
+  if (job.purpose !== 'operational' || !Array.isArray(job.conversationIds) || job.conversationIds.length !== expected
+    || new Set(job.conversationIds).size !== expected || !Array.isArray(job.modelProfiles) || job.modelProfiles.length !== 2
+    || MODELS.some(model => !job.modelProfiles.some(profile => profile.id === model.id)) || !Array.isArray(job.modelProgress)) invalid();
+  return MODELS.map(model => {
+    const entries = job.modelProgress.filter(progress => progress.profileId === model.id), entry = entries[0];
+    if (entries.length !== 1 || entry.total !== expected || statuses.some(status => !Number.isSafeInteger(entry[status]) || entry[status] < 0)
+      || statuses.reduce((total, status) => total + entry[status], 0) !== expected) invalid();
+    return { id: model.id, label: model.label, total: expected, ...Object.fromEntries(statuses.map(status => [status, entry[status]])) };
+  });
+}
 export function summarize(payload, observedAt = new Date().toISOString()) {
   if (!Array.isArray(payload?.jobs)) throw new MonitorError('El avance recibido no tiene un formato válido.');
-  const jobs = payload.jobs.filter(j => j.dailyActivity?.date === ACTIVITY_DATE
-    && j.dailyActivity.timezone === 'America/Tegucigalpa' && j.purpose === 'operational');
-  const countries = COUNTRIES.map(c => ({ ...c, assigned: 0, deferred: 0, counts: blank(), modelBreakdownAvailable: true }));
-  const models = MODELS.map(m => ({ ...m, ...blank(), active: false }));
-  const seenJobs = new Set(), seenConversations = new Set(), deferred = new Set();
-  const batches = [];
-  for (const job of jobs) {
-    if (seenJobs.has(job.id) || !Array.isArray(job.conversationIds) || !Array.isArray(job.modelProgress)
-      || !Array.isArray(job.modelProfiles) || job.modelProfiles.length !== 2
-      || MODELS.some(m => !job.modelProfiles.some(p => p.id === m.id))) throw new MonitorError('No pudimos verificar los modelos de esta corrida.');
-    seenJobs.add(job.id);
-    const members = new Map();
-    for (const id of job.conversationIds) {
-      const code = job.conversationCountries?.[id], country = countries.find(c => c.code === code);
-      if (!country || seenConversations.has(id)) throw new MonitorError('No pudimos verificar el país o la unicidad de las conversaciones.');
-      seenConversations.add(id); country.assigned++;
-      members.set(code, (members.get(code) || 0) + 1);
-    }
-    for (const id of job.deferredConversationIds || []) {
-      if (!deferred.has(id)) {
-        deferred.add(id);
-        const country = countries.find(c => c.code === job.conversationCountries?.[id]);
-        if (country) country.deferred++;
-      }
-    }
-    const progress = MODELS.map(model => {
-      const entries = job.modelProgress.filter(p => p.profileId === model.id), entry = entries[0];
-      if (entries.length !== 1 || entry.total !== job.conversationIds.length
-        || statuses.some(s => !Number.isSafeInteger(entry[s]) || entry[s] < 0)
-        || statuses.reduce((sum, s) => sum + entry[s], 0) !== entry.total) throw new MonitorError('El detalle de un modelo está incompleto; conservamos la última lectura.');
-      const counts = Object.fromEntries(statuses.map(s => [s, entry[s]]));
-      add(models.find(m => m.id === model.id), counts);
-      return { id: model.id, label: model.label, ...counts, processed: processed(counts), total: entry.total };
-    });
-    if (members.size === 1) {
-      const country = countries.find(c => c.code === [...members.keys()][0]);
-      progress.forEach(p => add(country.counts, p));
-    } else if (members.size > 1) {
-      for (const code of members.keys()) countries.find(c => c.code === code).modelBreakdownAvailable = false;
-    }
-    if (job.status === 'running') {
-      const phase = job.modelProfiles.find(p => {
-        const m = progress.find(m => m.id === p.id); return m.running > 0 || m.pending > 0;
-      });
-      if (phase) models.find(m => m.id === phase.id).active = true;
-    }
-    if (job.conversationIds.length) batches.push({ id: job.id, status: job.status, countries: [...members.keys()], cases: job.conversationIds.length,
-      createdAt: job.createdAt, models: progress, updatedAt: job.updatedAt });
+  const run = payload.settings?.tuesdayWednesdayCompletion;
+  if (run && run.id !== COMPLETION_ID) invalid();
+  const models = MODELS.map(model => ({ ...model, ...blank(), active: false }));
+  const phases = [
+    { key: 'tuesday', code: 'MAR', name: 'Martes 10 de noviembre', target: 169, totalReviews: 336, newCases: 167, unassigned: 167, counts: blank() },
+    { key: 'wednesday', code: 'MIÉ', name: 'Miércoles 11 de noviembre', target: 43, totalReviews: 86, newCases: 43, unassigned: 43, counts: blank() },
+  ];
+  const batches = [], participating = [], seenConversations = new Set(), retry = blank();
+  for (const [index, id] of RECOVERY_JOBS.entries()) {
+    const jobs = payload.jobs.filter(job => job.id === id); if (jobs.length !== 1) invalid();
+    const job = jobs[0], progress = readProgress(job, index ? 312 : 52);
+    for (const id of job.conversationIds) { if (seenConversations.has(id)) invalid(); seenConversations.add(id); }
+    add(retry, progress.find(model => model.id === 'gemma-local'));
+    participating.push({ job, remaining: progress.find(model => model.id === 'gemma-local').total - progress.find(model => model.id === 'gemma-local').completed });
   }
-  for (const country of countries) {
-    country.target = Math.max(country.target, country.assigned);
-    country.unassigned = country.target - country.assigned;
-    country.counts.pending += country.unassigned * MODELS.length;
-    country.processed = processed(country.counts);
-    country.totalReviews = country.target * MODELS.length;
+  // The old jobs already held 362 complete Gemma answers. Only the remaining
+  // two belong to this recovery. The excluded old Clef task is never counted.
+  retry.completed -= 362;
+  if (retry.completed < 0 || statuses.reduce((sum, status) => sum + retry[status], 0) !== 2) invalid();
+  add(models[1], retry); add(phases[0].counts, retry);
+  batches.push({ id: 'prior-gemma-retries', label: 'Dos pendientes anteriores del martes', cases: 2,
+    models: [{ id: 'gemma-local', label: 'Gemma', total: 2, ...retry }] });
+  for (const phase of phases) {
+    const jobs = payload.jobs.filter(job => job.idempotencyKey === `${COMPLETION_ID}:${phase.key}`);
+    if (jobs.length > 1) invalid();
+    const job = jobs[0];
+    if (!job) {
+      for (const model of models) model.pending += phase.newCases;
+      phase.counts.pending += phase.newCases * 2;
+      continue;
+    }
+    const progress = readProgress(job, phase.newCases);
+    for (const id of job.conversationIds) { if (seenConversations.has(id)) invalid(); seenConversations.add(id); }
+    for (const entry of progress) { add(models.find(model => model.id === entry.id), entry); add(phase.counts, entry); }
+    phase.unassigned = 0;
+    batches.push({ id: job.id, label: `${phase.name} · lote nuevo`, cases: phase.newCases, models: progress });
+    participating.push({ job, remaining: progress.reduce((sum, model) => sum + model.total - model.completed, 0) });
   }
-  const target = countries.reduce((sum, c) => sum + c.target, 0);
-  const unassigned = countries.reduce((sum, c) => sum + c.unassigned, 0);
+  const now = Date.parse(observedAt), times = [...participating.map(({ job }) => job.updatedAt || job.createdAt), run?.updatedAt, run?.preparedAt]
+    .filter(value => Number.isFinite(Date.parse(value)));
+  const activity = times.sort().at(-1) || null;
+  const runningJobs = participating.filter(({ job, remaining }) => job.status === 'running' && remaining > 0);
+  const activeJobs = runningJobs.filter(({ job }) => now - Date.parse(job.updatedAt || job.createdAt) <= STALE_ACTIVITY_MS);
   for (const model of models) {
-    model.pending += unassigned; model.total = target; model.processed = processed(model);
-    model.percent = model.processed / target * 100;
-    model.status = model.running > 0 || model.active ? 'En curso' : model.pending > 0 ? 'Pendiente' : model.partial || model.failed ? 'Terminó con incidencias' : 'Terminado';
+    if (model.completed > model.total || statuses.reduce((sum, status) => sum + model[status], 0) !== model.total) invalid();
+    model.active = model.running > 0 && activeJobs.some(({ job }) => RECOVERY_JOBS.includes(job.id)
+      ? model.id === 'gemma-local' : job.modelProgress.some(progress => progress.profileId === model.id && progress.running > 0));
+    model.percent = model.completed / model.total * 100;
+    model.status = model.active ? 'En curso' : model.completed === model.total ? 'Completado' : model.partial || model.failed ? 'Con incidencias' : 'Pendiente';
   }
-  const counts = blank(); models.forEach(m => add(counts, m));
-  const activity = jobs.map(j => j.updatedAt || j.createdAt).filter(v => Number.isFinite(Date.parse(v))).sort().at(-1) || null;
-  const total = target * MODELS.length, done = processed(counts);
-  return { ...counts, processed: done, total, target, unassigned, percent: done / total * 100, countries, models, batches,
-    observedAt, activity, finished: done === total && jobs.every(j => terminal.has(j.status)),
-    interrupted: jobs.some(j => j.status === 'interrupted'), paused: !!payload.settings?.evaluationMaintenance,
-    deferred: deferred.size, date: ACTIVITY_DATE };
-}
-
-export function createCollector(api) {
-  return async signal => {
-    // The endpoint enforces the existing administrator session. One request
-    // supplies a consistent snapshot without downloading attempts or answers.
-    return summarize(await api('/evaluations', signal));
+  const counts = blank(); models.forEach(model => add(counts, model));
+  const finished = counts.completed === 422 && run?.status === 'completed';
+  const runActive = ['prepared', 'running'].includes(run?.status);
+  const stalled = !finished && (runningJobs.length > activeJobs.length || runActive && !!activity && now - Date.parse(activity) > STALE_ACTIVITY_MS);
+  return { ...counts, total: 422, target: 212, requested: 213, excluded: 1, preserved: 725,
+    concurrency: [1, 2].includes(run?.concurrency) ? run.concurrency : 1, percent: counts.completed / 422 * 100, models, phases, batches, observedAt, activity, finished,
+    unassigned: phases.reduce((sum, phase) => sum + phase.unassigned, 0),
+    preparing: !finished && !stalled && !runningJobs.length && runActive && counts.pending > 0,
+    blocked: run?.status === 'blocked', interrupted: participating.some(({ job }) => !RECOVERY_JOBS.includes(job.id) && job.status === 'interrupted'),
+    stalled,
+    paused: !finished && !runningJobs.length && !!payload.settings?.evaluationMaintenance && payload.settings.evaluationMaintenance !== RECOVERY_ID,
   };
+}
+export function createCollector(api) {
+  return async signal => summarize(await api('/evaluations', signal));
 }
