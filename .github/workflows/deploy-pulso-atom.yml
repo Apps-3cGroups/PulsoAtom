@@ -9,7 +9,7 @@ on:
       operation:
         description: 'Operación explícita: deploy, comprobación, inspección, preparación, renovación, ampliación o estado'
         type: choice
-        options: [deploy, tuesday-wednesday-prioritize-thursday, tuesday-wednesday-probe, tuesday-wednesday-inspect, tuesday-wednesday-start, tuesday-wednesday-start-two, tuesday-wednesday-stop, tuesday-wednesday-status, thursday-handoff-inspect, thursday-handoff-prepare, gemma-rejection-inspect, gemma-format-preflight, gemma-tuesday-continue, gemma-tuesday-recover, gemma-tuesday-status, gemma-identity-inspect, navigation-benchmark, daily-activity-inspect, daily-activity-enable, daily-activity-run-yesterday, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
+        options: [deploy, web-static-install, tuesday-wednesday-prioritize-thursday, tuesday-wednesday-probe, tuesday-wednesday-inspect, tuesday-wednesday-start, tuesday-wednesday-start-two, tuesday-wednesday-stop, tuesday-wednesday-status, thursday-handoff-inspect, thursday-handoff-prepare, gemma-rejection-inspect, gemma-format-preflight, gemma-tuesday-continue, gemma-tuesday-recover, gemma-tuesday-status, gemma-identity-inspect, navigation-benchmark, daily-activity-inspect, daily-activity-enable, daily-activity-run-yesterday, evaluation-batch-inspect, local-next500-inspect, local-next500-start, local-next500-status, gemma-preflight, gemma-inspect, gemma-prepare, gemma-start, gemma-extend, gemma-status]
         default: deploy
         required: true
       first_run_date:
@@ -91,7 +91,7 @@ concurrency:
 
 jobs:
   gemma-check:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'tuesday-wednesday-probe' || inputs.operation == 'tuesday-wednesday-inspect' || inputs.operation == 'tuesday-wednesday-prioritize-thursday' || inputs.operation == 'tuesday-wednesday-start' || inputs.operation == 'tuesday-wednesday-start-two' || inputs.operation == 'thursday-handoff-prepare' || inputs.operation == 'tuesday-wednesday-stop' || inputs.operation == 'tuesday-wednesday-status' || inputs.operation == 'thursday-handoff-inspect' || inputs.operation == 'gemma-rejection-inspect' || inputs.operation == 'gemma-format-preflight' || inputs.operation == 'gemma-tuesday-continue' || inputs.operation == 'gemma-tuesday-recover' || inputs.operation == 'gemma-tuesday-status' || inputs.operation == 'gemma-identity-inspect' || inputs.operation == 'navigation-benchmark' || inputs.operation == 'daily-activity-enable' || inputs.operation == 'daily-activity-run-yesterday' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.operation == 'web-static-install' || inputs.operation == 'tuesday-wednesday-probe' || inputs.operation == 'tuesday-wednesday-inspect' || inputs.operation == 'tuesday-wednesday-prioritize-thursday' || inputs.operation == 'tuesday-wednesday-start' || inputs.operation == 'tuesday-wednesday-start-two' || inputs.operation == 'thursday-handoff-prepare' || inputs.operation == 'tuesday-wednesday-stop' || inputs.operation == 'tuesday-wednesday-status' || inputs.operation == 'thursday-handoff-inspect' || inputs.operation == 'gemma-rejection-inspect' || inputs.operation == 'gemma-format-preflight' || inputs.operation == 'gemma-tuesday-continue' || inputs.operation == 'gemma-tuesday-recover' || inputs.operation == 'gemma-tuesday-status' || inputs.operation == 'gemma-identity-inspect' || inputs.operation == 'navigation-benchmark' || inputs.operation == 'daily-activity-enable' || inputs.operation == 'daily-activity-run-yesterday' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-start' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' || inputs.operation == 'gemma-prepare' || inputs.operation == 'gemma-start' || inputs.operation == 'gemma-extend' || inputs.operation == 'gemma-status') }}
     name: Explicit model operation
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
@@ -131,7 +131,7 @@ jobs:
           }
           Write-Output 'Verified removal of the three known temporary credential directories.'
       - uses: actions/checkout@v4
-        if: ${{ inputs.operation == 'tuesday-wednesday-probe' || inputs.operation == 'tuesday-wednesday-inspect' || inputs.operation == 'tuesday-wednesday-status' || inputs.operation == 'thursday-handoff-inspect' || inputs.operation == 'gemma-rejection-inspect' || inputs.operation == 'gemma-format-preflight' || inputs.operation == 'gemma-tuesday-status' || inputs.operation == 'gemma-identity-inspect' || inputs.operation == 'navigation-benchmark' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
+        if: ${{ inputs.operation == 'web-static-install' || inputs.operation == 'tuesday-wednesday-probe' || inputs.operation == 'tuesday-wednesday-inspect' || inputs.operation == 'tuesday-wednesday-status' || inputs.operation == 'thursday-handoff-inspect' || inputs.operation == 'gemma-rejection-inspect' || inputs.operation == 'gemma-format-preflight' || inputs.operation == 'gemma-tuesday-status' || inputs.operation == 'gemma-identity-inspect' || inputs.operation == 'navigation-benchmark' || inputs.operation == 'daily-activity-inspect' || inputs.operation == 'evaluation-batch-inspect' || inputs.operation == 'local-next500-inspect' || inputs.operation == 'local-next500-status' || inputs.operation == 'gemma-preflight' || inputs.operation == 'gemma-inspect' }}
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -159,8 +159,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-          if ($env:GEMMA_OPERATION -cnotin @('tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-prioritize-thursday', 'tuesday-wednesday-start', 'tuesday-wednesday-start-two', 'thursday-handoff-prepare', 'tuesday-wednesday-stop', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-continue', 'gemma-tuesday-recover', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-enable', 'daily-activity-run-yesterday', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
-          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
+          if ($env:GEMMA_OPERATION -cnotin @('web-static-install', 'tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-prioritize-thursday', 'tuesday-wednesday-start', 'tuesday-wednesday-start-two', 'thursday-handoff-prepare', 'tuesday-wednesday-stop', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-continue', 'gemma-tuesday-recover', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-enable', 'daily-activity-run-yesterday', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-start', 'local-next500-status', 'gemma-preflight', 'gemma-inspect', 'gemma-prepare', 'gemma-start', 'gemma-extend', 'gemma-status')) { throw 'Invalid model operation.' }
+          $useCheckoutSource = $env:GEMMA_OPERATION -cin @('web-static-install', 'tuesday-wednesday-probe', 'tuesday-wednesday-inspect', 'tuesday-wednesday-status', 'thursday-handoff-inspect', 'gemma-rejection-inspect', 'gemma-format-preflight', 'gemma-tuesday-status', 'gemma-identity-inspect', 'navigation-benchmark', 'daily-activity-inspect', 'evaluation-batch-inspect', 'local-next500-inspect', 'local-next500-status', 'gemma-preflight', 'gemma-inspect')
           if (-not $useCheckoutSource -and $env:GITHUB_SHA -cnotmatch '^[a-f0-9]{40}$') { throw 'Invalid expected production revision.' }
           if ($env:GEMMA_OPERATION -ceq 'evaluation-batch-inspect') {
             if ($env:EVALUATION_JOB_ID -cnotmatch '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![\s\S])') { throw 'Evaluation job ID must be a lowercase UUID.' }
@@ -201,6 +201,7 @@ jobs:
             if ($env:HANDOFF_CONCURRENCY -cnotmatch '^[12](?![\s\S])') { throw 'Thursday concurrency must be 1 or 2.' }
           }
           switch -CaseSensitive ($env:GEMMA_OPERATION) {
+            'web-static-install' { $entryScript = 'scripts/install-web-static.js'; $scriptArguments = '' }
             'tuesday-wednesday-probe' { $entryScript = 'scripts/inspect-tuesday-wednesday-partials.js'; $scriptArguments = '' }
             'tuesday-wednesday-inspect' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = '--inspect' }
             'tuesday-wednesday-prioritize-thursday' { $entryScript = 'scripts/complete-tuesday-wednesday.js'; $scriptArguments = "--prioritize-thursday --expected-version $($env:EXPECTED_SETTINGS_VERSION) --resume-tuesday $($env:RESUME_TUESDAY)" }
@@ -264,6 +265,15 @@ jobs:
             if ($entries | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }) { throw 'Refusing links in the API checkout.' }
             if ($entries | Where-Object { $_.Name -in @('.data', 'node_modules') -or ($_.Name -match '^\.env(\..*)?$' -and $_.Name -ne '.env.example') }) { throw 'Refusing to copy runtime data or credentials.' }
             if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $entryScript) -PathType Leaf)) { throw 'Selected Gemma script is missing.' }
+            if ($env:GEMMA_OPERATION -ceq 'web-static-install') {
+              $staticRoot = Join-Path $env:GITHUB_WORKSPACE 'web/temporary-static'
+              if (-not (Test-Path -LiteralPath $staticRoot -PathType Container)) { throw 'Static web artifact is missing.' }
+              $staticEntries = @((Get-Item -LiteralPath $staticRoot -Force)) + @(Get-ChildItem -LiteralPath $staticRoot -Force -Recurse)
+              if ($staticEntries | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }) { throw 'Refusing links in the static web artifact.' }
+              foreach ($filename in @('artifact.json', 'index.html')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $staticRoot $filename) -PathType Leaf)) { throw 'Incomplete static web artifact.' }
+              }
+            }
             }
 
             $key = $env:TD_APPS_SSH_KEY
@@ -280,6 +290,9 @@ jobs:
             Invoke-Checked -FilePath 'ssh' -Arguments ($sshOptions + @($sshTarget, "umask 077; mkdir -m 700 -- '$remoteRoot'"))
             $remotePrepared = $true
             Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $sourceRoot, "${sshTarget}:$remoteRoot/"))
+            if ($env:GEMMA_OPERATION -ceq 'web-static-install') {
+              Invoke-Checked -FilePath 'scp' -Arguments ($scpOptions + @('-r', $staticRoot, "${sshTarget}:$remoteRoot/static-web"))
+            }
             # Isolated source + existing dependencies/env. No pull, npm, PM2,
             # migrations, reset or database writes. Preflight is synthetic only;
             # inspect/status read safe aggregates; the explicit partials probe invokes only authorized missing variables.
@@ -288,13 +301,18 @@ jobs:
           cleanup_check() { sudo -n rm -rf -- '$remoteRoot' || true; }
           trap cleanup_check EXIT
           trap 'exit 130' HUP INT TERM
-          sudo -n -u td -H test -r /var/www/nodeapps/PulsoAtom/api/.env
-          sudo -n -u td -H test -d /var/www/nodeapps/PulsoAtom/api/node_modules
           sudo -n chown -R td:td -- '$remoteRoot'
           sudo -n chmod 700 -- '$remoteRoot'
           sudo -n -u td -H test -f '$remoteRoot/api/$entryScript'
+          if [ '$env:GEMMA_OPERATION' = 'web-static-install' ]; then
+            # Built-ins only: no production environment/dependencies or process changes.
+            sudo -n -u td -H bash -c 'cd "`$1" && exec node scripts/install-web-static.js' _ '$remoteRoot/api'
+          else
+          sudo -n -u td -H test -r /var/www/nodeapps/PulsoAtom/api/.env
+          sudo -n -u td -H test -d /var/www/nodeapps/PulsoAtom/api/node_modules
           sudo -n -u td -H ln -s -- /var/www/nodeapps/PulsoAtom/api/node_modules '$remoteRoot/api/node_modules'
           sudo -n -u td -H bash -c 'cd "`$1" && exec node --env-file=/var/www/nodeapps/PulsoAtom/api/.env $entryScript $scriptArguments' _ '$remoteRoot/api'
+          fi
           "@
             } else {
               # State-changing commands run only the exact deployed revision.
