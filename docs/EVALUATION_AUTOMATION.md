@@ -59,7 +59,7 @@ Los endpoints de descubrimiento y conexión del Gateway se mantienen. Guardar un
 
 ## Transición controlada
 
-1. Verificar respaldo y aplicar la migración aditiva `005_evaluation_automation.sql` con `npm run db:migrate --prefix api` en el entorno de destino **antes de arrancar el código nuevo**. No ejecutar seeds ni reiniciar evaluaciones. El workflow de despliegue existente no ejecuta migraciones.
+1. Verificar respaldo y aplicar la migración aditiva `005_evaluation_automation.sql` **antes de arrancar el código nuevo**. El workflow de despliegue existente espera a que las evaluaciones estén libres, adquiere el bloqueo de mantenimiento y ejecuta `npm run db:migrate --prefix api -- --defer-online-indexes` antes del reinicio. Para un despliegue manual, mantener ese mismo orden. No ejecutar seeds ni reiniciar evaluaciones.
 2. Mantener una sola instancia del planificador de API. No añadir cron ni procesos de evaluación independientes. El bloqueo persistente protege adquisiciones concurrentes, pero la operación prevista usa un único planificador.
 3. Revisar los trabajos extraordinarios existentes. Sus manifiestos mantienen su flujo hasta finalizar; no se generan nuevas recuperaciones fechadas desde el detector recurrente. Los trabajos diarios anteriores ya seleccionados se trasladan a la cola, preservando perfiles, contexto y resultados completados.
 4. Abrir Configuración de evaluaciones. La primera lectura importa países, límites, tiempo, orden y prompts existentes. El primer guardado activa el uso del nuevo planificador; puede guardarse desactivado o pausado para preparar la puesta en marcha.
