@@ -33,6 +33,18 @@ const evaluator = (json = envelope(), overrides = {}) => {
 };
 const code = expected => error => { assert.equal(error.code, expected); return true; };
 
+test('configured item instructions reach only their own checklist entry and keep the response contract', async () => {
+  const { instance, calls } = evaluator();
+  await instance.withRuntime({ promptText: 'Instrucciones generales editables.', itemPrompts: { event: 'Exige una confirmación explícita.', unused: 'No transmitir.' } }).evaluate(conversation, variables);
+  const body = JSON.parse(calls[0][1].body).body;
+  assert.match(body.messages[0].content, /^Instrucciones generales editables\./);
+  assert.match(body.messages[0].content, /Contrato de respuesta obligatorio/);
+  const input = JSON.parse(body.messages.at(-1).content);
+  assert.equal(input.variables[0].instruccionesAdicionales, 'Exige una confirmación explícita.');
+  assert.equal(input.variables[1].instruccionesAdicionales, undefined);
+  assert.ok(!JSON.stringify(body).includes('No transmitir.'));
+});
+
 test('Gateway sends the audited envelope only to the configured backend and validates the common contract', async () => {
   const { instance, calls } = evaluator();
   assert.equal(instance.configured, true);

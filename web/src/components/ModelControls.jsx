@@ -10,15 +10,15 @@ import LocalModelConfiguration from './LocalModelConfiguration';
 import { executableProfiles, policySelection } from '../services/localModels';
 import { countryLabel } from '../services/presentationText';
 
-export const jobStatus = status => ({ running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
+export const jobStatus = status => ({ queued: 'En cola', paused: 'Pausada', retry_wait: 'Esperando reintento', running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
 const keepReading = () => true;
 const executionReadError = error => error?.code === 'TIMEOUT' ? { message: 'La consulta tardó demasiado. Reintentar consulta el avance; no vuelve a ejecutar los modelos.' } : error;
-export function ModelControls({ onSaved, running }) {
+export function ModelControls({ onSaved, running, hideConfiguration = false }) {
   const request = useApi('/models');
   const { user, bootstrap } = usePortal();
   const refresh = () => { request.reload(); onSaved(); };
   const data = request.data && { ...request.data, profiles: executableProfiles(request.data.profiles, bootstrap.mode === 'demo') };
-  return <><LocalModelConfiguration demo={bootstrap.mode === 'demo'} isAdmin={user.role === 'admin'} running={running} onSaved={refresh} />{request.error ? <ErrorState error={request.error} retry={request.reload} /> : !data ? <LoadingState /> : <div className="model-controls-grid"><PolicyCard key={`${data.policy.version}:${data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')}`} data={data} isAdmin={user.role === 'admin'} onSaved={refresh} /><SampleCard key={data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')} profiles={data.profiles} isAdmin={user.role === 'admin'} running={running} /></div>}</>;
+  return <>{!hideConfiguration && <LocalModelConfiguration demo={bootstrap.mode === 'demo'} isAdmin={user.role === 'admin'} running={running} onSaved={refresh} />}{request.error ? <ErrorState error={request.error} retry={request.reload} /> : !data ? <LoadingState /> : <div className="model-controls-grid"><PolicyCard key={`${data.policy.version}:${data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')}`} data={data} isAdmin={user.role === 'admin'} onSaved={refresh} /><SampleCard key={data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')} profiles={data.profiles} isAdmin={user.role === 'admin'} running={running} /></div>}</>;
 }
 function PolicyCard({ data, isAdmin, onSaved }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(null);

@@ -31,6 +31,19 @@ function fixture({ choose = (_id, question, stage) => stage === 'evidence' ? 'm1
 }
 const inferenceCalls = calls => calls.filter(call => call.invocation.path === '/v1/systemone');
 
+test('item instructions stay scoped in native classification and independent evidence questions', async () => {
+  const { evaluator, calls } = fixture({ choose: (_id, _q, stage) => stage === 'evidence' ? 'm1' : 'present' });
+  const configured = evaluator.withRuntime({ promptText: 'Instrucciones generales.', itemPrompts: { first: 'Solo una confirmación explícita.', unrelated: 'No transmitir.' } });
+  await configured.evaluate(conversation, [flag('first'), flag('second')]);
+  assert.equal(inferenceCalls(calls).length, 2);
+  for (const call of inferenceCalls(calls)) {
+    assert.match(call.invocation.body.questions.first.instructions, /Solo una confirmación explícita/);
+    assert.doesNotMatch(call.invocation.body.questions.second.instructions, /Solo una confirmación explícita/);
+    assert.ok(!JSON.stringify(call.invocation.body).includes('No transmitir.'));
+  }
+  assert.notEqual(configured.instructionsHash, evaluator.instructionsHash);
+});
+
 test('native decisions use full context, independent evidence and honest templated provenance', async () => {
   const variables = [flag('positive'), flag('negative'), flag('unknown'),
     { ...flag('tipo_interaccion'), type: 'Descriptor' }, { ...flag('productos_solicitados'), type: 'Descriptor' }];

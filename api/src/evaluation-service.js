@@ -1,3 +1,5 @@
+import { runtimeConfiguration, reserveDailyAssignments, fingerprint } from './automation-configuration.js';
+import { evaluationInstructions } from './evaluator.js';
 import { validateOneOffRequest } from './one-off-evaluations.js';
 import { needsEvaluation, currentEvaluation } from './source-state.js';
 import { randomUUID } from 'node:crypto';
@@ -60,6 +62,24 @@ function accumulatedMetadata(previous, current, attemptId) {
 export function eligibleConversations(state, { from, to, country, pendingOnly = true, sourceChangedAfter, includeOpen = state.settings?.includeOpenConversations === true, refreshChanged = state.settings?.refreshChangedConversations === true } = {}) {
   return state.conversations.filter(c => c.messages.length && (includeOpen || c.completed !== false) && (!from || c.date >= from) && (!to || c.date <= to)
     && (!country || c.country === country) && (!pendingOnly || needsEvaluation(state, c, refreshChanged)) && (!sourceChangedAfter || (c.sourceCreatedAt >= sourceChangedAfter || c.sourceUpdatedAt >= sourceChangedAfter || (refreshChanged && !!currentEvaluation(state, c)?.sourceHash && needsEvaluation(state, c, true)))));
+}
+
+
+export function jobEvaluationContext(conversation, catalog, job, profileId) {
+  const context = evaluationContext(conversation, catalog);
+  if (!job?.promptSnapshot) return context;
+  return { ...context, promptHash: job.promptSnapshot.hash, promptVersion: `configured:${job.promptSnapshot.version}`,
+    ...(profileId ? { modelPromptHash: job.promptSnapshot.profiles[profileId].hash } : {}) };
+}
+function freezePrompts(registry, profiles, runtime, version) {
+  if (!runtime) return null;
+  const snapshots = Object.fromEntries(profiles.map(p => {
+    const evaluator = registry.profiles.find(item => item.id === p.id).evaluator;
+    const text = evaluator.effectiveInstructionsText || evaluator.instructionsText || runtime[p.id]?.promptText || evaluationInstructions;
+    const itemPrompts = runtime[p.id]?.itemPrompts || {};
+    return [p.id, { text, itemPrompts, hash: fingerprint({ text, itemPrompts }), promptText: runtime[p.id]?.promptText || null }];
+  }));
+  return { version, profiles: snapshots, hash: fingerprint(snapshots) };
 }
 
 function validateCatalog(catalog) {
@@ -128,7 +148,8 @@ function pickCandidates(state, options) {
 }
 export async function startEvaluationBatch(store, evaluator, options = {}) {
   const state = ensureEvaluationState(await readHistory(store, options.conversationIds));
-  const registry = asRegistry(evaluator).forState(state);
+  const runtime = options.runtimeConfiguration || (state.settings.automation ? runtimeConfiguration(state.settings.automation) : null);
+  const registry = asRegistry(evaluator).forState(state).withRuntime(runtime);
   if (!registry.configured) throw new AppError(503, 'Falta configurar un modelo habilitado.', 'AI_NOT_CONFIGURED');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const purpose = options.purpose || 'operational';
@@ -138,7 +159,7 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
     throw new AppError(422, 'Los lotes ampliados requieren un mantenimiento explícito y coincidente.', 'INVALID_LARGE_BATCH');
   }
   if (options.oneOffRun) validateOneOffRequest(state, options);
-  const limit = purpose === 'comparison' ? 20 : options.oneOffRun ? 400 : options.largeBatch ? 500 : 100;
+  const limit = options.automation ? 100000 : purpose === 'comparison' ? 20 : options.oneOffRun ? 400 : options.largeBatch ? 500 : 100;
   if (options.max != null && (!Number.isInteger(options.max) || options.max < 1 || options.max > limit)) throw new AppError(422, `El máximo de esta ejecución es ${limit} conversaciones.`, 'INVALID_BATCH_SIZE');
   const requestHash = digest({ ...options, onProgress: undefined, author: undefined });
   if (options.idempotencyKey) {
@@ -155,9 +176,10 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   const requestedIds = purpose === 'comparison' || explicitOperationalModels ? options.modelIds : dual ? [policy.primaryId, policy.secondaryId] : [policy.primaryId];
   if (!Array.isArray(requestedIds) || !requestedIds.length || requestedIds.length > 3 || new Set(requestedIds).size !== requestedIds.length
     || (purpose === 'comparison' && requestedIds.length < 2) || (explicitOperationalModels && requestedIds.length !== 2)) throw new AppError(422, 'Selecciona modelos distintos: dos para operación o hasta tres para comparar.', 'INVALID_MODELS');
-  const executionOrder = options.executionOrder || 'conversation-first';
-  if (!['conversation-first', 'model-first'].includes(executionOrder)) throw new AppError(422, 'El orden de ejecución es inválido.', 'INVALID_EXECUTION_ORDER');
-  const profiles = requestedIds.map(id => registry.snapshot(registry.resolve(id)));
+  const executionOrder = options.executionOrder || (purpose === 'operational' && state.settings.automation?.executionOrder) || 'conversation-first';
+  if (!['conversation-first', 'model-first', 'parallel'].includes(executionOrder)) throw new AppError(422, 'El orden de ejecución es inválido.', 'INVALID_EXECUTION_ORDER');
+  const profiles = requestedIds.map(id => registry.snapshot(options.automation
+    ? registry.profiles.find(p => p.id === id) || registry.resolve(id) : registry.resolve(id)));
   if (new Set(profiles.map(p => `${p.provider}:${p.model}`)).size !== profiles.length) throw new AppError(422, 'Dos perfiles apuntan al mismo modelo. Selecciona modelos distintos.', 'DUPLICATE_MODEL');
   const fallback = purpose === 'operational' && !dual && policy.fallbackId ? registry.snapshot(registry.resolve(policy.fallbackId)) : null;
   if (fallback && fallback.provider === profiles[0].provider && fallback.model === profiles[0].model) throw new AppError(422, 'El respaldo debe ser un modelo diferente.', 'DUPLICATE_MODEL');
@@ -173,25 +195,28 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
   }
   const catalog = state.catalog.filter(v => !v.retired);
   const catalogVersions = catalogReferences(catalog);
-  const job = { id: randomUUID(), purpose, status: 'running', scope: options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
+  const job = { id: randomUUID(), purpose, status: options.automation ? 'queued' : 'running',
+    ...(options.automation ? { automation: structuredClone(options.automation), dailyActivity: { date: options.automation.activityDate, timezone: options.automation.configuration.timezone }, conversationCountries: Object.fromEntries(candidates.map(c => [c.id, c.country])) } : {}),
+    runtimeConfiguration: runtime, promptSnapshot: freezePrompts(registry, [...profiles, fallback].filter(Boolean), runtime, options.automation?.configurationVersion || state.settings.version),
+    modelConcurrency: state.settings.automation?.concurrency || null, scope: options.automation || options.scheduleDate ? 'daily' : options.conversationIds ? 'recheck' : pendingOnly ? 'pending' : 'period',
     ...(options.dailyActivity ? { dailyActivity: options.dailyActivity, countries: options.countries,
       conversationCountries: Object.fromEntries(candidates.map(c => [c.id, c.country])), limitPerCountry: options.limitPerCountry ?? null } : {}),
     ...(options.oneOffRun ? { oneOffRun: structuredClone(options.oneOffRun) } : {}),
-    sourceJobId: options.sourceJobId || null, scheduleDate: options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
+    sourceJobId: options.sourceJobId || null, scheduleDate: options.automation?.runDate || options.scheduleDate || null, from: options.from || null, to: options.to || null, country: options.country || null,
     total: candidates.length * profiles.length, caseCount: candidates.length, completed: 0, failed: 0, errors: [], conversationIds: candidates.map(c => c.id),
     modelProfiles: profiles, fallback, mode: dual ? 'dual' : 'single', executionOrder, concurrency: Math.min(3, Math.max(1, Number(options.concurrency) || 1)), maintenanceId: options.maintenanceId || null, policyVersion: policy.version, catalogVersions, pendingOnly, demo: !!state.metadata.demo,
     idempotencyKey: options.idempotencyKey || null, requestHash, createdAt: now(), updatedAt: now(), finishedAt: null };
   const tasks = candidates.flatMap(c => {
     const codeResults = evaluateCodeVariables(c, catalog.filter(v => v.active && supportsCodeVariable(v)));
     return profiles.map(profile => ({ id: randomUUID(), jobId: job.id, conversationId: c.id,
-      profile, fallback, codeResults, context: evaluationContext(c, catalog), status: 'pending', round: 1, evaluationId: null, error: null }));
+      profile, fallback, codeResults, context: jobEvaluationContext(c, catalog, job, profile.id), status: 'pending', round: 1, evaluationId: null, error: null }));
   });
   await store.transaction(draft => {
     ensureEvaluationState(draft); recoverInterrupted(draft);
     if (draft.settings.evaluationMaintenance && draft.settings.evaluationMaintenance !== options.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
     if (registry.policy(draft).version !== policy.version) throw new AppError(409, 'La política cambió. Vuelve a iniciar la evaluación.', 'VERSION_CONFLICT');
-    const currentRegistry = registry.forState(draft);
-    for (const profile of [...profiles, fallback].filter(Boolean)) currentRegistry.resolve(profile.id, profile);
+    const currentRegistry = asRegistry(evaluator).forState(draft).withRuntime(runtime);
+    if (!options.automation) for (const profile of [...profiles, fallback].filter(Boolean)) currentRegistry.resolve(profile.id, profile);
     if (options.idempotencyKey && draft.jobs.some(j => j.idempotencyKey === options.idempotencyKey)) throw new AppError(409, 'Esta ejecución ya se registró. Consulta su progreso.', 'DUPLICATE_EXECUTION');
     if (options.dailyActivity) {
       validateDailyActivityRequest(draft.settings, options);
@@ -222,14 +247,24 @@ export async function startEvaluationBatch(store, evaluator, options = {}) {
       const run = validateOneOffRequest(draft, options, candidates);
       Object.assign(run, { status: 'running', reason: null, jobId: job.id, manifest: structuredClone(options.oneOffRun.manifest), startedAt: job.createdAt });
     }
-    if (draft.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
+    if (!options.automation && draft.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
+    if (job.automation) {
+      reserveDailyAssignments(draft, candidates, job);
+      if (job.automation.revisionOf) {
+        for (const task of draft.tasks.filter(t => t.jobId === job.automation.revisionOf && job.conversationIds.includes(t.conversationId))) {
+          task.previousStatus = task.status; task.status = 'deferred'; task.supersededBy = job.id;
+        }
+        const old = draft.jobs.find(j => j.id === job.automation.revisionOf);
+        if (old) { old.sourceRecheckIds = (old.sourceRecheckIds || []).filter(id => !job.conversationIds.includes(id)); updateJob(draft, old.id, true); }
+      }
+    }
     draft.jobs.push(job); draft.tasks.push(...tasks);
     if (purpose === 'comparison') draft.comparisons.push({ id: job.id, name: options.name || `Muestra ${now().slice(0, 10)}`,
       jobId: job.id, modelProfiles: profiles, catalogVersions, createdAt: job.createdAt, demo: job.demo, authorName: options.author?.name || null,
-      cases: candidates.map(c => ({ conversationId: c.id, country: c.country, date: c.date, ...evaluationContext(c, catalog),
+      cases: candidates.map(c => ({ conversationId: c.id, country: c.country, date: c.date, ...jobEvaluationContext(c, catalog, job),
         codeResults: tasks.find(t => t.conversationId === c.id)?.codeResults || [] })) });
   });
-  return { job, completion: launch(store, registry, job, catalog, options.onProgress) };
+  return { job, completion: options.automation ? Promise.resolve(job) : launch(store, registry, job, catalog, options.onProgress) };
 }
 function launch(store, registry, job, catalog, onProgress, selectedTaskIds) {
   const completion = processJob(store, registry, job, catalog, onProgress, selectedTaskIds);
@@ -244,7 +279,7 @@ async function processJob(store, registry, job, catalog, onProgress, selectedTas
   }));
   try {
     const tasks = (await store.read()).tasks.filter(t => t.jobId === job.id && !['completed', 'deferred'].includes(t.status) && (!selectedTaskIds || selectedTaskIds.includes(t.id)));
-    const runTasks = async phaseTasks => {
+    const runTasks = async (phaseTasks, concurrency = job.concurrency || 1) => {
       const cases = [...new Set(phaseTasks.map(t => t.conversationId))];
       const worker = async () => {
         while (cases.length) {
@@ -267,12 +302,14 @@ async function processJob(store, registry, job, catalog, onProgress, selectedTas
           }
         }
       };
-      await Promise.all(Array.from({ length: job.concurrency || 1 }, worker));
+      await Promise.all(Array.from({ length: concurrency }, worker));
     };
     if (job.executionOrder === 'model-first') {
       // Await the whole phase, including bounded retries and persistence, before
       // the next model starts. Resume uses these same persisted profile phases.
       for (const profile of job.modelProfiles) await runTasks(tasks.filter(t => t.profile.id === profile.id));
+    } else if (job.executionOrder === 'parallel') {
+      await Promise.all(job.modelProfiles.map(p => runTasks(tasks.filter(t => t.profile.id === p.id), job.modelConcurrency?.[p.id] || 1)));
     } else await runTasks(tasks);
     await store.transaction(draft => updateJob(draft, job.id, true, selectedTaskIds));
     return (await store.read()).jobs.find(j => j.id === job.id);
@@ -301,9 +338,9 @@ function updateJob(state, id, finished, selectedTaskIds) {
     job.status = 'interrupted'; job.finishedAt = now();
   }
 }
-async function processTask(store, registry, job, task, conversation, catalog) {
+export async function processTask(store, registry, job, task, conversation, catalog) {
   if (!conversation || task.context.sourceHash !== sourceFingerprint(conversation)) throw new AppError(409, 'El contenido de Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
-  const currentContext = evaluationContext(conversation, catalog);
+  const currentContext = jobEvaluationContext(conversation, catalog, job, task.profile.id);
   if (currentContext.promptHash !== task.context.promptHash || currentContext.rulesVersion !== task.context.rulesVersion) throw new AppError(409, 'Las instrucciones cambiaron. Crea una nueva ejecución.', 'PROMPT_CHANGED');
   const claimed = await store.transaction(s => { const t = s.tasks.find(t => t.id === task.id); if (['completed', 'deferred'].includes(t.status) || t.round !== task.round) return false; t.status = 'running'; t.error = null; return true; });
   if (!claimed) return;
@@ -321,7 +358,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
     const retained = new Map((previous?.results || []).map(r => [r.variableId, r]));
     let metadata = previous || { model: profile.model, responseId: null, usage: null };
     let itemErrors = previous?.validationErrors || [];
-    for (let index = 0; index < 2; index++) {
+    for (let index = 0; index < (job.automation ? 1 : 2); index++) {
       const pending = aiVariables.filter(v => !retained.has(v.id));
       if (!pending.length) { lastError = null; break; }
       const attempt = { id: randomUUID(), jobId: job.id, taskId: task.id, round: task.round, profileId: profile.id,
@@ -332,6 +369,8 @@ async function processTask(store, registry, job, task, conversation, catalog) {
       try {
         const response = await profile.evaluator.evaluate(conversation, pending, {
           validationErrors: itemErrors.map(({ variableId, rules }) => ({ variableId, rules })),
+          promptText: task.context.modelPromptHash ? job.promptSnapshot.profiles[profile.id]?.promptText : undefined,
+          itemPrompts: task.context.modelPromptHash ? job.promptSnapshot.profiles[profile.id]?.itemPrompts : undefined,
         });
         if (!Array.isArray(response.results) || response.results.some(r => !pending.some(v => v.id === r.variableId)) || new Set(response.results.map(r => r.variableId)).size !== response.results.length) throw new AppError(502, 'Resultado estructurado incompleto o duplicado.', 'INVALID_AI_RESULT');
         // Audit only the output channel used by this attempt. Never retain raw
@@ -395,7 +434,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
         });
         if (!retryable(lastError)) break;
       }
-      if (index === 0 && profile.provider !== 'demo') await new Promise(resolve => setTimeout(resolve, 250));
+      if (!job.automation && index === 0 && profile.provider !== 'demo') await new Promise(resolve => setTimeout(resolve, 250));
     }
     const candidate = { ...metadata, results: [...retained.values()], validationErrors: itemErrors, error: lastError };
     if (!selectedState || candidate.results.length > selectedState.results.length || !lastError) { selectedState = candidate; effective = profile; }
@@ -409,7 +448,8 @@ async function processTask(store, registry, job, task, conversation, catalog) {
   const invalidResults = pending.map(v => ({ variableId: v.id, type: v.type, method: v.method, status: 'no_evaluado', value: null, evidence: [],
     reason: 'No se obtuvo una respuesta válida del modelo. Revisión pendiente.', error: answer.validationErrors.find(e => e.variableId === v.id) || { variableId: v.id, ...safeError(failure) } }));
   const evaluation = { id: randomUUID(), conversationId: conversation.id, jobId: job.id, taskId: task.id, purpose: job.purpose,
-    createdAt: now(), demo: job.demo, ...task.context, provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null, profileId: effective.id, provider: effective.provider,
+    createdAt: now(), demo: job.demo, ...task.context,
+    ...(job.promptSnapshot ? { modelPromptHash: job.promptSnapshot.profiles[effective.id]?.hash, promptSnapshot: job.promptSnapshot.profiles[effective.id], configurationVersion: job.promptSnapshot.version } : {}), provisional: conversation.completed === false, sourceUpdatedAt: conversation.sourceUpdatedAt || null, profileId: effective.id, provider: effective.provider,
     profileLabel: effective.label, requestedProfileId: task.profile.id, requestedProvider: task.profile.provider, requestedModel: task.profile.model,
     model: answer.model || effective.model, modelConfiguration: registry.snapshot(effective), usedFallback: effective.id !== task.profile.id,
     ...(answer.runtimeIdentities?.length ? { runtimeIdentities: answer.runtimeIdentities } : {}),
@@ -425,7 +465,7 @@ async function processTask(store, registry, job, task, conversation, catalog) {
   if (!source || sourceFingerprint(source) !== task.context.sourceHash) throw new AppError(409, 'Atom cambió durante la evaluación. Evalúa el contenido nuevo.', 'SOURCE_CHANGED');
   await store.transaction(state => {
     const current = state.tasks.find(t => t.id === task.id);
-    if (digest(catalogReferences(state.catalog)) !== task.context.catalogHash) throw new AppError(409, 'El checklist cambió durante la evaluación.', 'CATALOG_CHANGED');
+    if (!job.promptSnapshot && digest(catalogReferences(state.catalog)) !== task.context.catalogHash) throw new AppError(409, 'El checklist cambió durante la evaluación.', 'CATALOG_CHANGED');
     if (current.status === 'completed' || current.round !== task.round) return;
     evaluation.attemptIds = state.attempts.filter(a => a.taskId === task.id).map(a => a.id);
     evaluation.durationMs = state.attempts.filter(a => a.taskId === task.id).reduce((n, a) => n + (a.durationMs || 0), 0);
@@ -452,19 +492,41 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
   const storedState = await store.read();
   const storedJob = storedState.jobs?.find(j => j.id === jobId);
   if (!storedJob?.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
+  if (storedJob.automation) {
+    const job = await store.transaction(s => {
+      const j = s.jobs.find(item => item.id === jobId);
+      if (s.settings.evaluationMaintenance) throw new AppError(409, 'Finaliza el mantenimiento antes de reanudar.', 'EVALUATION_MAINTENANCE');
+      if (j.status === 'running') throw new AppError(409, 'La ejecución está en curso.', 'EVALUATION_RUNNING');
+      const pending = s.tasks.filter(t => t.jobId === jobId && !['completed', 'deferred'].includes(t.status));
+      if (!pending.length) throw new AppError(409, 'La ejecución ya está completa.', 'ALREADY_COMPLETED');
+      const currentRegistry = asRegistry(evaluator).forState(s).withRuntime(j.runtimeConfiguration);
+      for (const t of pending) {
+        const profile = currentRegistry.profiles.find(p => p.id === t.profile.id);
+        if (profile && currentRegistry.snapshot(profile).configurationHash !== t.profile.configurationHash) {
+          t.error = { code: 'RECONFIGURE_MODELS', message: 'Se preparará una nueva revisión con la conexión de modelos actual.' };
+        }
+        t.status = 'pending'; t.round++; t.automaticAttempts = 0; t.nextAttemptAt = null;
+        // SOURCE_CHANGED is retained so the worker prepares a separate revision.
+        if (!['SOURCE_CHANGED', 'RECONFIGURE_MODELS'].includes(t.error?.code)) t.error = null;
+      }
+      j.status = 'queued'; j.finishedAt = null; j.updatedAt = now();
+      return structuredClone(j);
+    });
+    return { job, completion: Promise.resolve(job) };
+  }
   const scoped = conversationIds !== undefined;
   if (scoped && (!Array.isArray(conversationIds) || !conversationIds.length || new Set(conversationIds).size !== conversationIds.length
     || conversationIds.some(id => !storedJob.conversationIds.includes(id)))) throw new AppError(422, 'La selección no pertenece a esta ejecución.', 'INVALID_RECHECK');
   if (scoped && (!storedJob.maintenanceId || storedState.settings.evaluationMaintenance !== storedJob.maintenanceId)) throw new AppError(409, 'La reanudación parcial requiere el mismo mantenimiento activo.', 'EVALUATION_MAINTENANCE');
   const state = ensureEvaluationState(await readHistory(store, scoped ? conversationIds : storedJob.conversationIds));
-  const registry = asRegistry(evaluator).forState(state);
   const job = state.jobs.find(j => j.id === jobId);
+  const registry = asRegistry(evaluator).forState(state).withRuntime(job.runtimeConfiguration);
   if (!job || !job.modelProfiles) throw new AppError(404, 'La ejecución no admite reanudación.', 'NOT_FOUND');
   if (state.settings.evaluationMaintenance && state.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
   const catalog = restoreCatalog(state, job.catalogVersions);
   // MySQL JSON may reorder object keys; normalize both reference sets without
   // changing the digest function or any historical context fingerprints.
-  if (digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
+  if (!job.promptSnapshot && digest(catalogReferences(state.catalog)) !== digest(catalogReferences(job.catalogVersions))) throw new AppError(409, 'El checklist cambió. Inicia una nueva ejecución.', 'CATALOG_CHANGED');
   // A maintenance slice owns only its explicitly selected conversations. A
   // newer result for another, already completed case must remain untouched
   // without blocking the selected unfinished case. Full resumes keep the
@@ -477,7 +539,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
   for (const task of pending) {
     const c = candidates.find(c => c.id === task.conversationId);
     if (!c || sourceFingerprint(c) !== task.context.sourceHash) throw new AppError(409, 'Atom cambió. Crea una nueva muestra.', 'SOURCE_CHANGED');
-    const context = evaluationContext(c, catalog);
+    const context = jobEvaluationContext(c, catalog, job, task.profile.id);
     if (context.promptHash !== task.context.promptHash || context.rulesVersion !== task.context.rulesVersion) throw new AppError(409, 'Las instrucciones o reglas cambiaron. Inicia una nueva ejecución para usar el checklist vigente.', 'PROMPT_CHANGED');
     registry.resolve(task.profile.id, task.profile);
   }
@@ -486,7 +548,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
     if (s.settings.evaluationMaintenance && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
     if (scoped && s.settings.evaluationMaintenance !== job.maintenanceId) throw new AppError(409, 'El mantenimiento de la reanudación parcial cambió.', 'EVALUATION_MAINTENANCE');
     if (s.jobs.some(j => j.status === 'running')) throw new AppError(409, 'Ya hay una evaluación en curso.', 'EVALUATION_RUNNING');
-    const currentRegistry = registry.forState(s);
+    const currentRegistry = asRegistry(evaluator).forState(s).withRuntime(job.runtimeConfiguration);
     for (const task of pending) {
       currentRegistry.resolve(task.profile.id, task.profile);
       if (task.fallback) currentRegistry.resolve(task.fallback.id, task.fallback);

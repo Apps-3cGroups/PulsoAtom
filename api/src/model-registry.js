@@ -1,3 +1,4 @@
+import { fingerprint } from './automation-configuration.js';
 import { AppError } from './errors.js';
 import { GatewayEvaluator } from './gateway-evaluator.js';
 import { ClefDecisionEvaluator } from './clef-decision-evaluator.js';
@@ -17,6 +18,13 @@ export class ModelRegistry {
   // Bind a fresh, immutable set of evaluators to persisted non-secret settings.
   // Running jobs retain their own configuration; a new request sees saved edits.
   forState(state) { return this.stateFactory ? this.stateFactory(state) : this; }
+  withRuntime(runtime) {
+    if (!runtime) return this;
+    return new ModelRegistry(this.profiles.map(p => !runtime[p.id] ? p : ({ ...p,
+      runtimeConfiguration: structuredClone(runtime[p.id]),
+      evaluator: p.evaluator.withRuntime ? p.evaluator.withRuntime(runtime[p.id]) : p.evaluator,
+    })), { gatewayConfigured: this.gatewayConfigured, localOnly: this.localOnly });
+  }
   localConfiguration(state) {
     const bound = this.forState(state);
     const policy = bound.policy(state);
@@ -46,6 +54,7 @@ export class ModelRegistry {
           ...(p.evaluator.outputSchemaVersion ? { outputSchemaVersion: p.evaluator.outputSchemaVersion } : {}),
           ...(p.evaluator.decisionInstructionsVersion ? { decisionInstructionsVersion: p.evaluator.decisionInstructionsVersion } : {}) });
     }
+    if (p.runtimeConfiguration) settings.push({ runtimeConfiguration: fingerprint(p.runtimeConfiguration) });
     const configurationHash = digest(settings); return { id: p.id, viewId: `${p.id}@${configurationHash}`, label: p.label, provider: p.provider, model: p.model,
     configurationHash, demo: !!p.demo, ...(p.provider === 'gateway' ? { protocol: p.evaluator.protocol || 'chat',
       explanationType: p.evaluator.protocol === 'systemone' ? 'typed_decision' : 'model_text',

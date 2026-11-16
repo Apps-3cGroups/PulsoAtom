@@ -9,6 +9,7 @@ const Summary = lazy(() => import('./pages/Summary'));
 const Conversations = lazy(() => import('./pages/Conversations'));
 const Conversation = lazy(() => import('./pages/Conversation'));
 const Catalog = lazy(() => import('./pages/Catalog'));
+const EvaluationConfiguration = lazy(() => import('./pages/EvaluationConfiguration'));
 const Evaluations = lazy(() => import('./pages/Evaluations'));
 const Comparison = lazy(() => import('./pages/Comparison'));
 const ModelDashboard = lazy(() => import('./pages/ModelDashboard'));
@@ -31,6 +32,7 @@ export default function PortalRoutes() {
       <Route path="/modelos" element={adminOnly(<ModelDashboard />)} />
       <Route path="/comparacion/:sampleId/validar/:conversationId" element={<Validation />} />
       <Route path="/catalogo" element={<Catalog />} />
+      <Route path="/configuracion/evaluaciones" element={adminOnly(<EvaluationConfiguration />)} />
       <Route path="/evaluaciones" element={adminOnly(<Evaluations />)} />
       <Route path="/accesos" element={<Access />} />
       <Route path="*" element={<div className="not-found">

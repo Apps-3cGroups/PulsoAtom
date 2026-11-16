@@ -220,7 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Pulso: dependencias, compilación, configuración y datos locales
-node_modules/
+node_modules
 dist/
 .env
 .env.*
