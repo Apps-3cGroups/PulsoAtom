@@ -1,6 +1,6 @@
 import { AppError } from './errors.js';
 import { sourceFingerprint } from './evaluation-context.js';
-import { evaluationMatchesProfile, operationalEvaluation } from './operational-evaluation.js';
+import { evaluationMatchesProfile, evaluationMatchesPrompt, operationalEvaluation } from './operational-evaluation.js';
 
 const contextKeys = ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'];
 const profileKey = p => p.viewId || `${p.id}@${p.configurationHash || p.model}`;
@@ -110,6 +110,7 @@ export function modelDashboard(state, registry, filters = {}, timezone = 'Americ
           && ['id', 'provider', 'model', 'configurationHash', 'adapterVersion', 'instructionsHash'].every(key => task.profile[key] === profile[key]);
         const compatible = matchingProfile && saved && sameContext(saved, task.context) && saved.conversationId === conversationId
           && saved.jobId === (reused ? task.reusedJobId : job.id) && saved.taskId === (reused ? task.reusedTaskId : task.id)
+          && evaluationMatchesPrompt(saved, task, job)
           && saved.purpose === (reused ? 'operational' : job.purpose)
           && saved.profileId === task.profile.id && !saved.usedFallback && (!saved.requestedProfileId || saved.requestedProfileId === task.profile.id)
           && saved.provider === task.profile.provider && saved.model === task.profile.model && evaluationMatchesProfile(saved, task.profile);

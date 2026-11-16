@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AppError } from './errors.js';
-import { systemInstructions, catalogInstructions, interactionTypes, supportsAiVariable, validateEvaluation } from './evaluator.js';
+import { systemInstructions, configurablePromptContract, catalogInstructions, interactionTypes, supportsAiVariable, validateEvaluation } from './evaluator.js';
 import { CATALOG_RULES_INSTRUCTIONS } from './catalog-v5.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
 import { getLoadedDecisionInstance } from './services/gatewayDecisionDiscovery.js';
@@ -17,7 +17,7 @@ const safeFailure = error => ({ code: error instanceof AppError ? error.code : '
   message: error instanceof AppError ? error.message : 'No se pudo completar la decisión del modelo local.' });
 const unavailable = reason => ({ status: 'no_evaluado', value: null, reason, evidence_message_ids: [] });
 const classifyQuestion = variable => ({ type: 'choice',
-  instructions: `Variable: ${variable.id}. ${variable.name || ''}\nDefinición: ${variable.definition || ''}\nCondición: ${variable.condition || 'Sin condición adicional.'}\nAplica las instrucciones del estado y elige el criterio sustentado por los mensajes.`,
+  instructions: `Variable: ${variable.id}. ${variable.name || ''}\nDefinición: ${variable.definition || ''}\nCondición: ${variable.condition || 'Sin condición adicional.'}${variable.additionalInstructions ? `\nInstrucciones para este ítem: ${variable.additionalInstructions}` : ''}\nAplica las instrucciones del estado y elige el criterio sustentado por los mensajes.`,
   criteria: variable.id === 'tipo_interaccion'
     ? Object.fromEntries([...interactionTypes.map(type => [type, `La interacción corresponde a ${type}.`]), ['insufficient', 'El contexto no permite clasificar la interacción.']])
     : { present: 'Hay evidencia explícita del evento definido.', absent: 'El contexto permite descartar el evento definido.', insufficient: 'Falta contexto para decidir si el evento está presente o ausente.' } });
@@ -43,12 +43,15 @@ function decision(answer, criteria) {
 export class ClefDecisionEvaluator {
   #options;
   #client;
-  constructor({ baseUrl, token, portalKey, toolKey, model, timeoutMs = 180000, fetchImpl = fetch } = {}) {
+  constructor({ baseUrl, token, portalKey, toolKey, model, timeoutMs = 180000, fetchImpl = fetch, promptText, itemPrompts = {} } = {}) {
     this.#options = { baseUrl, token, portalKey, fetchImpl };
+    this.itemPrompts = Object.fromEntries(Object.entries(itemPrompts).sort(([a], [b]) => a.localeCompare(b)));
+    this.instructionsText = promptText === undefined ? instructions : promptText + instructions.slice(systemInstructions.length) + '\n\n' + configurablePromptContract;
     this.#client = new GatewayApiClient({ ...this.#options, timeoutMs });
     Object.assign(this, { baseUrl: this.#client.baseUrl, portalKey, toolKey, model, timeoutMs,
-      protocol: 'systemone', adapterVersion: CLEF_DECISION_ADAPTER_VERSION, instructionsHash: instructionHash });
+      protocol: 'systemone', adapterVersion: CLEF_DECISION_ADAPTER_VERSION, instructionsHash: promptText === undefined && !Object.keys(this.itemPrompts).length ? instructionHash : createHash('sha256').update(JSON.stringify([CLEF_DECISION_ADAPTER_VERSION, this.instructionsText, CHUNK_SIZE, MAX_MESSAGES, 'present/absent/insufficient', 'message-fields:id,actor,text', interactionTypes, ...(Object.keys(this.itemPrompts).length ? [this.itemPrompts] : [])])).digest('hex') });
   }
+  withRuntime(runtime) { return new ClefDecisionEvaluator({ ...this.#options, toolKey: this.toolKey, model: this.model, timeoutMs: this.timeoutMs, ...runtime }); }
   get configured() {
     return this.#client.configured && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(this.toolKey || '')
       && typeof this.model === 'string' && this.model.trim() === this.model && this.model.length > 0 && this.model.length <= 200;
@@ -64,6 +67,7 @@ export class ClefDecisionEvaluator {
     if (!Array.isArray(conversation?.messages) || !conversation.messages.length) fail('EMPTY_CONVERSATION', 'La conversación no tiene mensajes evaluables.');
     if (conversation.messages.some(m => typeof m.id !== 'string' || !m.id || m.id === 'none' || m.id.length > 200 || typeof m.text !== 'string')
       || new Set(conversation.messages.map(m => m.id)).size !== conversation.messages.length) fail('UNSUPPORTED_INPUT', 'Los mensajes no tienen identificadores y contenido válidos para seleccionar evidencia.');
+    variables = variables.map(v => ({ ...v, additionalInstructions: this.itemPrompts[v.id] }));
     const raw = Object.create(null), provenance = new Map(), failures = new Map(), requests = [], requestIds = [];
     const metadata = () => ({ protocol: this.protocol, adapterVersion: this.adapterVersion, instructionsHash: this.instructionsHash,
       requests: structuredClone(requests), requestIds: [...requestIds] });
@@ -96,7 +100,7 @@ export class ClefDecisionEvaluator {
     if (!supported.length) return finish();
     const deadline = Date.now() + this.timeoutMs;
     let instance, calls = 0;
-    const state = { instructions, conversationStatus: conversation.completed === false ? 'open' : 'closed',
+    const state = { instructions: this.instructionsText, conversationStatus: conversation.completed === false ? 'open' : 'closed',
       // Match the chat evaluator's message input; timestamps remain in shared code metrics.
       messages: conversation.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text })) };
     const makeClient = () => {
@@ -151,7 +155,7 @@ export class ClefDecisionEvaluator {
       }
       for (const batch of chunks(evidenceNeeded)) {
         const questions = Object.fromEntries(batch.map(({ variable, value }) => [variable.id, {
-          type: 'choice', instructions: `Selecciona un único mensaje que demuestre la variable ${variable.id}. Definición: ${variable.definition || ''}. Condición: ${variable.condition || 'Sin condición adicional.'}.${variable.id === 'tipo_interaccion' ? ` Categoría que debe sustentar la evidencia: «${value}». Un mensaje de otra categoría no es evidencia suficiente.` : ''} Evalúa el contenido completo sin respuestas de otros modelos. Si ningún mensaje proporciona evidencia suficiente, elige none.`,
+          type: 'choice', instructions: `Selecciona un único mensaje que demuestre la variable ${variable.id}. Definición: ${variable.definition || ''}. Condición: ${variable.condition || 'Sin condición adicional.'}.${variable.additionalInstructions ? ` Instrucciones del ítem: ${variable.additionalInstructions}` : ''}${variable.id === 'tipo_interaccion' ? ` Categoría que debe sustentar la evidencia: «${value}». Un mensaje de otra categoría no es evidencia suficiente.` : ''} Evalúa el contenido completo sin respuestas de otros modelos. Si ningún mensaje proporciona evidencia suficiente, elige none.`,
           criteria: Object.fromEntries([...conversation.messages.map(message => [message.id, `El mensaje con ID ${message.id} proporciona evidencia explícita de la variable.`]), ['none', 'Ningún mensaje proporciona evidencia suficiente.']]),
         }]));
         const response = await invoke(batch.map(item => item.variable), questions, 'evidence');

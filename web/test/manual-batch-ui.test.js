@@ -89,3 +89,11 @@ test('model stages use actual task states, retaining technical incidents without
   job.modelProgress[1] = { ...job.modelProgress[1], completed: 0, running: 0, pending: 100 };
   assert.match(text(render(JobModelProgress, { job })), /Clef 0\/100 Pendiente/);
 });
+
+
+test('configured manual mode describes parallel and reversed per-conversation order', () => {
+  const parallel = text(render(ManualBatchControls, { ...props, automation: { executionOrder: 'parallel', modelOrder: ['clef-local', 'gemma-local'] } }));
+  assert.match(parallel, /Clef y Gemma se ejecutan en paralelo/);
+  const sequential = text(render(ManualBatchControls, { ...props, automation: { executionOrder: 'conversation-first', modelOrder: ['clef-local', 'gemma-local'] } }));
+  assert.match(sequential, /Clef primero y Gemma después, por conversación/);
+});

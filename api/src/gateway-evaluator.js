@@ -1,5 +1,5 @@
 import { AppError } from './errors.js';
-import { evaluationInput, evaluationInstructions, evaluationSchema, supportsAiVariable, validateEvaluation } from './evaluator.js';
+import { evaluationInput, evaluationInstructions, systemInstructions, configurablePromptContract, evaluationSchema, supportsAiVariable, validateEvaluation } from './evaluator.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
 import { verifyNumberedModelInstance } from './services/gatewayModelIdentity.js';
 import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from './services/clefFlashSchema.js';
@@ -14,8 +14,12 @@ const safeUsage = value => {
 
 export class GatewayEvaluator {
   #client;
+  #options;
   constructor({ baseUrl, token, portalKey, toolKey, model, timeoutMs = 180000,
-    maxTokens = 16000, temperature = 0, responseFormat = 'json_schema', fetchImpl = fetch } = {}) {
+    maxTokens = 16000, temperature = 0, responseFormat = 'json_schema', fetchImpl = fetch, promptText, itemPrompts = {} } = {}) {
+    this.#options = { baseUrl, token, portalKey, toolKey, model, timeoutMs, maxTokens, temperature, responseFormat, fetchImpl };
+    this.itemPrompts = structuredClone(itemPrompts);
+    this.instructionsText = promptText === undefined ? evaluationInstructions : promptText + evaluationInstructions.slice(systemInstructions.length) + '\n\n' + configurablePromptContract;
     this.#client = new GatewayApiClient({ baseUrl, token, portalKey, timeoutMs, fetchImpl });
     Object.assign(this, { baseUrl: this.#client.baseUrl, portalKey, toolKey, model, timeoutMs, maxTokens, temperature, responseFormat });
     if (model === 'clef-flash') {
@@ -23,6 +27,8 @@ export class GatewayEvaluator {
       this.decisionInstructionsVersion = CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION;
     }
   }
+  get effectiveInstructionsText() { return this.model === 'clef-flash' ? `${this.instructionsText}\n\n${clefFlashDecisionInstructions}` : this.instructionsText; }
+  withRuntime(runtime) { return new GatewayEvaluator({ ...this.#options, ...runtime }); }
   get configured() {
     return this.#client.configured && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(this.toolKey || '')
       && typeof this.model === 'string' && !!this.model.trim() && this.model.length <= 200
@@ -90,12 +96,12 @@ export class GatewayEvaluator {
     // valid decisions, including abstention, and never repairs values in code.
     const schema = this.model === 'clef-flash' || formatRepair ? clefFlashEvaluationSchema(variables, conversation) : evaluationSchema(variables);
     const instructions = this.model === 'clef-flash'
-      ? `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}` : evaluationInstructions;
+      ? `${this.instructionsText}\n\n${clefFlashDecisionInstructions}` : this.instructionsText;
     const messages = [{ role: 'system', content: instructions }];
     if (this.responseFormat === 'json_object') {
       messages.push({ role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
     }
-    messages.push({ role: 'user', content: evaluationInput(conversation, variables, options) });
+    messages.push({ role: 'user', content: evaluationInput(conversation, variables, { ...options, itemPrompts: this.itemPrompts }) });
     const envelope = await this.#client.invoke({ toolKey: this.toolKey, method: 'POST', path: '/v1/chat/completions',
       body: { model: this.model, messages, temperature: this.temperature, max_tokens: this.maxTokens, stream: false,
         response_format: this.responseFormat === 'json_schema'

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
 import { latestVerdict, sourceFingerprint, wasExposed, ensureEvaluationState } from './evaluation-context.js';
-import { evaluationMatchesProfile } from './operational-evaluation.js';
+import { evaluationMatchesProfile, evaluationMatchesPrompt } from './operational-evaluation.js';
 
 export function findComparison(state, id) {
   const sample = (state.comparisons || []).find(c => c.id === id);
@@ -24,13 +24,14 @@ export function sampleSummary(state, sample, userId) {
 }
 export function comparisonRows(state, sample) {
   const variables = sampleVariables(state, sample).filter(isFlag);
+  const job = state.jobs.find(j => j.id === sample.jobId);
   const nativeCohort = sample.modelProfiles.some(profile => profile.protocol === 'systemone');
   return sample.cases.flatMap(c => variables.map(variable => {
     const cells = sample.modelProfiles.map(profile => {
       const task = state.tasks.find(t => t.jobId === sample.jobId && t.conversationId === c.conversationId && t.profile.id === profile.id);
       const evaluation = state.evaluations.find(e => e.id === task?.evaluationId
         && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => e[key] && e[key] === c[key])
-        && evaluationMatchesProfile(e, profile)
+        && evaluationMatchesProfile(e, profile) && evaluationMatchesPrompt(e, task, job)
         && (!nativeCohort || (e.jobId === sample.jobId && e.taskId === task.id && e.conversationId === c.conversationId)));
       const result = evaluation?.results.find(r => r.variableId === variable.id);
       // A duplicate effective model never becomes an independent vote.
@@ -81,6 +82,7 @@ export function validationView(state, sample, conversationId, user) {
   if (!item || !conversation) throw new AppError(404, 'Conversación no disponible.', 'NOT_FOUND');
   if (sourceFingerprint(conversation) !== item.sourceHash) throw new AppError(409, 'Atom cambió desde la muestra. Crea una muestra nueva para validar.', 'SOURCE_CHANGED');
   const variables = sampleVariables(state, sample).filter(isFlag);
+  const job = state.jobs.find(j => j.id === sample.jobId);
   const session = state.validations?.find(v => v.comparisonId === sample.id && v.conversationId === conversationId && v.authorId === user.id);
   const assisted = !!session || variables.some(v => wasExposed(state, user.id, conversationId, item.sourceHash, v.id, v.version));
   // Deliberately construct a whitelist: no model results, flags, previous verdicts or evidence.

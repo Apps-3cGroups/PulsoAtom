@@ -57,7 +57,7 @@ const tables = {
   reviews: 'review_events', jobs: 'evaluation_jobs',
   operationalRefs: 'operational_refs', comparisons: 'comparison_samples', tasks: 'evaluation_tasks',
   attempts: 'evaluation_attempts', verdicts: 'human_verdicts', exposures: 'evaluation_exposures', validations: 'validation_sessions',
-  modelPolicies: 'model_policies',
+  modelPolicies: 'model_policies', dailyAssignments: 'evaluation_daily_assignments',
 };
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
 const MAX_BATCH_ROWS = 100;
@@ -127,6 +127,15 @@ export class MysqlStore {
     return rows[0] && decode(rows[0].payload);
   }
   async authenticationTransaction(fn) { return this.transaction(fn, ['users', 'sessions']); }
+  async readAutomationState() {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const state = await this.load(connection, ['jobs', 'tasks', 'dailyAssignments', 'catalog', 'catalogVersions']);
+      await connection.commit(); return state;
+    } catch (error) { await connection.rollback(); throw error; }
+    finally { connection.release(); }
+  }
   async readSchedulerState() {
     const [jobs, settings, policies] = await Promise.all([
       this.pool.query('SELECT payload FROM evaluation_jobs ORDER BY sequence_id'),
@@ -270,6 +279,9 @@ export class AtomHistoryStore {
   async readAuthentication(id) { return this.base.readAuthentication ? this.base.readAuthentication(id) : this.base.read(); }
   async readUserByEmail(email) { return this.base.readUserByEmail ? this.base.readUserByEmail(email) : (await this.base.read()).users.find(u => u.email.toLowerCase() === email.toLowerCase()); }
   async authenticationTransaction(fn) { return this.base.authenticationTransaction ? this.base.authenticationTransaction(fn) : this.base.transaction(fn); }
+  async readAutomationState() { return this.base.readAutomationState ? this.base.readAutomationState() : this.base.read(); }
+  async readAutomationSource(options) { return this.reader.readAutomationSource(options); }
+  async readCountryCatalog() { return this.reader.readCountryCatalog(); }
   async readSchedulerState() { return this.base.readSchedulerState ? this.base.readSchedulerState() : this.base.read(); }
   async recordExposures(exposures) {
     if (this.base.recordExposures) return this.base.recordExposures(exposures);

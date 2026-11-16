@@ -21,7 +21,7 @@ export function evaluationContext(conversation, catalog) {
 }
 export const historicalProfileId = evaluation => (evaluation.profileId && evaluation.modelConfiguration?.configurationHash ? `${evaluation.profileId}@${evaluation.modelConfiguration.configurationHash}` : evaluation.profileId) || `legacy:${evaluation.model || (evaluation.demo ? 'demo' : 'unknown')}`;
 export function ensureEvaluationState(state) {
-  for (const key of ['operationalRefs', 'comparisons', 'tasks', 'attempts', 'verdicts', 'exposures', 'validations', 'modelPolicies']) state[key] ||= [];
+  for (const key of ['operationalRefs', 'comparisons', 'tasks', 'attempts', 'verdicts', 'exposures', 'validations', 'modelPolicies', 'dailyAssignments']) state[key] ||= [];
   const assigned = new Set(state.operationalRefs.map(r => r.id));
   const legacy = new Map();
   for (const e of state.evaluations) if (e.purpose !== 'comparison' && !e.taskId && !assigned.has(e.conversationId)) {

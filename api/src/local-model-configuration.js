@@ -19,7 +19,7 @@ const emptyQuery = z.object({}).strict();
 
 function assertMutable(state, expectedVersion) {
   if (state.settings.evaluationMaintenance) throw new AppError(409, 'Finaliza el mantenimiento de evaluaciones antes de cambiar los modelos.', 'EVALUATION_MAINTENANCE');
-  if (state.jobs.some(job => ['running', 'queued'].includes(job.status))) throw new AppError(409, 'Espera a que termine la ejecución en curso antes de cambiar los modelos.', 'EVALUATION_RUNNING');
+  if (state.jobs.some(job => (job.status === 'running' || job.status === 'queued' && !job.automation))) throw new AppError(409, 'Espera a que termine la ejecución en curso antes de cambiar los modelos.', 'EVALUATION_RUNNING');
   if ((state.settings.localModelConfiguration?.version || 1) !== expectedVersion) throw new AppError(409, 'La configuración cambió. Recarga antes de guardar.', 'VERSION_CONFLICT');
 }
 const onlyDisabling = (previous, next) => next.some(p => previous.find(old => old.id === p.id)?.enabled && !p.enabled)
@@ -101,10 +101,10 @@ export function mountLocalModelConfigurationRoutes(app, prefix, { store, registr
       const policies = state.modelPolicies ||= [];
       const current = registry.forState(state).policy(state);
       if (!policies.some(p => p.version === current.version)) policies.push({ id: String(current.version), ...current });
-      state.settings.aiPolicy = { mode: 'dual', primaryId: 'clef-local', secondaryId: 'gemma-local', fallbackId: null,
+      if (!state.settings.automation) state.settings.aiPolicy = { mode: 'dual', primaryId: 'clef-local', secondaryId: 'gemma-local', fallbackId: null,
         version: current.version + 1, updatedAt, updatedBy: req.user.name, updatedById: req.user.id };
-      policies.push({ id: String(state.settings.aiPolicy.version), ...state.settings.aiPolicy });
-      state.settings.dailyEnabled = false;
+      if (!state.settings.automation) policies.push({ id: String(state.settings.aiPolicy.version), ...state.settings.aiPolicy });
+      if (!state.settings.automation) state.settings.dailyEnabled = false;
       state.settings.version = (state.settings.version || 1) + 1;
       return snapshot(state);
     });
