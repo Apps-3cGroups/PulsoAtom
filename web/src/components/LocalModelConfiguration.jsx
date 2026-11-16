@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Form, Select, Switch, Tag } from 'antd';
+import { Alert, App, Button, Form, Switch, Tag } from 'antd';
+import Select from './Select';
 import { CloudServerOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { useApi } from '../hooks';
 import { createGatewayDiscovery } from '../services/gatewayDiscovery';

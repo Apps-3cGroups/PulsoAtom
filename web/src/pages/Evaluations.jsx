@@ -1,7 +1,8 @@
 import { defaultDateRange } from '../services/dateRange';
 import { ModelControls, JobActions, jobStatus } from '../components/ModelControls';
 import { useEffect, useRef, useState } from 'react';
-import { App, Alert, Button, Input, Radio, Select, Table, Tabs, Tag, Tooltip } from 'antd';
+import { App, Alert, Button, Input, Radio, Table, Tabs, Tag, Tooltip } from 'antd';
+import Select from '../components/Select';
 import { PlayCircleOutlined, DatabaseOutlined, ExperimentOutlined, ScheduleOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi, usePortal } from '../hooks';

@@ -1,3 +1,5 @@
+import { conversationTimezone } from './conversation-timezone.js';
+import { config } from './config.js';
 import { messageCounts } from './message-counts.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -116,7 +118,7 @@ export function conversationView(state, conversation, context = viewContext(stat
   const unavailableFlags = variables.filter(v => evaluation && resultMap.has(v.id) && v.enabledInEvaluation && v.classification && !v.review
     && !v.result.error && !v.result.comparison?.cells?.some(cell => cell.error)
     && (v.result.status === 'no_evaluado' || v.result.comparison?.cells?.some(cell => cell.result?.status === 'no_evaluado'))).length;
-  const base = { provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
+  const base = { ...conversationTimezone(conversation, config.countryTimezones), provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
     activityDate: conversation.activityDate || conversation.date, startedDate: conversation.startedDate,
     activityAt: conversation.activityAt, lastActivityAt: conversation.lastActivityAt || null,
     p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };

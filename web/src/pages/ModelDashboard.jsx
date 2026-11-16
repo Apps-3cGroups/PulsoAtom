@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Drawer, Input, Select, Tooltip } from 'antd';
+import { Alert, Button, Drawer, Input, Tooltip } from 'antd';
+import Select from '../components/Select';
 import { BarChartOutlined, FilterOutlined, InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';

@@ -1,8 +1,9 @@
+import { conversationClock } from '../services/conversationTime';
 import { actorName } from '../services/participants';
 import { useState } from 'react';
-import { App, Alert, Form, Input, Modal, Select } from 'antd';
+import { App, Alert, Form, Input, Modal } from 'antd';
+import Select from './Select';
 import { api } from '../services/api';
-import { dateText, timeText } from './common';
 export { canReviewVariable, nextReviewAction } from '../services/reviewPolicy';
 
 export const reviewReasons = {
@@ -23,6 +24,7 @@ export default function ReviewModal({ conversation, editing, onClose, onSaved })
 }
 
 function ReviewForm({ conversation, editing, onClose, onSaved }) {
+  const clock = conversationClock(conversation);
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -48,7 +50,7 @@ function ReviewForm({ conversation, editing, onClose, onSaved }) {
       {action === 'levantar' && <>
         <Form.Item name="messageId" label="Mensaje de evidencia" rules={[{ required: true, message: 'Selecciona el mensaje que demuestra el evento.' }]}><Select showSearch optionFilterProp="label" options={conversation.messages.map(m => ({ value: m.id, label: `${actorName(m.actor)} · ${m.text}` }))} optionRender={option => <span style={{ whiteSpace: 'normal' }}>{option.label}</span>} /></Form.Item>
         {selectedMessage && <div className="evidence-quote review-evidence-preview" role="note" aria-label="Mensaje seleccionado como evidencia" style={{ marginBottom: 20 }}>
-          <div className="evidence-meta"><b>{actorName(selectedMessage.actor)}</b><span>{Number.isFinite(Date.parse(selectedMessage.timestamp)) ? `${dateText(selectedMessage.timestamp)} · ${timeText(selectedMessage.timestamp)}` : 'Fecha no disponible'}</span></div>
+          <div className="evidence-meta"><b>{actorName(selectedMessage.actor)}</b><span>{Number.isFinite(Date.parse(selectedMessage.timestamp)) ? `${clock.date(selectedMessage.timestamp)} · ${clock.time(selectedMessage.timestamp)}` : 'Fecha no disponible'}</span></div>
           <p style={{ whiteSpace: 'pre-wrap', maxHeight: 180, overflowY: 'auto' }}>{selectedMessage.text}</p>
         </div>}
       </>}

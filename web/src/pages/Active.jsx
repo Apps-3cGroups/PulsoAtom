@@ -1,3 +1,4 @@
+import { conversationClock } from '../services/conversationTime';
 import { countryLabel } from '../services/presentationText';
 import { conversationLink } from '../services/conversationNavigation';
 import { useEffect } from 'react';
@@ -9,7 +10,7 @@ import { classificationOf, flagCount, noVisibleFlagsLabel, evaluationNeedsAttent
 import { activeFigureKinds, activeRequestPath, visibleActiveMarks } from '../services/activeBoard';
 import { selectedCountries, selectedFigures, cleanOverviewParams } from '../services/summaryFilters';
 import { CountrySelect, ExceptionsFilter } from '../components/ExceptionControls';
-import { LoadingState, EmptyState, ErrorState, Mark, dateText, timeText } from '../components/common';
+import { LoadingState, EmptyState, ErrorState, Mark } from '../components/common';
 import './Active.css';
 
 const pollRuns = data => data.runs?.some(run => ['scheduled', 'waiting_ingestion', 'waiting_evaluation', 'running'].includes(run.status));
@@ -60,7 +61,7 @@ export function ConversationEntry({ conversation: c, showCountry, returnTo, visi
   const attention = flagCount(c, 'critical') || flagCount(c, 'normal');
   const pending = evaluationNeedsAttention(c) || c.sourceChanged;
   const clientLabel = `${c.client.name || 'Sin nombre'}${c.client.phoneLast4 ? ` …${c.client.phoneLast4}` : ''}`;
-  return <Link className={`active-conversation-card ${attention ? 'has-flag' : ''}`} to={conversationLink(c.id, returnTo)} aria-label={`Ver conversación de ${c.client.name}, atendida por ${c.agent.name}, ${dateText(c.startedAt)}, ${timeText(c.startedAt)}`}>
+  return <Link className={`active-conversation-card ${attention ? 'has-flag' : ''}`} to={conversationLink(c.id, returnTo)} aria-label={`Ver conversación de ${c.client.name}, atendida por ${c.agent.name}, ${conversationClock(c).date(c.startedAt)}, ${conversationClock(c).time(c.startedAt)}`}>
     <header><div><h3 title={c.agent.name}>{c.agent.name}</h3>{showCountry && <div className="active-card-country">{countryLabel(c.country, c.countryName)}</div>}</div><span className={`active-card-status ${attention ? 'flagged' : ''}`}>{attention ? 'Con flags' : pending ? 'Pendiente' : 'OK'}</span></header>
     <div className="active-card-body">
       {c.activeReason?.code === 'friday-cohort' && <span className="active-pending">{c.activeReason.label}</span>}
@@ -70,6 +71,6 @@ export function ConversationEntry({ conversation: c, showCountry, returnTo, visi
       {!evaluationNeedsAttention(c) && c.unavailableFlags > 0 && <span className="muted small">{c.unavailableFlags} variables sin datos suficientes</span>}
       {c.sourceChanged && <span className="active-pending">Contenido nuevo pendiente de evaluar</span>}
     </div>
-    <footer><span title={`Cliente ${clientLabel}`}>Cliente <b>{clientLabel}</b></span><span>Inició {dateText(c.startedAt, { year: undefined })} · {timeText(c.startedAt)}</span></footer>
+    <footer><span title={`Cliente ${clientLabel}`}>Cliente <b>{clientLabel}</b></span><span title={conversationClock(c).label}>Inició {conversationClock(c).date(c.startedAt)} · {conversationClock(c).time(c.startedAt)}</span></footer>
   </Link>;
 }

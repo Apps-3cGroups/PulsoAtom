@@ -1,8 +1,10 @@
+import { conversationClock } from '../services/conversationTime';
 import { catalogText } from '../services/presentationText';
 import { useState } from 'react';
-import { Alert, Button, Checkbox, Select } from 'antd';
+import { Alert, Button, Checkbox } from 'antd';
+import Select from './Select';
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined } from '@ant-design/icons';
-import { EmptyState, FlagSymbol, Mark, PriorityTag, dateText, timeText } from './common';
+import { EmptyState, FlagSymbol, Mark, PriorityTag } from './common';
 import FlagModelComparison from './FlagModelComparison';
 import { canReviewVariable, nextReviewAction, reviewActions } from './ReviewModal';
 import { classificationOf, flagVariables, unmarkedResultLabel } from '../services/flags';
@@ -34,6 +36,7 @@ export default function ConversationChecklist({ conversation, includeAll, onShow
 }
 
 export function ConversationFlagDetails({ conversation, variable: v, index, onShowMessage, onReview, onChecklist }) {
+  const clock = conversationClock(conversation);
   const sourceChanged = conversation.sourceChanged || conversation.evaluation?.sourceChanged;
   const canReview = !conversation.rawModelView && !sourceChanged && canReviewVariable(conversation, v);
   const action = nextReviewAction(v);
@@ -54,8 +57,8 @@ export function ConversationFlagDetails({ conversation, variable: v, index, onSh
     <Button type="text" icon={<ArrowLeftOutlined />} onClick={onChecklist}>Volver al checklist</Button>
     <div className="flag-details-heading"><div>{v.kind && <FlagSymbol mark={v} />}<PriorityTag priority={classificationOf(v)} /><span className="muted">Versión {v.version}</span></div>{canReview && <Button icon={<EditOutlined />} onClick={() => onReview(action)}>{reviewActions[action]}</Button>}</div>
     <p className="flag-details-status">{resultLabel(v)}</p>
-    {v.review && <div className="flag-human-record"><b>{v.review.action === 'refutar' ? 'Refutación humana' : 'Flag humano'}</b><p>{v.review.comment}</p><small>{v.review.authorName} · {dateText(v.review.createdAt)} · {timeText(v.review.createdAt)}{v.verdict?.id === v.review.id ? ` · ${v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}` : ''}</small></div>}
-    {!conversation.rawModelView && v.verdict && v.verdict.id !== v.review?.id && <div className="review-note"><b>Dictamen: {{ present: 'evento presente', absent: 'evento ausente', insufficient: 'contexto insuficiente', reverted: 'revertido' }[v.verdict.outcome]}</b><p>{v.verdict.comment}</p><small>{v.verdict.authorName} · {dateText(v.verdict.createdAt)} · {v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}</small></div>}
+    {v.review && <div className="flag-human-record"><b>{v.review.action === 'refutar' ? 'Refutación humana' : 'Flag humano'}</b><p>{v.review.comment}</p><small>{v.review.authorName} · {clock.date(v.review.createdAt)} · {clock.time(v.review.createdAt)}{v.verdict?.id === v.review.id ? ` · ${v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}` : ''}</small></div>}
+    {!conversation.rawModelView && v.verdict && v.verdict.id !== v.review?.id && <div className="review-note"><b>Dictamen: {{ present: 'evento presente', absent: 'evento ausente', insufficient: 'contexto insuficiente', reverted: 'revertido' }[v.verdict.outcome]}</b><p>{v.verdict.comment}</p><small>{v.verdict.authorName} · {clock.date(v.verdict.createdAt)} · {v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}</small></div>}
     {v.result.error && <Alert showIcon type="warning" message="Esta variable tuvo un error técnico" description={v.result.reason} />}
     {comparison ? <FlagModelComparison variable={v} demo={conversation.demo} /> : <><div className="flag-criterion"><b>Criterio evaluado</b><p>{catalogText(v.definition)}</p>{v.condition && <p>{catalogText(v.condition)}</p>}</div><p className="muted">{v.result.reason || 'Sin justificación registrada.'}</p>{v.result.comparison?.codeOnly && <p className="muted">Resultado calculado por código; no representa dos votos de IA.</p>}</>}
     {savedEvidence.length > 0 && <section className="flag-linked-messages" aria-label="Evidencia guardada"><h3>Evidencia guardada</h3>{savedEvidence.map(({ evidence, source }, position) => {
@@ -63,6 +66,6 @@ export function ConversationFlagDetails({ conversation, variable: v, index, onSh
       const content = <><span>{evidence.quote || 'Sin cita textual guardada.'}</span><span className="evidence-meta"><span>{source}{evidence.messageId != null ? ` · Mensaje ${evidence.messageId}` : ''}</span>{message && <><span>Ver en la conversación</span><ArrowRightOutlined /></>}</span></>;
       return message ? <button type="button" className="evidence-quote" key={position} onClick={() => onShowMessage(message.id)}>{content}</button> : <blockquote className="evidence-quote" key={position}>{content}</blockquote>;
     })}</section>}
-    <div className="flag-linked-messages"><h3>Mensajes vinculados ({evidenceMessages.length})</h3>{evidenceMessages.map(m => <button type="button" className="evidence-quote" key={m.id} onClick={() => onShowMessage(m.id)}><span>{m.text}</span><span className="evidence-meta">{hasDate(m.timestamp) ? `${dateText(m.timestamp)} · ${timeText(m.timestamp)}` : 'Fecha no disponible'}<span>Ver en la conversación</span><ArrowRightOutlined /></span></button>)}{!evidenceMessages.length && <p className="muted">{sourceChanged ? 'El contenido cambió. Las citas guardadas corresponden a la evaluación anterior y no se vinculan a los mensajes actuales.' : 'Este resultado no tiene una marca vinculada a un mensaje actual.'}</p>}</div>
+    <div className="flag-linked-messages"><h3>Mensajes vinculados ({evidenceMessages.length})</h3>{evidenceMessages.map(m => <button type="button" className="evidence-quote" key={m.id} onClick={() => onShowMessage(m.id)}><span>{m.text}</span><span className="evidence-meta">{hasDate(m.timestamp) ? `${clock.date(m.timestamp)} · ${clock.time(m.timestamp)}` : 'Fecha no disponible'}<span>Ver en la conversación</span><ArrowRightOutlined /></span></button>)}{!evidenceMessages.length && <p className="muted">{sourceChanged ? 'El contenido cambió. Las citas guardadas corresponden a la evaluación anterior y no se vinculan a los mensajes actuales.' : 'Este resultado no tiene una marca vinculada a un mensaje actual.'}</p>}</div>
   </section>;
 }

@@ -1,3 +1,4 @@
+import { conversationClock } from '../services/conversationTime';
 import { countryLabel } from '../services/presentationText';
 import { conversationLink } from '../services/conversationNavigation';
 import { selectedCountries, selectedFigures, figureKinds, cleanOverviewParams, filterSummaryConversations, summaryMetrics } from '../services/summaryFilters';
@@ -7,7 +8,7 @@ import { Button, ConfigProvider, Tooltip } from 'antd';
 import { AppstoreOutlined, CalendarOutlined, InfoCircleOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
-import { LoadingState, ErrorState, EmptyState, Mark, dateText, timeText } from '../components/common';
+import { LoadingState, ErrorState, EmptyState, Mark, dateText } from '../components/common';
 import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../services/summaryDates';
 import { summaryRangeLabel, summaryPercentage } from '../services/summaryPresentation';
 import { buildSummaryLanes } from '../services/summaryMap';
@@ -100,7 +101,7 @@ export default function Summary() {
           const kinds = [...new Set(marks.flatMap(m => m.kind === 'refuted' ? ['refuted'] : [classificationOf(m), ...(m.origin === 'human' || m.kind === 'human' ? ['human'] : [])]).filter(kind => visible.includes(kind)))];
           const agreed = dualMarks(c).filter(m => classification === 'all' || classificationOf(m) === classification);
           const status = evaluationStatus(c), pending = status !== 'evaluated';
-          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {dateText(c.displayDate, { year: undefined })} · {timeText(c.displayAt)} · {c.channel}</span><strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>Detectado por ambos modelos: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} status-${status} ${agreed.length ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
+          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {conversationClock(c).dateTime(c.displayAt)} · {c.channel}</span><span>{conversationClock(c).label}</span><strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>Detectado por ambos modelos: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} status-${status} ${agreed.length ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
         })}</div>)}</div></div>)}</section>;
       })}</div></div>}</section></ConfigProvider>
   </div>;

@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Alert, Button, Drawer, Input, Select, Table, Tag } from 'antd';
+import { Alert, Button, Drawer, Input, Table, Tag } from 'antd';
+import Select from './Select';
 
 const names = { 'clef-local': 'Clef', 'gemma-local': 'Gemma' };
 const empty = () => ({ mode: 'inherit', shared: '', byModel: { 'clef-local': '', 'gemma-local': '' } });

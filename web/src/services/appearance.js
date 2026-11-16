@@ -24,6 +24,6 @@ export function appearanceTheme(value) {
     token: { ...baseToken, ...typography, controlHeight: baseDesign.controlHeight * scale,
       controlHeightSM: baseDesign.controlHeightSM * scale, controlHeightLG: baseDesign.controlHeightLG * scale,
       controlHeightXS: baseDesign.controlHeightXS * scale },
-    components: { Table: { headerBg: '#eaf0e9', rowHoverBg: '#eef4ed' }, Button: { primaryShadow: 'none' } },
+    components: { Select: { motion: false, zIndexPopup: 1100 }, Table: { headerBg: '#eaf0e9', rowHoverBg: '#eef4ed' }, Button: { primaryShadow: 'none' } },
   };
 }

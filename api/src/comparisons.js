@@ -1,3 +1,5 @@
+import { conversationTimezone } from './conversation-timezone.js';
+import { config } from './config.js';
 import { randomUUID } from 'node:crypto';
 import { AppError } from './errors.js';
 import { latestVerdict, sourceFingerprint, wasExposed, ensureEvaluationState } from './evaluation-context.js';
@@ -86,7 +88,7 @@ export function validationView(state, sample, conversationId, user) {
   const session = state.validations?.find(v => v.comparisonId === sample.id && v.conversationId === conversationId && v.authorId === user.id);
   const assisted = !!session || variables.some(v => wasExposed(state, user.id, conversationId, item.sourceHash, v.id, v.version));
   // Deliberately construct a whitelist: no model results, flags, previous verdicts or evidence.
-  return { conversation: { id: conversation.id, clientName: conversation.client.name, agentName: conversation.agent.name, country: conversation.country, messages: conversation.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text, timestamp: m.timestamp })) },
+  return { conversation: { ...conversationTimezone(conversation, config.countryTimezones), id: conversation.id, clientName: conversation.client.name, agentName: conversation.agent.name, country: conversation.country, messages: conversation.messages.map(m => ({ id: m.id, actor: m.actor, text: m.text, timestamp: m.timestamp })) },
     variables: variables.map(v => ({ id: v.id, name: v.name, definition: v.definition, condition: v.condition, version: v.version })),
     mode: assisted ? 'assisted' : 'blind', submitted: !!session, expectedVerdicts: Object.fromEntries(variables.map(v => [v.id, latestVerdict(state, conversationId, item.sourceHash, v.id, v.version)?.id || null])) };
 }

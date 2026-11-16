@@ -1,3 +1,4 @@
+import { conversationClock } from '../services/conversationTime';
 import { countryLabel } from '../services/presentationText';
 import { conversationReturn } from '../services/conversationNavigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -10,7 +11,7 @@ import ConversationModelReviews from '../components/ConversationModelReviews';
 import ConversationTranscript from '../components/ConversationTranscript';
 import ConversationChecklist, { ConversationFlagDetails } from '../components/ConversationChecklist';
 import ReviewModal, { reviewActions, canReviewVariable, nextReviewAction } from '../components/ReviewModal';
-import { PageHeading, ErrorState, LoadingState, EmptyState, dateText, timeText } from '../components/common';
+import { PageHeading, ErrorState, LoadingState, EmptyState, dateText } from '../components/common';
 import { flagVariables, evaluationStatus } from '../services/flags';
 import { dailyMetricsView, withMetricDate } from '../services/dailyMetrics';
 import { buildMessageFlags } from '../services/messageFlags';
@@ -69,12 +70,13 @@ export default function Conversation() {
   if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTarget.to)}>{returnTarget.action}</Button><ErrorState error={request.error} retry={request.reload} /></>;
   if (request.loading || !conversation || request.dataPath !== requestPath) return <LoadingState />;
   const c = conversation;
+  const clock = conversationClock(c);
   const status = evaluationStatus(c);
   const selectedFlag = c.variables.find(v => v.id === selectedFlagId);
   const titles = { checklist: 'Checklist de la evaluación', models: 'Evaluaciones de los modelos', metrics: 'Métricas de la conversación', history: 'Historial de revisiones', flag: selectedFlag?.name || 'Detalle del flag' };
   return <div className="detail-page conversation-focus">
     <div className="breadcrumb-line"><Button type="text" size="small" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTarget.to)}>{returnTarget.label}</Button><span>/</span><span>Conversación</span></div>
-    <PageHeading title={<><span className="visually-hidden">Asistente: </span>{c.agent.name}</>} description={<>Cliente: <strong>{c.client.name}</strong> · {countryLabel(c.country, c.countryName)} · {dateText(c.date)} · {c.channel}</>} actions={<div className="conversation-heading-actions">
+    <PageHeading title={<><span className="visually-hidden">Asistente: </span>{c.agent.name}</>} description={<>Cliente: <strong>{c.client.name}</strong> · {countryLabel(c.country, c.countryName)} · {c.activityAt || c.startedAt ? clock.date(c.activityAt || c.startedAt) : dateText(c.date)} · {c.channel}</>} actions={<div className="conversation-heading-actions">
       <Button icon={<BarChartOutlined />} onClick={() => setInspector('metrics')}>Métricas</Button>
       <Button icon={<ReadOutlined />} onClick={() => setInspector('models')}>Modelos</Button>
       <Button icon={<HistoryOutlined />} onClick={() => setInspector('history')}>Revisiones ({c.reviews.length})</Button>
@@ -85,6 +87,7 @@ export default function Conversation() {
     {c.evaluation?.sourceChanged && <Alert className="detail-alert" showIcon type="warning" message="La conversación cambió desde la evaluación" description="Las marcas anteriores se conservan en el checklist. No se asocian a los mensajes actualizados hasta evaluar de nuevo." />}
     <ConversationTranscript key={c.id} conversation={c} index={messageFlags} eligibleFlags={eligibleFlags} filters={filters} onFiltersChange={changeFilters} highlight={highlight.id} selectedFlagId={selectedMessageFlagId} onSelectFlag={selectMessageFlag} onFocusMessage={messageId => setHighlight(value => ({ id: String(messageId), revision: value.revision + 1 }))} onShowFlag={showFlag} onShowContext={showMessage} onAddFlag={(variable, messageId) => setEditing({ variable, action: 'levantar', messageId })} />
     <Drawer open={!!inspector} title={titles[inspector]} onClose={() => setInspector(null)} width={inspector === 'metrics' ? 1120 : 960} className="conversation-inspector" destroyOnHidden>
+      {inspector !== 'metrics' && <p className="message-timezone">{clock.label}</p>}
       {inspector === 'metrics' && <><ConversationMetrics conversation={c} selectedDate={metricSelection.selectedDate} onDateChange={date => setParams(current => withMetricDate(current, date), { replace: true, preventScrollReset: true })} /><ConversationDescriptors conversation={c} /></>}
       {inspector === 'models' && <>
         <section className="conversation-model-summary" aria-label="Cobertura de la evaluación">
@@ -95,7 +98,7 @@ export default function Conversation() {
       </>}
       {inspector === 'checklist' && <ConversationChecklist conversation={c} includeAll={checklistAll} onShowFlag={showFlag} />}
       {inspector === 'flag' && selectedFlag && <ConversationFlagDetails conversation={c} variable={selectedFlag} index={messageFlags} onShowMessage={showMessage} onReview={action => setEditing({ variable: selectedFlag, action })} onChecklist={() => showChecklist(true)} />}
-      {inspector === 'history' && (c.reviews.length ? <Timeline className="review-timeline" items={[...c.reviews].reverse().map(review => ({ color: review.action === 'refutar' ? 'blue' : review.action === 'levantar' ? 'purple' : 'gray', children: <div><b>{reviewActions[review.action]} · {c.variables.find(v => v.id === review.variableId)?.name}</b><p>{review.comment}</p><small className="muted">{review.authorName} · {dateText(review.createdAt)} {timeText(review.createdAt)}</small></div> }))} /> : <EmptyState title="Sin revisiones humanas" description="Aquí se conservarán las refutaciones, los flags humanos y las acciones de deshacer." />)}
+      {inspector === 'history' && (c.reviews.length ? <Timeline className="review-timeline" items={[...c.reviews].reverse().map(review => ({ color: review.action === 'refutar' ? 'blue' : review.action === 'levantar' ? 'purple' : 'gray', children: <div><b>{reviewActions[review.action]} · {c.variables.find(v => v.id === review.variableId)?.name}</b><p>{review.comment}</p><small className="muted">{review.authorName} · {clock.date(review.createdAt)} {clock.time(review.createdAt)}</small></div> }))} /> : <EmptyState title="Sin revisiones humanas" description="Aquí se conservarán las refutaciones, los flags humanos y las acciones de deshacer." />)}
     </Drawer>
     {editing && <ReviewModal conversation={c} editing={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); request.reload(); }} />}
   </div>;

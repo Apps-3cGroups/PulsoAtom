@@ -1,6 +1,7 @@
 import { defaultDateRange } from '../services/dateRange';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Drawer, Form, Input, InputNumber, Radio, Select, Table, Tag } from 'antd';
+import { Alert, App, Button, Drawer, Form, Input, InputNumber, Radio, Table, Tag } from 'antd';
+import Select from './Select';
 import { SwapOutlined, SafetyCertificateOutlined, HistoryOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useApi, useDebounced, usePortal } from '../hooks';

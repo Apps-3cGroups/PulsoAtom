@@ -1,5 +1,6 @@
 import { countryLabel } from '../services/presentationText';
-import { Alert, Button, Empty, Select, Input, Tag, Tooltip } from 'antd';
+import { Alert, Button, Empty, Input, Tag, Tooltip } from 'antd';
+import Select from './Select';
 import { ReloadOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import { usePortal } from '../hooks';
 import { classificationOf, flagLabel, flagCountLabel, markKind, dualMarks, flagVariables, noVisibleFlagsLabel, evaluationStatus, evaluationStatusLabel } from '../services/flags';

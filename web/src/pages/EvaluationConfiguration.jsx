@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, App, Button, Drawer, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag } from 'antd';
+import { Alert, App, Button, Drawer, Input, InputNumber, Space, Switch, Table, Tabs, Tag } from 'antd';
+import Select from '../components/Select';
 import { ArrowLeftOutlined, SaveOutlined, ReloadOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { api } from '../services/api';
