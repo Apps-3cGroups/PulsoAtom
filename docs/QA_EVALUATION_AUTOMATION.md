@@ -144,7 +144,7 @@ No hay fallos críticos confirmados en las pruebas locales. Siguen pendientes de
 
 ## Desviaciones visuales
 
-Corregidos el desbordamiento móvil y el aviso deprecado de `InputNumber` introducido por los controles de unidades. Sin errores nuevos de navegador tras la recarga final. El build mantiene el aviso de tamaño del bundle compartido ya existente.
+Corregidos el desbordamiento móvil y el aviso deprecado de `InputNumber` introducido por los controles de unidades. Sin errores funcionales nuevos de navegador tras la recarga final. La demostración usó node_modules enlazados desde la carpeta original: el servidor Vite registró restricciones para algunas fuentes externas a su carpeta permitida. La compilación copió los recursos correctamente; la tipografía final debe comprobarse con dependencias instaladas en el entorno de destino. El build mantiene el aviso de tamaño del bundle compartido ya existente.
 
 ## Recomendaciones prioritarias antes de liberar a producción
 
