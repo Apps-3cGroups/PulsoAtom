@@ -251,6 +251,8 @@ export async function runAutomationTick(store, evaluator, date = new Date()) {
           current.activityDate = activityDate; current.lastSuccessfulDetectionAt = date.toISOString();
           current.availability = Object.fromEntries(config.countries.map(c => [c.code, source.conversations.filter(row => row.country === c.code && (config.includeOpen || row.completed !== false)).length]));
           current.loads = source.loads || [];
+          (current.days ||= {})[activityDate] = { availability: structuredClone(current.availability),
+            countries: structuredClone(config.countries), lastSuccessfulDetectionAt: date.toISOString() };
           const newCountries = (source.countries || []).filter(country => !s.settings.automation.countries.some(c => c.code === country.code));
           if (newCountries.length) saveAutomationConfiguration(s, { expectedVersion: s.settings.version,
             automation: { ...s.settings.automation, countries: [...s.settings.automation.countries, ...newCountries.map(c => ({ code: c.code, name: c.name, enabled: false, paused: false, dailyLimit: 100 }))] } },

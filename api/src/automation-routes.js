@@ -10,11 +10,13 @@ export function automationMonitor(state, activityDate) {
   const configuration = automationConfiguration(state.settings);
   const runtime = state.settings.automationRuntime || {};
   const date = activityDate || runtime.activityDate || previousDate(automationClock(new Date(), configuration.timezone).date);
+  const day = runtime.days?.[date];
+  const countries = runtime.activityDate !== date && day?.countries ? day.countries : configuration.countries;
   const assignments = (state.dailyAssignments || []).filter(a => a.activityDate === date);
-  const rows = configuration.countries.map(country => {
+  const rows = countries.map(country => {
     const selected = assignments.filter(a => a.country === country.code);
     const tasks = selected.flatMap(a => (state.tasks || []).filter(t => t.jobId === a.jobId && t.conversationId === a.conversationId && t.status !== 'deferred'));
-    const available = runtime.activityDate === date ? runtime.availability?.[country.code] ?? null : null;
+    const available = day?.availability?.[country.code] ?? (runtime.activityDate === date ? runtime.availability?.[country.code] ?? null : null);
     return { ...country, available, selected: selected.length, outsideSample: available === null ? null : Math.max(0, available - selected.length),
       remaining: Math.max(0, country.dailyLimit - selected.length),
       models: Object.fromEntries(configuration.modelOrder.map(id => [id, {
@@ -26,7 +28,7 @@ export function automationMonitor(state, activityDate) {
   });
   return { activityDate: date, enabled: configuration.enabled, paused: configuration.paused, configured: !!state.settings.automation,
     timezone: configuration.timezone, lastDetectionAt: runtime.lastDetectionAt || null,
-    lastSuccessfulDetectionAt: runtime.lastSuccessfulDetectionAt || null, countries: rows,
+    lastSuccessfulDetectionAt: day?.lastSuccessfulDetectionAt || (runtime.activityDate === date ? runtime.lastSuccessfulDetectionAt : null) || null, countries: rows,
     alerts: [...(runtime.alerts || [])].reverse(),
     jobs: state.jobs.filter(j => j.automation && (j.automation.activityDate === date || !['completed', 'failed', 'partial'].includes(j.status)))
       .map(j => ({ id: j.id, status: j.status, activityDate: j.automation.activityDate, executionOrder: j.executionOrder,

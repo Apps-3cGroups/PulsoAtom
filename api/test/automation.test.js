@@ -110,6 +110,7 @@ test('bounded durable retries retain successes and recover selected work after a
   assert.equal(s.tasks.filter(t => t.status === 'failed').length, 3);
   assert.equal(f.calls.filter(c => c.id === 'clef-local').length, 3);
   assert.equal(s.dailyAssignments.length, 3);
+  assert.equal(automationMonitor(s, f.activityDate).countries.find(c => c.code === 'HN').available, 4);
   const original = s.dailyAssignments.filter(a => a.activityDate === f.activityDate);
   assert.equal(original.length, 3);
   for (const a of original) {
