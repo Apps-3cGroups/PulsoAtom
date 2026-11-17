@@ -18,7 +18,7 @@ Esta rama conserva íntegro el workflow de `main`, dedicado exclusivamente al de
 
 Si se necesita publicar este corte histórico, DevOps debe revisar el artefacto `web/temporary-daily` y realizar su instalación por separado. Se conserva `api/scripts/install-daily-monitor.js` como utilidad manual; espera una copia del artefacto en `static-monitor`, junto al directorio `api` dentro del paquete temporal. Valida inventario, tipos y hashes, rechaza enlaces simbólicos y respalda la instalación anterior antes de reemplazarla. La utilidad no actualiza el checkout de producción ni reinicia API, web o workers.
 
-Este corte y el monitor del 11 de noviembre del PR #34 utilizan la misma dirección y son alternativas de publicación.
+La versión mantenida es este monitor del jueves y su recuperación, consolidado en el PR #71. Sustituye el corte del 11 de noviembre del PR #34 en la misma dirección. El PR #34 se conserva como antecedente histórico; no requiere una fusión ni publicación adicional. El instalador compartido y las correcciones de pruebas ya están incorporados en el PR #71.
 
 El navegador usa los endpoints existentes. `GET /evaluations` conserva su comportamiento previo del portal, incluida la recuperación de trabajos obsoletos implementada por la API; este cambio no modifica ese comportamiento ni agrega acciones de evaluación. El instalador estático no consulta ni modifica la base.
 
