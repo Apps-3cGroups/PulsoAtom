@@ -38,8 +38,10 @@ export function automationMonitor(state, activityDate) {
 
 export function mountAutomationRoutes(app, prefix, { store, registry, requireAdmin, config }) {
   const catalog = async state => store.readCountryCatalog ? store.readCountryCatalog().catch(() => []) : state.countries || (config.demo ? demoCountries : []);
+  const readConfiguration = () => store.readEvaluationConfiguration ? store.readEvaluationConfiguration() : store.read();
+  const configurationTransaction = fn => store.evaluationConfigurationTransaction ? store.evaluationConfigurationTransaction(fn) : store.transaction(fn);
   app.get(`${prefix}/evaluations/settings`, requireAdmin, async (_req, res) => {
-    const state = await store.read();
+    const state = await readConfiguration();
     const countries = await catalog(state);
     res.set('Cache-Control', 'no-store').json({ settings: state.settings, automation: automationConfiguration(state.settings, countries, registry),
       countries, checklist: state.catalog.filter(v => !v.retired).map(({ id, name, method, type, active, definition, condition, version }) => ({ id, name, method, type, active, definition, condition, version })), configured: !!state.settings.automation, models: registry.forState(state).list(), demo: config.demo });
@@ -49,9 +51,9 @@ export function mountAutomationRoutes(app, prefix, { store, registry, requireAdm
     const input = z.object({ expectedVersion: z.number().int().positive(), automation: automationSchema.optional(),
       restoreVersion: z.number().int().positive().optional(), restoreScope: z.enum(['all', 'prompts']).optional() }).strict()
       .refine(v => !!v.automation !== !!v.restoreVersion, 'Envía configuración o versión a restaurar.').parse(req.body);
-    const before = await store.read();
+    const before = await readConfiguration();
     const countries = await catalog(before);
-    const result = await store.transaction(state => {
+    const result = await configurationTransaction(state => {
       if (input.restoreVersion) {
         const previous = state.settings.automationHistory?.find(h => h.version === input.restoreVersion);
         if (!previous) throw new AppError(404, 'No se encontró esta versión.', 'NOT_FOUND');
@@ -73,7 +75,7 @@ export function mountAutomationRoutes(app, prefix, { store, registry, requireAdm
   });
   app.post(`${prefix}/evaluations/settings/preview`, requireAdmin, async (req, res) => {
     const { automation } = z.object({ automation: automationSchema }).strict().parse(req.body);
-    const state = await store.read();
+    const state = await readConfiguration();
     const runtime = runtimeConfiguration(automation);
     const bound = registry.forState(state).withRuntime(runtime);
     res.set('Cache-Control', 'no-store').json({ profiles: Object.keys(runtime).map(id => {
@@ -85,12 +87,13 @@ export function mountAutomationRoutes(app, prefix, { store, registry, requireAdm
   });
   app.get(`${prefix}/evaluations/automation`, requireAdmin, async (req, res) => {
     const { activityDate } = z.object({ activityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).strict().parse(req.query);
-    const state = store.readAutomationState ? await store.readAutomationState() : await store.read();
+    const state = store.readAutomationMonitorState ? await store.readAutomationMonitorState()
+      : store.readAutomationState ? await store.readAutomationState() : await store.read();
     res.set('Cache-Control', 'no-store').json(automationMonitor(state, activityDate));
   });
   app.post(`${prefix}/evaluations/automation/control`, requireAdmin, async (req, res) => {
     const input = z.object({ expectedVersion: z.number().int().positive(), action: z.enum(['pause', 'resume']), country: z.string().regex(/^[A-Z]{2}$/).optional() }).strict().parse(req.body);
-    const result = await store.transaction(state => {
+    const result = await configurationTransaction(state => {
       const automation = automationConfiguration(state.settings);
       if (!state.settings.automation) throw new AppError(409, 'Guarda primero la configuración de evaluaciones.', 'AUTOMATION_NOT_CONFIGURED');
       if (input.country) {

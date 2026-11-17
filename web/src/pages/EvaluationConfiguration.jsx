@@ -10,13 +10,13 @@ import LocalModelConfiguration from '../components/LocalModelConfiguration';
 import ChecklistPrompts, { resolvedItemPrompts } from '../components/ChecklistPrompts';
 import { jobStatus } from '../components/ModelControls';
 import { automationCountryRows } from '../services/automationCountries';
+import { sameEvaluationConfiguration as same } from '../services/evaluationConfiguration';
 import './evaluation-configuration.css';
 
 const modelNames = { 'clef-local': 'Clef', 'gemma-local': 'Gemma' };
 const models = Object.keys(modelNames);
 const modes = [{ value: 'parallel', label: 'Paralelo' }, { value: 'model-first', label: 'Secuencial por lote' }, { value: 'conversation-first', label: 'Secuencial por conversación' }];
 const keepPolling = () => true;
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export default function EvaluationConfiguration() {
   const request = useApi('/evaluations/settings');

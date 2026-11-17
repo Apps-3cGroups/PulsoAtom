@@ -57,6 +57,8 @@ El monitor permite consultar por jornada: disponibles, seleccionadas, cupo, fuer
 
 Los endpoints de descubrimiento y conexión del Gateway se mantienen. Guardar una conexión no cambia el orden configurado ni desactiva la nueva automatización. Las credenciales nunca se guardan en snapshots ni se envían al frontend.
 
+La lectura y comprobación de configuración consultan solo ajustes y checklist. Guardar, restaurar y pausar conservan el bloqueo global y la validación de versión, pero leen únicamente los trabajos automáticos/diarios, sus asignaciones y los campos de estado de las tareas necesarios para reconciliarlos. El monitor usa estas lecturas reducidas; no descarga respuestas, evidencias ni intentos históricos. Si el navegador pierde la respuesta de un guardado, la comprobación compara los valores de la configuración sin depender del orden de las claves JSON devueltas por MySQL.
+
 ## Transición controlada
 
 1. Verificar respaldo y aplicar la migración aditiva `005_evaluation_automation.sql` **antes de arrancar el código nuevo**. El workflow de despliegue existente espera a que las evaluaciones estén libres, adquiere el bloqueo de mantenimiento y ejecuta `npm run db:migrate --prefix api -- --defer-online-indexes` antes del reinicio. Para un despliegue manual, mantener ese mismo orden. No ejecutar seeds ni reiniciar evaluaciones.
