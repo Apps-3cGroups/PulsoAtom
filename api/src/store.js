@@ -115,6 +115,47 @@ export class MysqlStore {
   // Reuse the same global lock as evaluation workers, but do not load or write
   // their tables. Fresh settings are merged inside the locked transaction.
   async settingsTransaction(fn) { return this.transaction(state => fn(state.settings ||= {}), []); }
+  async readEvaluationConfiguration() {
+    return this.readSnapshot(connection => this.load(connection, ['catalog']));
+  }
+  async loadAutomationAdministration(connection, monitor = false) {
+    const state = await this.load(connection, monitor ? [] : ['catalog']);
+    // Configuration changes only reconcile automatic/legacy daily jobs. Never
+    // transfer historical answers, attempts, evidence or task prompt snapshots.
+    const [jobs] = await connection.query(`SELECT payload FROM evaluation_jobs
+      WHERE JSON_TYPE(JSON_EXTRACT(payload, '$.automation')) = 'OBJECT'
+        OR JSON_TYPE(JSON_EXTRACT(payload, '$.dailyActivity')) = 'OBJECT'
+      ORDER BY sequence_id`);
+    state.jobs = jobs.map(row => decode(row.payload));
+    const [assignments] = await connection.query('SELECT payload FROM evaluation_daily_assignments ORDER BY sequence_id');
+    state.dailyAssignments = assignments.map(row => decode(row.payload));
+    const ids = [...new Set([
+      ...state.jobs.filter(job => monitor || job.automation && job.status !== 'running').map(job => job.id),
+      ...(monitor ? state.dailyAssignments.map(row => row.jobId) : []),
+    ])];
+    const fields = ['id', 'jobId', 'conversationId', 'status', 'nextAttemptAt', 'error'];
+    const projection = fields.map(field => `'${field}', JSON_EXTRACT(payload, '$.${field}')`).join(', ');
+    for (let offset = 0; offset < ids.length; offset += 300) {
+      const batch = ids.slice(offset, offset + 300);
+      const [tasks] = await connection.query(`SELECT JSON_OBJECT(${projection},
+        'profile', JSON_OBJECT('id', JSON_EXTRACT(payload, '$.profile.id'))) AS payload
+        FROM evaluation_tasks WHERE JSON_UNQUOTE(JSON_EXTRACT(payload, '$.jobId')) IN (${batch.map(() => '?').join(',')})
+        ORDER BY sequence_id`, batch);
+      state.tasks.push(...tasks.map(row => decode(row.payload)));
+    }
+    return state;
+  }
+  async evaluationConfigurationTransaction(fn) {
+    return this.transaction(async state => {
+      const tasks = JSON.stringify(state.tasks);
+      const result = await fn(state);
+      if (JSON.stringify(state.tasks) !== tasks) throw new Error('Configuration cannot modify projected evaluation tasks.');
+      return result;
+    }, ['jobs', 'dailyAssignments'], connection => this.loadAutomationAdministration(connection));
+  }
+  async readAutomationMonitorState() {
+    return this.readSnapshot(connection => this.loadAutomationAdministration(connection, true));
+  }
   async readAuthentication(sessionId) {
     const [sessions] = await this.pool.execute('SELECT payload FROM sessions WHERE id = ?', [sessionId]);
     const session = sessions[0] && decode(sessions[0].payload);
@@ -233,20 +274,23 @@ export class MysqlStore {
     return state;
   }
   async read() {
+    return this.readSnapshot(connection => this.load(connection));
+  }
+  async readSnapshot(load) {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
-      const state = await this.load(connection);
+      const state = await load(connection);
       await connection.commit(); return state;
     } catch (error) { await connection.rollback(); throw error; }
     finally { connection.release(); }
   }
-  async transaction(fn, keys = Object.keys(tables)) {
+  async transaction(fn, keys = Object.keys(tables), load = connection => this.load(connection, keys)) {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
       await connection.query('SELECT id FROM app_lock WHERE id = 1 FOR UPDATE');
-      const previous = await this.load(connection, keys);
+      const previous = await load(connection);
       const draft = structuredClone(previous);
       const result = await fn(draft);
       for (const key of keys) {
@@ -280,6 +324,9 @@ export class AtomHistoryStore {
   async readUserByEmail(email) { return this.base.readUserByEmail ? this.base.readUserByEmail(email) : (await this.base.read()).users.find(u => u.email.toLowerCase() === email.toLowerCase()); }
   async authenticationTransaction(fn) { return this.base.authenticationTransaction ? this.base.authenticationTransaction(fn) : this.base.transaction(fn); }
   async readAutomationState() { return this.base.readAutomationState ? this.base.readAutomationState() : this.base.read(); }
+  async readEvaluationConfiguration() { return this.base.readEvaluationConfiguration ? this.base.readEvaluationConfiguration() : this.base.read(); }
+  async evaluationConfigurationTransaction(fn) { return this.base.evaluationConfigurationTransaction ? this.base.evaluationConfigurationTransaction(fn) : this.base.transaction(fn); }
+  async readAutomationMonitorState() { return this.base.readAutomationMonitorState ? this.base.readAutomationMonitorState() : this.readAutomationState(); }
   async readAutomationSource(options) { return this.reader.readAutomationSource(options); }
   async readCountryCatalog() { return this.reader.readCountryCatalog(); }
   async readSchedulerState() { return this.base.readSchedulerState ? this.base.readSchedulerState() : this.base.read(); }

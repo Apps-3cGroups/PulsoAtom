@@ -21,6 +21,28 @@ async function setup(t) {
 }
 const base = '/pulsoAtom/api';
 
+test('configuration, verification, preview, save, pause and monitor avoid full historical reads', async t => {
+  const f = await setup(t);
+  const read = f.store.read.bind(f.store), transaction = f.store.transaction.bind(f.store);
+  const calls = { read: 0, write: 0, monitor: 0 };
+  f.store.readAuthentication = read;
+  f.store.readEvaluationConfiguration = async () => { calls.read++; return read(); };
+  f.store.evaluationConfigurationTransaction = async fn => { calls.write++; return transaction(fn); };
+  f.store.readAutomationMonitorState = async () => { calls.monitor++; return read(); };
+  f.store.read = async () => { throw new Error('Unexpected full history read'); };
+  f.store.transaction = async () => { throw new Error('Unexpected full history transaction'); };
+  const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  const saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: current.settings.version, automation: current.automation }).expect(200)).body;
+  const verified = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  assert.deepEqual(verified.automation, saved.automation);
+  await f.admin.post(`${base}/evaluations/settings/preview`).set('Origin', f.config.origin).send({ automation: saved.automation }).expect(200);
+  await f.admin.post(`${base}/evaluations/automation/control`).set('Origin', f.config.origin)
+    .send({ expectedVersion: saved.settings.version, action: 'pause' }).expect(200);
+  await f.admin.get(`${base}/evaluations/automation`).expect(200);
+  assert.deepEqual(calls, { read: 4, write: 2, monitor: 1 });
+});
+
 test('configuration is admin-only, versioned, persistent, and preserves disabled countries', async t => {
   const f = await setup(t);
   await request(f.app).get(`${base}/evaluations/settings`).expect(401);
@@ -85,6 +107,27 @@ test('country and global pause controls are audited without deleting work', asyn
   assert.equal(current.automation.paused, true);
   await f.supervisor.get(`${base}/evaluations/automation`).expect(403);
   await f.admin.get(`${base}/evaluations/automation`).expect(200);
+});
+
+test('prefilled item criteria persist and reach both model previews without truncation or changing other prompts', async t => {
+  const f = await setup(t);
+  const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  const item = current.checklist.find(v => v.method === 'IA');
+  const text = `Definición: ${'D'.repeat(5000)}\nCondición: ${'C'.repeat(5000)}`;
+  const automation = structuredClone(current.automation);
+  automation.prompts.byItem[item.id] = { mode: 'shared', shared: text };
+  const saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: current.settings.version, automation }).expect(200)).body;
+  const persisted = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  assert.equal(persisted.automation.prompts.byItem[item.id].shared, text);
+  assert.equal(persisted.automation.prompts.shared, current.automation.prompts.shared);
+  const preview = (await f.admin.post(`${base}/evaluations/settings/preview`).set('Origin', f.config.origin)
+    .send({ automation: saved.automation }).expect(200)).body;
+  assert.ok(preview.profiles.every(p => p.itemPrompts[item.id] === text));
+  automation.prompts.byItem[item.id].shared = 'X'.repeat(12001);
+  await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: saved.settings.version, automation }).expect(422);
+  assert.equal((await f.store.read()).settings.version, saved.settings.version);
 });
 
 test('Atom detection queries message activity without loading transcript text and distinguishes load metadata', async () => {

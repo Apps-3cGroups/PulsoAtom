@@ -22,6 +22,8 @@ Cada ítem del checklist evaluado con IA admite:
 
 Los ítems calculados por código se identifican como tales. Las instrucciones del ítem solo se transmiten en su propia entrada del checklist; Clef nativo las recibe tanto al clasificar como al elegir evidencia. Las instrucciones generales también pueden compartirse o separarse por modelo. Ningún modelo recibe respuestas del otro.
 
+Al abrir un ítem, el editor muestra prellenadas su definición y condición vigentes del catálogo. Consultar ese texto no crea instrucciones adicionales ni cambia la configuración. Editarlo activa el modo compartido en el borrador; cambiar a «Por modelo» completa los campos vacíos con el texto compartido o los criterios del catálogo y conserva cualquier prompt personalizado existente. El modo «Del catálogo» vuelve a usar los criterios vigentes sin instrucciones adicionales. Los prompts personalizados admiten hasta 12 000 caracteres para incluir sin recortes la definición y condición completas, de hasta 5 000 caracteres cada una. Guardar configuración mantiene el límite global de tamaño y crea la revisión auditada habitual.
+
 Se conservan las reglas técnicas de formato, tipos, evidencia y protocolos locales. La vista previa muestra la composición de instrucciones generales y las adicionales por ítem. El historial guarda todo el conjunto; restaurarlo crea una nueva revisión sin reevaluar el histórico.
 
 El lote congela catálogo, perfiles, configuración y textos de prompts, incluidas las instrucciones por ítem. Cada modelo tiene una huella propia; una huella del conjunto permite comprobar la compatibilidad de la pareja sin exigir textos iguales. Consenso, comparaciones y dashboard verifican ambas identidades. Las huellas nuevas son independientes del orden de claves de JSON en MySQL.
@@ -56,6 +58,8 @@ El monitor permite consultar por jornada: disponibles, seleccionadas, cupo, fuer
 | `POST /evaluations/:id/resume` | Reutiliza la reanudación existente; conserva resultados completados. |
 
 Los endpoints de descubrimiento y conexión del Gateway se mantienen. Guardar una conexión no cambia el orden configurado ni desactiva la nueva automatización. Las credenciales nunca se guardan en snapshots ni se envían al frontend.
+
+La lectura y comprobación de configuración consultan solo ajustes y checklist. Guardar, restaurar y pausar conservan el bloqueo global y la validación de versión, pero leen únicamente los trabajos automáticos/diarios, sus asignaciones y los campos de estado de las tareas necesarios para reconciliarlos. El monitor usa estas lecturas reducidas; no descarga respuestas, evidencias ni intentos históricos. Si el navegador pierde la respuesta de un guardado, la comprobación compara los valores de la configuración sin depender del orden de las claves JSON devueltas por MySQL.
 
 ## Transición controlada
 
