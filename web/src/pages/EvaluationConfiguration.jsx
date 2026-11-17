@@ -6,7 +6,6 @@ import { ArrowLeftOutlined, SaveOutlined, ReloadOutlined, PauseCircleOutlined, P
 import { useApi, usePortal } from '../hooks';
 import { api } from '../services/api';
 import { PageHeading, LoadingState, ErrorState, dateText } from '../components/common';
-import LocalModelConfiguration from '../components/LocalModelConfiguration';
 import ChecklistPrompts, { resolvedItemPrompts } from '../components/ChecklistPrompts';
 import { jobStatus } from '../components/ModelControls';
 import { automationCountryRows } from '../services/automationCountries';
@@ -147,7 +146,6 @@ export default function EvaluationConfiguration() {
         { title: 'Versión', dataIndex: 'version' }, { title: 'Fecha', dataIndex: 'createdAt', render: dateText }, { title: 'Autor', dataIndex: 'author' },
         { title: 'Acciones', render: (_, h) => <Space wrap><Button disabled={controlsDisabled || dirty} onClick={() => setPreview({ profiles: models.map(id => ({ id, label: modelNames[id], itemPrompts: resolvedItemPrompts(h.configuration.prompts, id), text: h.configuration.prompts.mode === 'shared' ? h.configuration.prompts.shared : h.configuration.prompts.byModel[id] })) })}>Ver prompts</Button><Button disabled={controlsDisabled || dirty} onClick={() => mutate('/evaluations/settings', { expectedVersion: saved.settings.version, restoreVersion: h.version, restoreScope: 'prompts' }, 'PATCH')}>Restaurar prompts</Button><Button disabled={controlsDisabled || dirty} onClick={() => mutate('/evaluations/settings', { expectedVersion: saved.settings.version, restoreVersion: h.version, restoreScope: 'all' }, 'PATCH')}>Restaurar configuración</Button></Space> },
       ]} /></section> },
-      { key: 'connections', label: 'Conexión de modelos', children: <LocalModelConfiguration demo={bootstrap.mode === 'demo'} isAdmin running={monitor.data?.jobs.some(j => j.status === 'running')} onSaved={() => { request.reload(); monitor.reload(); }} /> },
     ]} />
     <Drawer title="Instrucciones del modelo" open={!!preview} onClose={() => setPreview(null)} width="min(850px, 100vw)"><Tabs items={(preview?.profiles || []).map(p => ({ key: p.id, label: p.label, children: <><h3>Instrucciones generales</h3><pre className="automation-prompt-preview">{p.text}</pre>{Object.entries(p.itemPrompts || {}).map(([id, text]) => <section key={id}><h3>{saved.checklist?.find(item => item.id === id)?.name || id} · {id}</h3><pre className="automation-prompt-preview">{text}</pre></section>)}</> }))} /></Drawer>
   </div>;
