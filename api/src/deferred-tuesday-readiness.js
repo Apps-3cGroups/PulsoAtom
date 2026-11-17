@@ -1,6 +1,6 @@
 import { thursdayPriorityReleased } from './tuesday-wednesday-completion.js';
 import { thursdayCoverage, THURSDAY_ACTIVITY, THURSDAY_INGESTION } from './thursday-handoff.js';
-import { ingestionReadiness } from './one-off-evaluations.js';
+import { thursdayIngestionReadiness } from './thursday-ingestion.js';
 
 // Read-only preflight. A completed import is not a promise of no later imports:
 // the launcher grants only one Tuesday conversation before checking again.
@@ -20,7 +20,8 @@ export async function readDeferredTuesdayReadiness(store, now = new Date(), { co
   if (reason) return { ready: false, reason };
   if (!store.readIngestionSnapshot) return { ready: false, reason: 'INGESTION_UNAVAILABLE' };
   const ingestion = await store.readIngestionSnapshot(THURSDAY_INGESTION);
-  if (!ingestionReadiness(ingestion, THURSDAY_INGESTION).ready) return { ready: false, reason: 'THURSDAY_INGESTION_PENDING' };
+  const ingestionState = thursdayIngestionReadiness(ingestion);
+  if (!ingestionState.settled) return { ready: false, reason: 'THURSDAY_INGESTION_PENDING', ingestion: ingestionState };
   // The production reader can limit transcript hydration to Thursday candidates.
   const overview = store.reader?.readOverview ? await store.reader.readOverview({ from: THURSDAY_ACTIVITY,
     dateBasis: 'activity', countries: ['HN', 'PA'] }, { metadataOnly: true }) : null;
@@ -30,12 +31,17 @@ export async function readDeferredTuesdayReadiness(store, now = new Date(), { co
   if (reason) return { ready: false, reason };
   if (state.settings.thursdayHandoff.scopeHash !== snapshot.settings.thursdayHandoff.scopeHash) return { ready: false, reason: 'HANDOFF_CHANGED' };
   const current = coverage(state, { ingestion });
-  if (!current?.ingestionReady || !current.allReadyEvaluated || Object.keys(current.errors || {}).length
+  if (!current?.ingestionSettled || !current.allReadyEvaluated || Object.keys(current.errors || {}).length
     || ['HN', 'PA'].some(country => !current.byCountry[country]?.eligibleConversations
       || current.byCountry[country].remainingConversations || current.byCountry[country].unavailableConversations)) {
     return { ready: false, reason: 'THURSDAY_PENDING', coverage: current };
   }
-  return { ready: true, reason: null, checkedAt: now.toISOString(), handoffScopeHash: state.settings.thursdayHandoff.scopeHash, coverage: current };
+  const rechecked = thursdayIngestionReadiness(await store.readIngestionSnapshot(THURSDAY_INGESTION));
+  if (!rechecked.settled || rechecked.fingerprint !== ingestionState.fingerprint) {
+    return { ready: false, reason: 'THURSDAY_INGESTION_CHANGED', ingestion: rechecked };
+  }
+  return { ready: true, reason: null, checkedAt: now.toISOString(), handoffScopeHash: state.settings.thursdayHandoff.scopeHash,
+    coverage: current, ingestion: rechecked };
 }
 
 export async function resumeDeferredTuesdayWhenReady(store, now = new Date(), operations = {}) {

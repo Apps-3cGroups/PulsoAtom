@@ -19,6 +19,6 @@ El PR del workflow debe permanecer abierto hasta completar el runner. El workflo
 - Instala dependencias con `npm ci --ignore-scripts`, compila la web y actualiza únicamente los dos procesos del ecosystem de PulsoAtom.
 - Comprueba salud de API y web por loopback antes de finalizar.
 - Limpia temporales locales y remotos incluso si falla una transferencia previa; informa si la conexión impide retirar la credencial remota.
-- No ejecuta SQL, migraciones, seeds ni scripts de evaluación, ni modifica Apache o la configuración del entorno.
+- Para cambios de API, espera un estado de evaluación libre y adquiere un bloqueo de mantenimiento antes de actualizar archivos. Aplica migraciones aditivas antes del reinicio y los índices diferidos después de comprobar el arranque. No ejecuta seeds ni inicia evaluaciones, ni modifica Apache o las credenciales del entorno.
 
 API: `127.0.0.1:4001/pulsoAtom/api/health`. Web: `127.0.0.1:3000/pulsoAtom/`. Apache conserva el prefijo `/pulsoAtom` al reenviar al servidor web.

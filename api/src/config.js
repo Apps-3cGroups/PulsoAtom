@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { parseCountryTimezones } from './conversation-timezone.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { normalizeBasePath } from './basePath.js';
@@ -15,6 +16,7 @@ export const config = {
   sessionHours: Number(process.env.SESSION_HOURS || 8),
   secureCookie: bool(process.env.COOKIE_SECURE),
   timezone: process.env.APP_TIMEZONE || 'America/Tegucigalpa',
+  countryTimezones: parseCountryTimezones(process.env.COUNTRY_TIMEZONES),
   demoFile: process.env.DEMO_FILE || path.join(apiRoot, '.data', 'demo-store.json'),
 };
 export function databaseConfig() {

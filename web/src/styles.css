@@ -31,6 +31,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 ::selection { background: var(--accent-soft); color: var(--ink); }
 .ant-app { min-height: 100vh; color: var(--ink); }
 .ant-select { min-width: 130px; }
+/* The entire selector opens the menu; decorative arrows never intercept input. */
+.ant-select:not(.ant-select-disabled) .ant-select-selector { cursor: pointer; }
+.ant-select .ant-select-arrow, .ant-select .ant-select-arrow > * { pointer-events: none; }
+.message-timezone { padding: 8px 0; color: var(--secondary); font-size: calc(12px * var(--font-scale, 1)); }
 .ant-btn-primary:not(:disabled) { color: #fff; font-weight: 600; }
 .ant-btn-primary:not(:disabled) > span { color: #fff; }
 .ant-btn-default:not(:disabled):hover, .ant-btn-link:not(:disabled):hover, .ant-btn-text:not(:disabled):hover { color: #0d6653; }

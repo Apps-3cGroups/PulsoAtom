@@ -1,3 +1,4 @@
+import { conversationClock } from '../services/conversationTime';
 import { countryLabel } from '../services/presentationText';
 import { conversationLink } from '../services/conversationNavigation';
 import { selectedCountries, selectedFigures, figureKinds, cleanOverviewParams, filterSummaryConversations, summaryMetrics } from '../services/summaryFilters';
@@ -7,7 +8,7 @@ import { Button, ConfigProvider, Tooltip } from 'antd';
 import { AppstoreOutlined, CalendarOutlined, InfoCircleOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
-import { LoadingState, ErrorState, EmptyState, Mark, dateText, timeText } from '../components/common';
+import { LoadingState, ErrorState, EmptyState, Mark, dateText } from '../components/common';
 import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../services/summaryDates';
 import { summaryRangeLabel, summaryPercentage } from '../services/summaryPresentation';
 import { buildSummaryLanes } from '../services/summaryMap';
@@ -43,7 +44,7 @@ export default function Summary() {
   const { from, to, preset } = resolveSummaryRange({
     days: params.get('days'),
     latest: bootstrap.activityDateRange?.max || bootstrap.dateRange.max,
-    mode: bootstrap.mode, timezone: bootstrap.timezone,
+    mode: bootstrap.mode, timezone: 'America/Tegucigalpa',
   });
   const summaryPath = `/summary?${queryString({ from, to, countries: countries.join(','), dateBasis: 'activity' })}`;
   const { data, dataPath, loading, error, reload } = useApi(summaryPath, { timeoutMs: 60000 });
@@ -81,7 +82,7 @@ export default function Summary() {
         </Tooltip>
       </div>
       <div className="summary-range-actions">
-        <Tooltip trigger={['hover', 'focus']} title="Cada chat aparece una vez, en el día de su última actividad registrada en Atom, aunque haya comenzado antes."><span className="summary-range" tabIndex={0}><CalendarOutlined /><span>{summaryRangeLabel(from, to)}</span></span></Tooltip>
+        <Tooltip trigger={['hover', 'focus']} title={`${bootstrap.mode === 'demo' ? 'La demo conserva su último día de datos como fecha de corte.' : 'El Resumen muestra los días hasta ayer, según la hora de Honduras; no incluye hoy.'} Cada chat aparece una vez, en el día de su última actividad registrada en Atom, aunque haya comenzado antes.`}><span className="summary-range" tabIndex={0}><CalendarOutlined /><span>{summaryRangeLabel(from, to)}</span></span></Tooltip>
         <Button type="text" size="small" aria-label="Actualizar resumen" title="Actualizar resumen" icon={<ReloadOutlined />} loading={loading} onClick={reload} />
       </div>
     </div>
@@ -91,7 +92,7 @@ export default function Summary() {
       ...(preset === 30 ? { token: { colorBgBase: '#f8fafc', colorBgContainer: '#ffffff', colorTextBase: '#243449', colorPrimary: '#5267a3', colorBorder: '#d5dde7', colorTextPlaceholder: '#69788a', controlHeight: 30 * fontScale } } : {}),
     }}><section className="overview-panel"><div className="summary-controls" aria-label="Filtros del resumen">
       <div className="summary-figures"><ExceptionsFilter kinds={figureKinds} selected={visible} onToggle={toggle} /><span className="summary-map-hint"><AppstoreOutlined />{preset === 30 ? 'Cada rectángulo es una conversación o grupo' : 'Cada rectángulo es una conversación'}</span></div>
-      <div className="control-group summary-period"><span className="control-label">PERÍODO</span><div className="segmented-range">{SUMMARY_PRESETS.map(value => <button key={value} aria-pressed={preset === value} onClick={() => changeRange({ days: value })}>{value === 1 ? 'Hoy' : `${value} días`}</button>)}</div></div>
+      <div className="control-group summary-period"><span className="control-label">PERÍODO</span><div className="segmented-range">{SUMMARY_PRESETS.map(value => <button key={value} aria-pressed={preset === value} onClick={() => changeRange({ days: value })}>{value === 1 ? 'Ayer' : `${value} días`}</button>)}</div></div>
       <CountrySelect label="Países del resumen" countries={bootstrap.countries} value={countries} onChange={values => patchFilters({ countries: values.length ? values.sort().join(',') : null })} />
     </div>
       {error ? <ErrorState error={error} retry={reload} /> : waiting || !current ? <LoadingState /> : !metrics.total ? <div><EmptyState title={visible.length ? "Sin coincidencias" : "Ninguna excepción seleccionada"} description={visible.length ? "No hay conversaciones evaluadas que coincidan con el período y los filtros." : "Selecciona alguna excepción para mostrar conversaciones."} /><Button className="reset-figures" onClick={() => patchFilters({ figures: null })}>Restablecer excepciones</Button></div> : preset === 30 ? <CompactSummaryMap groups={groups} days={days} visible={visible} classification={classification} onOpen={open} onHistory={openHistory} /> : <div ref={mapRef} className="conversation-map" style={{ '--days': days.length }}><div className="map-scroll"><div className="map-head"><div className="map-name-head">PAÍS / ASISTENTE DE VENTA</div><div className="map-day-heads">{days.map((day, i) => <div key={day} className={i === 0 ? 'latest-day' : ''}><span title={dateText(day)}><>{i === 0 ? 'Hasta · ' : ''}{dateText(day, { year: undefined, weekday: 'short' })}</></span></div>)}</div></div>{groups.map(group => {
@@ -100,7 +101,7 @@ export default function Summary() {
           const kinds = [...new Set(marks.flatMap(m => m.kind === 'refuted' ? ['refuted'] : [classificationOf(m), ...(m.origin === 'human' || m.kind === 'human' ? ['human'] : [])]).filter(kind => visible.includes(kind)))];
           const agreed = dualMarks(c).filter(m => classification === 'all' || classificationOf(m) === classification);
           const status = evaluationStatus(c), pending = status !== 'evaluated';
-          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {dateText(c.displayDate, { year: undefined })} · {timeText(c.displayAt)} · {c.channel}</span><strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>Detectado por ambos modelos: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} status-${status} ${agreed.length ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
+          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {conversationClock(c).dateTime(c.displayAt)} · {c.channel}</span><span>{conversationClock(c).label}</span><strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>Detectado por ambos modelos: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} status-${status} ${agreed.length ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
         })}</div>)}</div></div>)}</section>;
       })}</div></div>}</section></ConfigProvider>
   </div>;

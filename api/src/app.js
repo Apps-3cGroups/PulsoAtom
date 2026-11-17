@@ -1,3 +1,4 @@
+import { mountAutomationRoutes } from './automation-routes.js';
 import { sendNavigationJson } from './navigation-response.js';
 import { activeReason, publicOneOffRuns } from './one-off-evaluations.js';
 import express from 'express';
@@ -354,9 +355,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       localDualReady: !config.demo && !!store.readWithConversations && dualAvailable,
       activeCount: state.catalog.filter(v => v.active).length, mode: config.demo ? 'demo' : 'real' });
   });
-  app.get(`${prefix}/evaluations/settings`, requireAdmin, async (_req, res) => {
-    res.set('Cache-Control', 'no-store').json({ settings: (await store.read()).settings });
-  });
+  mountAutomationRoutes(app, prefix, { store, registry, requireAdmin, config });
   app.patch(`${prefix}/evaluations/settings`, requireAdmin, async (req, res) => {
     const { expectedVersion, ...input } = settingsSchema.parse(req.body);
     if (input.dailyEnabled && (config.demo || !store.readWithConversations)) throw new AppError(409, 'La evaluación diaria requiere Atom y Pulso en modo real.', 'INTEGRATION_PENDING');
@@ -364,6 +363,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       if (state.settings.evaluationMaintenance) throw new AppError(409, 'Se está renovando el histórico de evaluaciones.', 'EVALUATION_MAINTENANCE');
       if (input.dailyEnabled && !status(state).ready) throw new AppError(409, 'Completa la configuración de los modelos seleccionados.', 'AI_CONFIGURATION');
       ensureVersion(state.settings, expectedVersion);
+      if (state.settings.automation) throw new AppError(409, 'Guarda la programación desde Configuración de evaluaciones.', 'AUTOMATION_CONFIGURATION_REQUIRED');
       state.settings = { ...state.settings, ...input, dailyStartedAt: state.settings.dailyStartedAt || (input.dailyEnabled ? new Date().toISOString() : null), version: state.settings.version + 1, updatedBy: req.user.name, updatedAt: new Date().toISOString() };
       return state.settings;
     });
@@ -376,7 +376,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     if (!(dual ? localDualAvailable(state) : status(state).aiConfigured)) throw new AppError(409, dual ? 'Configura y habilita Gemma y Clef como modelos distintos.' : 'Configura y habilita los modelos de la política seleccionada.', 'EVALUATION_DISABLED');
     if (config.demo || !store.readWithConversations) throw new AppError(409, 'La evaluación requiere Atom y la base real de Pulso.', 'INTEGRATION_PENDING');
     const { job, completion } = await startEvaluationBatch(store, registry, { pendingOnly: input.scope === 'new', from: input.from, to: input.to, max: input.max, idempotencyKey: input.idempotencyKey, author: req.user,
-      ...(dual ? { modelIds: localDualModelIds, executionOrder: 'model-first' } : {}) });
+      ...(dual ? { modelIds: state.settings.automation?.modelOrder || localDualModelIds, executionOrder: state.settings.automation?.executionOrder || 'model-first' } : {}) });
     completion.catch(error => console.error('Error en ejecución de Pulso:', error.code || error.name));
     res.status(202).json({ job });
   });

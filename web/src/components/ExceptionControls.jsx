@@ -1,5 +1,5 @@
 import { countryLabel, countryMatchesSearch } from '../services/presentationText';
-import { Select } from 'antd';
+import Select from './Select';
 import { DownOutlined } from '@ant-design/icons';
 import { Mark } from './common';
 import './ExceptionControls.css';

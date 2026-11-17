@@ -5,13 +5,14 @@ import { completedOperationalPair, dailyHandoffFor, assignedHandoffVersion } fro
 import { COMPLETION_ID, COMPLETION_MODELS, assertCompletionPlan, assertCompletionStable, finalizedCompletion, completionTasks,
   thursdayPriorityReleased, thursdayPriorityReady, assertDeferredThursday } from './tuesday-wednesday-completion.js';
 import { RECOVERY_ID } from './gemma-incident-recovery.js';
-import { ingestionReadiness } from './one-off-evaluations.js';
+import { thursdayIngestionReadiness } from './thursday-ingestion.js';
 
 export const THURSDAY_ID = 'thursday-2026-11-12-after-recovery';
 export const THURSDAY_ACTIVITY = '2026-11-12';
 export const THURSDAY_RUN_DATE = '2026-11-13';
 export const THURSDAY_NOT_BEFORE = '2026-11-13T06:01:00.000Z';
-export const THURSDAY_INGESTION = Object.freeze({ countries: ['HN', 'PA'], ingestionFrom: '2026-11-13T06:00:00.000Z', expiresAt: '2026-11-14T06:00:00.000Z' });
+export const THURSDAY_INGESTION = Object.freeze({ handoffId: THURSDAY_ID, activityDate: THURSDAY_ACTIVITY,
+  countries: ['HN', 'PA'], ingestionFrom: '2026-11-13T06:00:00.000Z', expiresAt: '2026-11-14T06:00:00.000Z' });
 const author = 'Mario Cruz · jueves con máximo de 200 conversaciones por país';
 const fail = (code, message) => { throw new AppError(409, message, code); };
 const contract = h => ({ id: h.id, activityDate: h.activityDate, runDate: h.runDate, timezone: h.timezone,
@@ -126,12 +127,14 @@ export function thursdayCoverage(state, { ingestion = null } = {}) {
       unavailableConversations: target - scoped.length,
       unassignedConversations: scoped.filter(c => !assignedHandoffVersion(state, c, options, jobs) && !completedOperationalPair(state, c, h.profiles)).length }];
   }));
-  const readiness = ingestion ? ingestionReadiness(ingestion, THURSDAY_INGESTION) : null;
+  const readiness = thursdayIngestionReadiness(ingestion);
   const errors = {};
   for (const task of state.tasks.filter(t => jobs.some(j => j.id === t.jobId) && t.error && t.status !== 'completed')) {
     const code = /^[A-Z_]{3,80}$/.test(task.error.code || '') ? task.error.code : 'EVALUATION_FAILED'; errors[code] = (errors[code] || 0) + 1;
   }
-  return { byCountry, ingestionReady: readiness?.ready === true, missingCountries: readiness?.missing || h.countries,
+  return { byCountry, ingestionReady: readiness.ready, ingestionSettled: readiness.settled,
+    ingestionWarnings: readiness.warnings, terminalPartialIngestionBatches: readiness.terminalPartialBatches.length,
+    failedIngestionDocuments: readiness.failedDocuments, missingCountries: readiness.missing,
     incompleteIngestionBatches: readiness?.unfinished.length ?? null, jobs: jobs.length,
     runningJobs: jobs.filter(j => j.status === 'running').length, errors,
     allReadyEvaluated: source.length > 0 && Object.values(byCountry).every(c => c.remainingConversations === 0) };
@@ -159,11 +162,14 @@ export async function reconcileThursdayHandoff(store, { now = new Date() } = {})
     || before.settings.tuesdayWednesdayCompletion?.status !== 'completed' && !thursdayPriorityReleased(before.settings) || now.toISOString() < h.notBefore
     || before.jobs.some(j => j.status === 'running') || !store.readIngestionSnapshot) return false;
   const ingestion = await store.readIngestionSnapshot(THURSDAY_INGESTION);
-  if (!ingestionReadiness(ingestion, THURSDAY_INGESTION).ready) return false;
+  const readiness = thursdayIngestionReadiness(ingestion);
+  if (!readiness.settled) return false;
   const state = await store.readWithConversations({ fresh: true });
   if (state.settings.tuesdayWednesdayCompletion?.status !== 'completed' && !thursdayPriorityReady(state)) return false;
   const coverage = thursdayCoverage(state, { ingestion });
   if (!coverage?.allReadyEvaluated) return false;
+  const rechecked = thursdayIngestionReadiness(await store.readIngestionSnapshot(THURSDAY_INGESTION));
+  if (!rechecked.settled || rechecked.fingerprint !== readiness.fingerprint) return false;
   return store.transaction(draft => {
     if (draft.settings.thursdayHandoff?.scopeHash !== h.scopeHash || draft.settings.evaluationMaintenance
       || draft.jobs.some(j => j.status === 'running')
@@ -172,7 +178,9 @@ export async function reconcileThursdayHandoff(store, { now = new Date() } = {})
     if (!checked.allReadyEvaluated) return false;
     // A completed batch is not proof that Automations will send no more batches.
     // Stay eligible throughout Friday, even when the currently loaded set is done.
-    const status = now.toISOString() >= THURSDAY_INGESTION.expiresAt ? 'completed' : 'caught_up';
+    // A terminal partial import may yield to Tuesday, but cannot be presented
+    // as a fully successful Thursday even after the intake window expires.
+    const status = now.toISOString() >= THURSDAY_INGESTION.expiresAt && readiness.ready ? 'completed' : 'caught_up';
     Object.assign(draft.settings.thursdayHandoff, { status, ...(status === 'completed' ? { finishedAt: now.toISOString() } : {}), coverage: checked });
     return true;
   });

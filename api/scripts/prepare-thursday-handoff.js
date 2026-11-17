@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { COMPLETION_ID, assertCompletionPlan } from '../src/tuesday-wednesday-completion.js';
 import { prepareThursdayHandoff, inspectThursdayHandoff, THURSDAY_ACTIVITY, THURSDAY_INGESTION } from '../src/thursday-handoff.js';
 import { AppError } from '../src/errors.js';
+import { readThursdaySourceIngestionAudit } from './thursday-source-ingestion-audit.js';
 
 const manifestFile = `/var/www/nodeapps/PulsoAtom/api/.data/incident-completion/${COMPLETION_ID}/manifest.json`;
 export function parseThursdayArguments(args) {
@@ -38,7 +39,11 @@ export async function main(args) {
       source.conversations.push(...page.conversations);
     }
     const ingestion = await store.readIngestionSnapshot(THURSDAY_INGESTION);
-    return inspectThursdayHandoff(store.attach(state, source), registry, manifest.plan, { ingestion });
+    let sourceIngestionAudit;
+    try { sourceIngestionAudit = await readThursdaySourceIngestionAudit(reader); }
+    catch { sourceIngestionAudit = { available: false, readOnly: true, activityDate: THURSDAY_ACTIVITY,
+      errorCode: 'SOURCE_INGESTION_AUDIT_FAILED', affectsSchedulerReadiness: false }; }
+    return { ...inspectThursdayHandoff(store.attach(state, source), registry, manifest.plan, { ingestion }), sourceIngestionAudit };
   } finally { await store.close(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main(process.argv.slice(2)).then(result => {

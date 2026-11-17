@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Alert, App, Button, Form, Input, Popconfirm, Select, Table, Tag } from 'antd';
+import { Alert, App, Button, Form, Input, Popconfirm, Table, Tag } from 'antd';
+import Select from '../components/Select';
 import { SearchOutlined, UserAddOutlined } from '@ant-design/icons';
 import { api } from '../services/api';
 import { useApi, usePortal } from '../hooks';

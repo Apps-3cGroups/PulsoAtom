@@ -1,14 +1,14 @@
+import { conversationClock } from '../services/conversationTime';
 import { actorName } from '../services/participants';
 import { Fragment, useMemo, useState } from 'react';
-import { Button, Checkbox, Popover, Select, Tooltip } from 'antd';
+import { Button, Checkbox, Popover, Tooltip } from 'antd';
+import Select from './Select';
 import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, FlagOutlined } from '@ant-design/icons';
 import { classificationOf, flagLabel } from '../services/flags';
 import { filterMessageRows, groupFlagOptions } from '../services/messageFlags';
-import { EmptyState, FlagSymbol, dateText, timeText } from './common';
+import { EmptyState, FlagSymbol } from './common';
 
 const hasTime = value => !!value && Number.isFinite(Date.parse(value));
-const messageDate = value => hasTime(value) ? dateText(value) : 'Fecha no disponible';
-const messageTime = value => hasTime(value) ? timeText(value) : '—';
 const classificationOptions = [
   { value: 'all', label: 'Todas las marcas' },
   { value: 'critical', label: 'Flag crítico' },
@@ -51,6 +51,7 @@ function MarkCard({ variable, messageCount, selected, onSelectFlag, onShowFlag }
 export default function ConversationTranscript({ conversation, index, eligibleFlags = [], filters,
   onFiltersChange, highlight, onShowFlag, onShowContext, onAddFlag, selectedFlagId, onSelectFlag, onFocusMessage }) {
   const [addingTo, setAddingTo] = useState(null);
+  const clock = conversationClock(conversation);
   const messages = conversation.messages || [];
   const rows = useMemo(() => filterMessageRows(messages, index, filters), [messages, index, filters]);
   const linkedVariables = useMemo(() => {
@@ -87,6 +88,7 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
         : 'No hay flags disponibles para levantar. Puedes consultar o revisar las marcas existentes.';
 
   return <section className="message-workspace" aria-label="Conversación y flags por mensaje">
+    <div className="message-timezone" role="note">{clock.label}</div>
     <div className="message-toolbar">
       <Checkbox checked={filters.onlyMarked} onChange={event => patch({ onlyMarked: event.target.checked })}>Con marca</Checkbox>
       <Select className="message-flag-filter" aria-label="Filtrar mensajes por flag" placeholder="Todos los flags" value={filters.variableId || undefined}
@@ -113,8 +115,8 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
       {!rows.length ? <EmptyState title={messages.length ? 'No hay mensajes con estos filtros' : 'No hay mensajes disponibles'}
         description={messages.length ? 'Selecciona otro flag o vuelve a ver la conversación completa.' : 'La transcripción aparecerá aquí cuando esté disponible.'}
         action={filtered && <Button onClick={reset}>Ver todos los mensajes</Button>} /> : rows.map(({ message, flags }, position) => {
-        const day = messageDate(message.timestamp);
-        const startDay = position === 0 || day !== messageDate(rows[position - 1].message.timestamp);
+        const day = clock.date(message.timestamp);
+        const startDay = position === 0 || day !== clock.date(rows[position - 1].message.timestamp);
         const id = String(message.id);
         const selected = !!selectedFlag && flags.some(variable => String(variable.id) === String(selectedFlag.id));
         return <Fragment key={id}>
@@ -122,7 +124,7 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
           <article id={`message-${id}`} data-message-id={id}
             className={`message-evidence-row${selected || String(highlight) === id ? ' message-row-highlighted' : ''}${String(highlight) === id ? ' message-row-focused' : ''}${flags.length ? ' message-row-marked' : ''}`}>
             <div className={`message-bubble actor-${message.actor}`}>
-              <div className="message-bubble-meta"><span className="message-actor"><i aria-hidden="true" /><strong>{actorName(message.actor)}</strong></span><time dateTime={hasTime(message.timestamp) ? message.timestamp : undefined}>{messageTime(message.timestamp)}</time></div>
+              <div className="message-bubble-meta"><span className="message-actor"><i aria-hidden="true" /><strong>{actorName(message.actor)}</strong></span><time dateTime={hasTime(message.timestamp) ? message.timestamp : undefined}>{clock.time(message.timestamp)}</time></div>
               <p>{message.text}</p>
             </div>
               <div className="message-row-actions">

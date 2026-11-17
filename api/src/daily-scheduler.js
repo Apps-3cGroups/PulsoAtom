@@ -1,3 +1,4 @@
+import { runAutomationTick } from './automation-scheduler.js';
 import { runOneOffTick } from './one-off-scheduler.js';
 import { startEvaluationBatch, recoverEvaluationJobs, resumeEvaluationBatch } from './evaluation-service.js';
 import { asRegistry } from './model-registry.js';
@@ -18,6 +19,7 @@ export function scheduleClock(now, timezone) {
 export async function runDailyTick(store, evaluator, now = new Date(), skipHandoff = false, operations = {}) {
   const state = await (store.readSchedulerState ? store.readSchedulerState() : store.read());
   const { settings, jobs } = state;
+  if (settings.automation) { const execution = await runAutomationTick(store, evaluator, now); return execution?.job || null; }
   if (settings.evaluationMaintenance || !settings.dailyEnabled || !settings.dailyStartedAt) return null;
   const handoff = settings.thursdayHandoff;
   if (handoff && handoff.status !== 'completed' && (now.toISOString() < handoff.notBefore
@@ -85,7 +87,7 @@ export function startDailyScheduler(store, evaluator) {
       }
     } finally { busy = false; }
   };
-  const timer = setInterval(tick, 60_000);
+  const timer = setInterval(tick, 5_000);
   timer.unref();
   tick();
   return () => clearInterval(timer);

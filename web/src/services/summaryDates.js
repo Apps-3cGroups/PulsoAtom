@@ -12,13 +12,13 @@ function validDate(value) {
 
 const inclusiveDays = (from, to) => Math.round((Date.parse(`${to}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / DAY_MS) + 1;
 
-/** Dashboard periods are deliberately limited to today, three and thirty days. */
+/** Summary shows one, three or thirty calendar days, with a one-day delay. */
 export function resolveSummaryRange({ days, latest, mode, timezone = 'America/Tegucigalpa', now = new Date() } = {}) {
   const preset = SUMMARY_PRESETS.includes(Number(days)) ? Number(days) : 3;
-  // Real operation always ends today in the portal's timezone. Only a demo
-  // anchors its shortcuts to the fixed activity date of the synthetic data.
-  const anchor = mode === 'demo' && validDate(latest) ? latest : undefined;
-  const end = defaultDateRange(anchor, timezone, now).to;
+  // Subtract a calendar day after resolving the local date, never from the
+  // browser's timezone or the newest ingestion. Demo keeps its fixed data cut.
+  const end = mode === 'demo' && validDate(latest) ? latest
+    : previousDate(defaultDateRange(undefined, timezone, now).to, 1);
   const availableDays = inclusiveDays(FIRST_DATE, end);
   const totalDays = Math.min(preset, availableDays);
   return { from: previousDate(end, totalDays - 1), to: end, preset: totalDays === preset ? preset : null, totalDays };

@@ -13,6 +13,7 @@ import { runOneOffTick } from '../src/one-off-scheduler.js';
 import { fridayRun, activeReason, validateOneOffRequest, publicOneOffRuns } from '../src/one-off-evaluations.js';
 import { completedOperationalPair } from '../src/daily-equivalence.js';
 import { parseThursdayArguments } from '../scripts/prepare-thursday-handoff.js';
+import { ingestionSnapshot, ingestionBatch } from './helpers/thursday-ingestion-fixture.js';
 const reject = (promise, code) => assert.rejects(promise, e => e.code === code);
 const sorted = value => Array.isArray(value) ? value.map(sorted) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted(value[key])])) : value;
@@ -70,7 +71,7 @@ function prepared() {
 function memory(initial) {
   let current = structuredClone(initial), queue = Promise.resolve();
   const store = {
-    ingestion: { batches: [{ id: 'hn', status: 'LISTO', countries: ['HN'] }, { id: 'pa', status: 'LISTO', countries: ['PA'] }] },
+    ingestion: ingestionSnapshot(),
     beforeTransaction: null,
     async read() { await queue; return structuredClone(current); },
     async readWithConversations(options) { const state = await store.read();
@@ -216,6 +217,33 @@ test('unknown or incomplete global ingestion never delays already-ready conversa
   const f = await runtime([thursday('ready-hn')]); f.store.ingestion.batches = [{ id: 'processing', countries: [], status: 'PROCESANDO' }];
   const job = await runDailyTick(f.store, f.registry, new Date('2026-11-13T06:01:00Z')); assert.deepEqual(job.conversationIds, ['ready-hn']); await drain(f.store);
   assert.equal(await reconcileThursdayHandoff(f.store, { now: new Date('2026-11-14T07:00:00Z') }), false);
+});
+test('terminal partial imports allow caught-up with warnings but never successful completion', async () => {
+  const f = await runtime(); await run(f);
+  f.store.ingestion.batches = ['HN', 'PA'].map(country => ingestionBatch({ id: country, countries: [country],
+    status: 'PARCIAL', expectedDocuments: 21, processedDocuments: 20, failedDocuments: 1 }));
+  assert.equal(await reconcileThursdayHandoff(f.store, { now: new Date('2026-11-13T12:00:00Z') }), true);
+  let state = await f.store.read(), coverage = state.settings.thursdayHandoff.coverage;
+  assert.equal(state.settings.thursdayHandoff.status, 'caught_up');
+  assert.equal(coverage.ingestionReady, false); assert.equal(coverage.ingestionSettled, true);
+  assert.equal(coverage.terminalPartialIngestionBatches, 2); assert.equal(coverage.failedIngestionDocuments, 2);
+  assert.deepEqual(coverage.missingCountries, []);
+  assert.equal(await reconcileThursdayHandoff(f.store, { now: new Date('2026-11-14T07:00:00Z') }), true);
+  state = await f.store.read(); assert.equal(state.settings.thursdayHandoff.status, 'caught_up');
+  assert.equal(state.settings.thursdayHandoff.finishedAt, undefined);
+  await f.store.transaction(s => s.conversations.push(thursday('new-after-partial-import')));
+  assert.deepEqual((await run(f)).conversationIds, ['new-after-partial-import']);
+});
+test('reconciliation rejects imports that change while fresh Thursday coverage is being read', async () => {
+  const f = await runtime(); await run(f);
+  const original = f.store.readWithConversations;
+  f.store.readWithConversations = async (...args) => {
+    const state = await original(...args);
+    f.store.ingestion.batches.push(ingestionBatch({ id: 'new-load', status: 'PROCESANDO', finishedAt: null }));
+    return state;
+  };
+  assert.equal(await reconcileThursdayHandoff(f.store, { now: new Date('2026-11-13T12:00:00Z') }), false);
+  assert.notEqual((await f.store.read()).settings.thursdayHandoff.status, 'caught_up');
 });
 test('strict CLI accepts only inspect or exact version/scope/concurrency prepare arguments', () => {
   assert.deepEqual(parseThursdayArguments(['--inspect']), { mode: 'inspect' });

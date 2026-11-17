@@ -1,6 +1,7 @@
 import { classificationOf, flagLabel } from '../services/flags';
 import { useEffect, useState } from 'react';
-import { Alert, Button, Drawer, Empty, Select, Table, Tag, Tooltip } from 'antd';
+import { Alert, Button, Drawer, Empty, Table, Tag, Tooltip } from 'antd';
+import Select from '../components/Select';
 import { ArrowRightOutlined, CheckCircleOutlined, EyeOutlined, PlusOutlined, SafetyCertificateOutlined, SwapOutlined, CodeOutlined } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApi, usePortal } from '../hooks';

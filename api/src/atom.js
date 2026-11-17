@@ -1,6 +1,8 @@
+import { zonedDayBounds } from './automation-source.js';
 import { digest, sourceFingerprint, rememberSourceFingerprint } from './evaluation-context.js';
 import { localMidnight, nextDate } from './overview-query.js';
 import { oneOffRuns } from './one-off-evaluations.js';
+import { isThursdayIngestionRun, readThursdayIngestionSnapshot } from './thursday-ingestion.js';
 import mysql from 'mysql2/promise';
 import { AppError } from './errors.js';
 
@@ -133,6 +135,39 @@ export class AtomReader {
     });
     return { conversations, countries, loadedAt: new Date().toISOString() };
   }
+  async readCountryCatalog() {
+    const [rows] = await this.pool.query(`SELECT CodigoPais AS code, ISO_Code2 AS iso2, NombrePais AS name FROM ${this.tables.countries} ORDER BY NombrePais`);
+    return rows.filter(row => /^[A-Z]{2}$/.test(row.iso2 || '')).map(row => ({ code: row.iso2, name: row.name, sourceCode: Number(row.code) }));
+  }
+  async readAutomationSource({ date, timezone }) {
+    const { conversations: c, documents: d, countries: p, batches: b, events: e } = this.tables;
+    const { start, end } = zonedDayBounds(date, timezone);
+    // Activity is based on source messages, including chats that continued later.
+    // Return identifiers/metadata only. Full text is fetched for selected IDs.
+    const [rows] = await this.pool.execute(`SELECT c.IdConversacion, c.FechaFinUtc, c.FechaUltimaActividadUtc,
+      c.IdDocumentoVigente, d.Sha256, d.IdLoteIngesta, l.FechaInicioUtc AS IngestaInicioUtc,
+      p.ISO_Code2 AS CountryCode
+      FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO'
+      INNER JOIN ${p} p ON p.CodigoPais = c.CodigoPais LEFT JOIN ${b} l ON l.IdLoteIngesta = d.IdLoteIngesta
+      WHERE ((c.FechaUltimaActividadUtc >= ? AND c.FechaUltimaActividadUtc < ?)
+        OR EXISTS (SELECT 1 FROM ${e} activity WHERE activity.IdDocumento = c.IdDocumentoVigente
+          AND activity.FechaHoraUtc >= ? AND activity.FechaHoraUtc < ?))
+      AND EXISTS (SELECT 1 FROM ${e} text_event WHERE text_event.IdDocumento = c.IdDocumentoVigente
+        AND text_event.TipoOrigen IN ('text','quickReply','interactive','template') AND LENGTH(TRIM(COALESCE(text_event.Texto,''))) > 0)
+      ORDER BY c.IdConversacion`, [start, end, start, end]);
+    const countries = await this.readCountryCatalog();
+    // A completed ingestion may legitimately contain zero eligible chats. The
+    // ingestion signal is independent of activity/eligibility, avoiding false alarms.
+    const [loads] = await this.pool.execute(`SELECT p.ISO_Code2 AS country, MAX(l.FechaInicioUtc) AS loadedAt
+      FROM ${c} c INNER JOIN ${d} d ON d.IdDocumento = c.IdDocumentoVigente AND d.Estado = 'LISTO'
+      INNER JOIN ${p} p ON p.CodigoPais = c.CodigoPais INNER JOIN ${b} l ON l.IdLoteIngesta = d.IdLoteIngesta
+      WHERE l.FechaInicioUtc >= ? GROUP BY p.ISO_Code2`, [end]);
+    return { countries, loads: loads.map(row => ({ country: row.country, loadedAt: iso(row.loadedAt) })),
+      conversations: rows.map(row => ({ id: String(row.IdConversacion), country: row.CountryCode, completed: !!row.FechaFinUtc,
+        date, lastActivityAt: optionalIso(row.FechaUltimaActividadUtc), sourceDocumentId: String(row.IdDocumentoVigente),
+        sourceDocumentHash: row.Sha256 || null, ingestionBatchId: row.IdLoteIngesta == null ? null : String(row.IdLoteIngesta),
+        ingestionStartedAt: optionalIso(row.IngestaInicioUtc) })) };
+  }
   async readOverview(query = {}, { activeOnly = false, settings, now = new Date(), metadataOnly = false } = {}) {
     const { conversations: c, documents: d, countries: p, agents: a, channels: ch, batches: b, events: e } = this.tables;
     const where = [], values = [];
@@ -217,6 +252,7 @@ export class AtomReader {
     });
   }
   async readIngestionSnapshot(run) {
+    if (isThursdayIngestionRun(run)) return readThursdayIngestionSnapshot(this, run);
     const { batches: b, documents: d, conversations: c, countries: p } = this.tables;
     const [rows] = await this.pool.execute(`SELECT l.IdLoteIngesta AS id, l.Estado AS status, p.ISO_Code2 AS country
       FROM ${b} l LEFT JOIN ${d} d ON d.IdLoteIngesta = l.IdLoteIngesta

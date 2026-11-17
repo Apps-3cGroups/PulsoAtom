@@ -220,7 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Pulso: dependencias, compilación, configuración y datos locales
-node_modules/
+node_modules
 dist/
 .env
 .env.*
@@ -233,3 +233,6 @@ coverage/
 .DS_Store
 playwright-report/
 test-results/
+
+# Private index backups from the verified static portal installer.
+/web/.static-backups/

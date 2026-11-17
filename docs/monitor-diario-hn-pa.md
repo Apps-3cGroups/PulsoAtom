@@ -12,16 +12,20 @@ Las cifras corresponden a conversaciones registradas en los lotes de Pulso, no a
 
 `waiting_thursday` es una espera normal de la recuperación: el estado global utiliza la actividad del jueves y no presenta una interrupción deliberada del martes como un bloqueo de la corrida actual. Las advertencias de datos obsoletos y errores de autenticación se mantienen.
 
-## Publicación sin reiniciar evaluaciones
+## Publicación y workflow
 
-La operación explícita `daily-activity-monitor` instala únicamente `web/temporary-daily` en el directorio del monitor. Valida inventario, tipos y hashes, rechaza enlaces simbólicos, respalda la instalación anterior y reemplaza los archivos. No actualiza el checkout de producción ni reinicia API, web o workers. El despliegue normal del portal conserva este directorio.
+Esta rama conserva íntegro el workflow de `main`, dedicado exclusivamente al despliegue del portal. La operación `daily-activity-monitor` fue retirada y no se vuelve a incorporar. Fusionar esta rama no instala ni reemplaza automáticamente este monitor histórico: el despliegue normal conserva el directorio `web/dist/monitor-evaluaciones` que ya esté publicado.
+
+Si se necesita publicar este corte histórico, DevOps debe revisar el artefacto `web/temporary-daily` y realizar su instalación por separado. Se conserva `api/scripts/install-daily-monitor.js` como utilidad manual; espera una copia del artefacto en `static-monitor`, junto al directorio `api` dentro del paquete temporal. Valida inventario, tipos y hashes, rechaza enlaces simbólicos y respalda la instalación anterior antes de reemplazarla. La utilidad no actualiza el checkout de producción ni reinicia API, web o workers.
+
+Este corte y el monitor del 11 de noviembre del PR #34 utilizan la misma dirección y son alternativas de publicación.
 
 El navegador usa los endpoints existentes. `GET /evaluations` conserva su comportamiento previo del portal, incluida la recuperación de trabajos obsoletos implementada por la API; este cambio no modifica ese comportamiento ni agrega acciones de evaluación. El instalador estático no consulta ni modifica la base.
 
 ## Verificación
 
 - `node --test web/monitor/test/*.test.js`
-- `node --test web/test/recovery-workflow.test.js web/test/monitor-deployment.test.js api/test/deployment.test.js`
+- `node --test web/test/monitor-deployment.test.js`
 - `web/node_modules/.bin/vite build --config web/monitor/vite.config.js`
 - `node web/monitor/write-artifact.js`
 

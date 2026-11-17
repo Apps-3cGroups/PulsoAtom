@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { App, Alert, Button, Form, Input, Select, Switch, Tag } from 'antd';
+import { App, Alert, Button, Form, Input, Switch, Tag } from 'antd';
+import Select from './Select';
 import { ClockCircleOutlined } from '@ant-design/icons';
 import { saveSchedule, verifySchedule, scheduleValues, sameSchedule } from '../services/schedule.js';
 
