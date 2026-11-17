@@ -5,7 +5,7 @@ export const classificationOf = item => {
   if (['Crítico', 'P1', 'critical'].includes(item.mark || item.priority) || ['critical', 'p1'].includes(item.kind)) return 'critical';
   return 'normal';
 };
-export const flagLabel = kind => ({ critical: 'Flag crítico', normal: 'Flag normal', positive: 'Positivo', human: 'Flag humano', refuted: 'Refutado', P1: 'Flag crítico', P2: 'Flag normal', Crítico: 'Flag crítico', '+': 'Positivo' }[kind] || kind);
+export const flagLabel = kind => ({ critical: 'Flag crítico', normal: 'Flag menor', positive: 'Positivo', human: 'Flag humano', refuted: 'Refutado', P1: 'Flag crítico', P2: 'Flag menor', Crítico: 'Flag crítico', '+': 'Positivo' }[kind] || kind);
 export const markKind = item => ['human', 'refuted'].includes(item.kind) ? item.kind : classificationOf(item);
 export const isDualDetection = mark => {
   if (mark.effective === false || mark.kind === 'refuted' || mark.codeRule || mark.error) return false;
@@ -45,4 +45,4 @@ export function unmarkedResultLabel(variable) {
 
 export const conversationMetricIds = ['min_primera_respuesta_humano', 'min_silencio_max_humano', 'min_duracion_conversacion', 'num_mensajes_asistente', 'num_mensajes_cliente', 'ratio_mensajes_asistente_entre_cliente', 'num_mensajes_por_turno_asistente'];
 
-export const flagCountLabel = (kind, count) => count === undefined ? flagLabel(kind) : `${count} ${count === 1 ? ({ critical: 'flag crítico', normal: 'flag normal', positive: 'positivo' }[kind] || flagLabel(kind)) : ({ critical: 'flags críticos', normal: 'flags normales', positive: 'positivos' }[kind] || flagLabel(kind))}`;
+export const flagCountLabel = (kind, count) => count === undefined ? flagLabel(kind) : `${count} ${count === 1 ? ({ critical: 'flag crítico', normal: 'flag menor', positive: 'positivo' }[kind] || flagLabel(kind)) : ({ critical: 'flags críticos', normal: 'flags menores', positive: 'positivos' }[kind] || flagLabel(kind))}`;

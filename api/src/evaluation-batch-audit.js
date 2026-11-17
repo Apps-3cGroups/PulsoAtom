@@ -7,7 +7,7 @@ const fail = code => { throw new AppError(409, 'No se pudo verificar el alcance 
 
 // Read-only diagnostics: whitelist every output field. Never expose provider
 // messages, raw responses, variable reasons, conversation IDs or client data.
-const auditErrorCodes = new Set(['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_CONTEXT_LIMIT', 'AI_CONFIGURATION',
+const auditErrorCodes = new Set(['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_CONTEXT_LIMIT', 'AI_RESOURCE_LIMIT', 'AI_CONFIGURATION',
   'INVALID_AI_RESULT', 'AI_INCOMPLETE', 'AI_SAFETY_REFUSAL', 'INPUT_CAPACITY_EXCEEDED', 'UNSUPPORTED_INPUT',
   'SOURCE_CHANGED', 'CATALOG_CHANGED', 'MODEL_CHANGED', 'PROMPT_CHANGED', 'EVALUATION_FAILED',
   'MODEL_IDENTITY_UNVERIFIED', 'INVALID_MODEL_PROVENANCE', 'NATIVE_SCHEMA_MISMATCH', 'NATIVE_MODEL_MISMATCH']);

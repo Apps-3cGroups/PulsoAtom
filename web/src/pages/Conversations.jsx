@@ -1,3 +1,5 @@
+import { conversationClock } from '../services/conversationTime';
+import { countryLabel } from '../services/presentationText';
 import { flagCount, evaluationStatus } from '../services/flags';
 import { defaultDateRange } from '../services/dateRange';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -5,7 +7,7 @@ import { Button, Input, Table, Tag } from 'antd';
 import { ArrowRightOutlined, SearchOutlined } from '@ant-design/icons';
 import { useApi, useDebounced, usePortal } from '../hooks';
 import { queryString } from '../services/api';
-import { PageHeading, Filters, ErrorState, EmptyState, Marks, PriorityTag, Mark, dateText, timeText, tableLoading } from '../components/common';
+import { PageHeading, Filters, ErrorState, EmptyState, Marks, PriorityTag, Mark, tableLoading } from '../components/common';
 
 export default function Conversations({ search = false }) {
   const { bootstrap } = usePortal();
@@ -23,8 +25,8 @@ export default function Conversations({ search = false }) {
   const open = c => navigate(`/conversacion/${encodeURIComponent(c.id)}${c.excerpt ? `?message=${encodeURIComponent(c.excerpt.messageId)}` : ''}`);
   const columns = [
     { title: 'CLIENTE / CONVERSACIÓN', key: 'client', width: 230, render: (_, c) => <button className="table-client" onClick={() => open(c)}><b>{c.client.name}{c.client.phoneLast4 && <span className="masked-phone"> …{c.client.phoneLast4}</span>}</b><span className="mono small muted">{c.id}</span></button> },
-    { title: 'ASISTENTE DE VENTA', key: 'agent', width: 210, render: (_, c) => <div className="table-stack"><span>{c.agent.name}</span><span className="small muted">{c.countryName} <span className="country-code small-code">{c.country}</span></span></div> },
-    { title: dateBasis === 'activity' ? 'ÚLTIMA ACTIVIDAD' : 'FECHA DE INICIO', key: 'date', width: 150, render: (_, c) => <div className="table-stack"><span>{dateText(c.displayDate || c.date, { year: undefined })}</span><span className="mono small muted">{timeText(c.displayAt || c.startedAt)} · {c.channel}</span></div> },
+    { title: 'ASISTENTE DE VENTA', key: 'agent', width: 210, render: (_, c) => <div className="table-stack"><span>{c.agent.name}</span><span className="small muted">{countryLabel(c.country, c.countryName)} <span className="country-code small-code">{c.country}</span></span></div> },
+    { title: dateBasis === 'activity' ? 'ÚLTIMA ACTIVIDAD' : 'FECHA DE INICIO', key: 'date', width: 150, render: (_, c) => <div className="table-stack" title={conversationClock(c).label}><span>{conversationClock(c).date(c.displayAt || c.startedAt)}</span><span className="mono small muted">{conversationClock(c).time(c.displayAt || c.startedAt)} · {c.channel}</span></div> },
     { title: 'FLAGS DE ATENCIÓN', key: 'priority', width: 180, render: (_, c) => <div className="priority-cell">{flagCount(c, 'critical') > 0 && <PriorityTag priority="critical" count={flagCount(c, 'critical')} />}{flagCount(c, 'normal') > 0 && <PriorityTag priority="normal" count={flagCount(c, 'normal')} />}{!flagCount(c, 'critical') && !flagCount(c, 'normal') && <span className="muted">—</span>}</div> },
     { title: 'POSITIVOS', key: 'positive', width: 115, render: (_, c) => flagCount(c, 'positive') > 0 ? <span className="positive-count"><Mark kind="positive" />{flagCount(c, 'positive')}</span> : <span className="muted">{evaluationStatus(c) === 'evaluated' ? '0' : '—'}</span> },
     { title: 'RESULTADOS', key: 'marks', render: (_, c) => <Marks conversation={c} /> },

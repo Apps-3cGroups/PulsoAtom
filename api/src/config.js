@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { parseCountryTimezones } from './conversation-timezone.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { normalizeBasePath } from './basePath.js';
@@ -15,6 +16,7 @@ export const config = {
   sessionHours: Number(process.env.SESSION_HOURS || 8),
   secureCookie: bool(process.env.COOKIE_SECURE),
   timezone: process.env.APP_TIMEZONE || 'America/Tegucigalpa',
+  countryTimezones: parseCountryTimezones(process.env.COUNTRY_TIMEZONES),
   demoFile: process.env.DEMO_FILE || path.join(apiRoot, '.data', 'demo-store.json'),
 };
 export function databaseConfig() {
@@ -25,7 +27,7 @@ export function databaseConfig() {
     user: process.env.APP_DB_USER,
     password: process.env.APP_DB_PASSWORD || '',
     database: process.env.APP_DB_NAME,
-    charset: 'utf8mb4', timezone: 'Z', connectionLimit: 5,
+    charset: 'utf8mb4', timezone: 'Z', connectionLimit: 5, compress: true,
     connectTimeout: 5000,
     ...(bool(process.env.APP_DB_SSL) ? { ssl: { rejectUnauthorized: true } } : {}),
   };
@@ -44,7 +46,7 @@ export function atomDatabaseConfig() {
       host: process.env.ATOM_DB_HOST, port: Number(process.env.ATOM_DB_PORT || 3306),
       user: process.env.ATOM_DB_USER, password: process.env.ATOM_DB_PASSWORD || '',
       database: process.env.ATOM_DB_NAME, charset: 'utf8mb4', timezone: 'Z',
-      connectionLimit: 3, connectTimeout: 5000,
+      connectionLimit: 3, connectTimeout: 5000, compress: true,
       ...(bool(process.env.ATOM_DB_SSL) ? { ssl: { rejectUnauthorized: true } } : {}),
     },
     tables: {

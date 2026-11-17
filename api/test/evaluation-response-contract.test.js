@@ -68,11 +68,11 @@ test('47-item batch retains 45 valid answers and retries only the two observed f
       const body = JSON.parse(options.body).body, input = JSON.parse(body.messages.at(-1).content); requests.push(input);
       const results = Object.fromEntries(input.variables.map(v => [v.id, { ...record(),
         value: v.tipo === 'Descriptor' ? v.id === 'tipo_interaccion' ? 'disponibilidad' : ['ProductoPrueba'] : 0,
-        reason: `Respuesta sintética ${requests.length}.`, evidence_message_ids: v.tipo === 'Descriptor' ? ['synthetic-client-1'] : [] }]));
-      if (requests.length === 1) {
-        results.tipo_interaccion.status = 'no_evaluado';
-        results[flagged].evidence_message_ids = ['synthetic-human-1'];
-        results.cliente_molesto = { ...record(), status: 'no_evaluado', value: null };
+        reason: `Respuesta sintética ${requests.length <= 6 ? 1 : 2}.`, evidence_message_ids: v.tipo === 'Descriptor' ? ['synthetic-client-1'] : [] }]));
+      if (requests.length <= 6) {
+        if (results.tipo_interaccion) results.tipo_interaccion.status = 'no_evaluado';
+        if (results[flagged]) results[flagged].evidence_message_ids = ['synthetic-human-1'];
+        if (results.cliente_molesto) results.cliente_molesto = { ...record(), status: 'no_evaluado', value: null };
       }
       return Response.json({ ok: true, tool_key: 'gemma', request_uuid: `synthetic-attempt-${requests.length}`,
         method: 'POST', path: '/v1/chat/completions', upstream_status_code: 200,
@@ -82,10 +82,11 @@ test('47-item batch retains 45 valid answers and retries only the two observed f
   const store = { async read() { return structuredClone(state); }, async readWithConversations() { return structuredClone(state); },
     async transaction(fn) { const draft = structuredClone(state), result = await fn(draft); Object.assign(state, draft); return structuredClone(result); } };
   const job = await runEvaluationBatch(store, registry, { max: 1 });
-  assert.equal(job.status, 'completed'); assert.equal(requests.length, 2);
-  assert.equal(requests[0].variables.length, 47);
-  assert.deepEqual(requests[1].variables.map(v => v.id).sort(), [flagged, 'tipo_interaccion'].sort());
-  assert.deepEqual(requests[1].correccionesFormato, [
+  assert.equal(job.status, 'completed'); assert.equal(requests.length, 7);
+  assert.deepEqual(requests.slice(0, 6).map(r => r.variables.length), [8, 8, 8, 8, 8, 7]);
+  assert.equal(new Set(requests.slice(0, 6).flatMap(r => r.variables.map(v => v.id))).size, 47);
+  assert.deepEqual(requests.at(-1).variables.map(v => v.id).sort(), [flagged, 'tipo_interaccion'].sort());
+  assert.deepEqual(requests.at(-1).correccionesFormato, [
     { variableId: 'tipo_interaccion', rules: ['inconsistent_status_value'] },
     { variableId: flagged, rules: ['unexpected_evidence'] },
   ]);

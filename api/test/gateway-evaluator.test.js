@@ -33,6 +33,18 @@ const evaluator = (json = envelope(), overrides = {}) => {
 };
 const code = expected => error => { assert.equal(error.code, expected); return true; };
 
+test('configured item instructions reach only their own checklist entry and keep the response contract', async () => {
+  const { instance, calls } = evaluator();
+  await instance.withRuntime({ promptText: 'Instrucciones generales editables.', itemPrompts: { event: 'Exige una confirmación explícita.', unused: 'No transmitir.' } }).evaluate(conversation, variables);
+  const body = JSON.parse(calls[0][1].body).body;
+  assert.match(body.messages[0].content, /^Instrucciones generales editables\./);
+  assert.match(body.messages[0].content, /Contrato de respuesta obligatorio/);
+  const input = JSON.parse(body.messages.at(-1).content);
+  assert.equal(input.variables[0].instruccionesAdicionales, 'Exige una confirmación explícita.');
+  assert.equal(input.variables[1].instruccionesAdicionales, undefined);
+  assert.ok(!JSON.stringify(body).includes('No transmitir.'));
+});
+
 test('Gateway sends the audited envelope only to the configured backend and validates the common contract', async () => {
   const { instance, calls } = evaluator();
   assert.equal(instance.configured, true);
@@ -111,6 +123,236 @@ test('responses must prove the exact configured model identity', async () => {
     const response = payload(); response.model = model;
     await assert.rejects(evaluator(envelope(response)).instance.evaluate(conversation, variables), code(expected));
   }
+});
+
+test('numbered runtime instances require native inventory and preserve both identities', async () => {
+  const response = payload(); response.model = `${base.model}:2`;
+  const paths = [];
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); paths.push(request.path);
+    return mockResponse(request.path === '/v1/chat/completions' ? envelope(response) : {
+      ...envelope({ models: [{ key: base.model, type: 'llm', loaded_instances: [{ id: response.model, config: { context_length: 8192 } }] }] }),
+      method: 'GET', path: '/api/v1/models',
+    });
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(paths, ['/v1/chat/completions', '/api/v1/models']);
+  assert.equal(answer.model, base.model);
+  assert.deepEqual(answer.runtimeIdentity, { modelKey: base.model, instanceId: response.model,
+    inventoryRequestId: requestId, responseRequestId: requestId, contextLength: 8192 });
+  assert.deepEqual(answer.validationErrors, []);
+});
+
+test('context rejection divides only the checklist and preserves the full conversation', async () => {
+  const requests = [];
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body; requests.push(request);
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    if (ids.length > 1) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'context_length_exceeded', message: 'Context length exceeded' } } });
+    const raw = valid(); raw.results = Object.fromEntries(ids.map(id => [id, raw.results[id]]));
+    return mockResponse(envelope(payload(raw)));
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.equal(answer.results.length, 2);
+  assert.deepEqual(answer.validationErrors, []);
+  assert.equal(answer.contextBatches.length, 2);
+  for (const request of requests) {
+    assert.equal(request.messages[0].content, evaluationInstructions);
+    for (const message of conversation.messages) assert.ok(request.messages.at(-1).content.includes(message.text));
+  }
+});
+
+test('context still too small for one variable remains an explicit error', async () => {
+  const instance = evaluator({ ...envelope(), ok: false, upstream_status_code: 400,
+    response: { error: { code: 'context_length_exceeded', message: 'Context length exceeded' } } }).instance;
+  await assert.rejects(instance.evaluate(conversation, [variables[0]]), code('AI_CONTEXT_LIMIT'));
+});
+
+test('Clef memory limits recursively divide only the checklist and retain every source message', async () => {
+  const flags = Array.from({ length: 4 }, (_, i) => ({ ...variables[0], id: `memory_event_${i}` }));
+  const requests = [];
+  const source = structuredClone(conversation);
+  const instance = new GatewayEvaluator({ ...base, model: 'clef-flash', fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body; requests.push(request);
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    if (ids.length > 1) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'out_of_memory' } } });
+    return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model: 'clef-flash' }));
+  } });
+  const answer = await instance.evaluate(source, flags);
+  assert.deepEqual(requests.map(request => JSON.parse(request.messages.at(-1).content).variables.length), [4, 2, 1, 1, 2, 1, 1]);
+  assert.deepEqual(answer.results.map(result => [result.variableId, result.value]), flags.map(flag => [flag.id, 1]));
+  assert.deepEqual(answer.validationErrors, []);
+  assert.equal(answer.failure, undefined);
+  assert.equal(answer.model, 'clef-flash');
+  assert.equal(answer.contextBatches.length, 4);
+  assert.ok(answer.contextBatches.every(batch => batch.reason === 'memory-limit'));
+  assert.deepEqual(answer.usage, { prompt_tokens: 400, completion_tokens: 200, total_tokens: 600 });
+  const originalMessages = JSON.parse(evaluationInput(source, flags)).mensajes;
+  for (const request of requests) {
+    const input = JSON.parse(request.messages.at(-1).content);
+    const subset = flags.filter(flag => input.variables.some(variable => variable.id === flag.id));
+    assert.deepEqual(input.mensajes, originalMessages);
+    assert.equal(request.messages.at(-1).content, evaluationInput(source, subset));
+    assert.deepEqual(request.response_format.json_schema.schema, clefFlashEvaluationSchema(subset, source));
+    assert.equal(request.messages[0].content, `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}`);
+    assert.equal(request.model, 'clef-flash');
+  }
+  assert.deepEqual(source, conversation);
+});
+
+test('a final single-variable memory failure retains earlier validated answers and never loops', async () => {
+  const calls = [];
+  const instance = new GatewayEvaluator({ ...base, model: 'clef-flash', fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body;
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties); calls.push(ids);
+    if (ids.length > 1 || ids.includes('tipo_interaccion')) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'insufficient_memory' } } });
+    return mockResponse(envelope({ ...payload({ results: { event: valid().results.event } }), model: 'clef-flash' }));
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(calls, [['event', 'tipo_interaccion'], ['event'], ['tipo_interaccion']]);
+  assert.deepEqual(answer.results.map(result => [result.variableId, result.status, result.value]), [['event', 'evaluado', 1]]);
+  assert.deepEqual(answer.results[0].evidence, [{ messageId: 'm2', quote: conversation.messages[1].text }]);
+  assert.deepEqual(answer.failure, { code: 'AI_RESOURCE_LIMIT' });
+  assert.deepEqual(answer.contextBatches.map(batch => batch.variableIds), [['event']]);
+  assert.deepEqual(answer.usage, { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 });
+  assert.deepEqual(answer.validationErrors, []);
+
+  calls.length = 0;
+  await assert.rejects(instance.evaluate(conversation, [variables[1]]), code('AI_RESOURCE_LIMIT'));
+  assert.deepEqual(calls, [['tipo_interaccion']]);
+});
+
+test('ordinary upstream 400 and quoted memory text fail once without dividing the checklist', async () => {
+  for (const message of ['Invalid JSON schema.', 'Invalid request. Quoted transcript: "RuntimeError: out of memory".']) {
+    const { instance, calls } = evaluator({ ...envelope(), ok: false, upstream_status_code: 400, response: { error: message } });
+    await assert.rejects(instance.evaluate(conversation, variables), code('AI_CONFIGURATION'));
+    assert.equal(calls.length, 1);
+    const input = JSON.parse(JSON.parse(calls[0][1].body).body.messages.at(-1).content);
+    assert.deepEqual(input.variables.map(variable => variable.id), variables.map(variable => variable.id));
+  }
+});
+
+test('Gemma splits a large checklist before requesting inference and retains full source and model identity', async () => {
+  const many = Array.from({ length: 19 }, (_, i) => ({ ...variables[0], id: `event_${i}` }));
+  const requests = [];
+  const model = 'gemma-4-26b-a4b-it-mlx';
+  const instance = new GatewayEvaluator({ ...base, model, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body; requests.push(request);
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model }));
+  } });
+  const answer = await instance.evaluate(conversation, many);
+  assert.deepEqual(answer.contextBatches.map(b => b.variableIds.length), [8, 8, 3]);
+  assert.ok(answer.contextBatches.every(b => b.reason === 'checklist-size'));
+  assert.equal(answer.results.length, many.length);
+  assert.equal(answer.model, model);
+  for (const request of requests) {
+    assert.equal(request.messages[0].content, evaluationInstructions);
+    for (const message of conversation.messages) assert.ok(request.messages.at(-1).content.includes(message.text));
+  }
+});
+
+test('exact Clef Flash splits 47 variables before its first request and preserves source, rules and validated answers', async () => {
+  const many = Array.from({ length: 47 }, (_, i) => ({ ...variables[0], id: `clef_event_${i}`, definition: `Regla específica ${i}.` }));
+  for (const model of ['clef-flash', 'clef-flash-next']) {
+    const requests = [], source = structuredClone(conversation), original = structuredClone(source);
+    const instance = new GatewayEvaluator({ ...base, model, fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body).body; requests.push(request);
+      const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+      return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model }));
+    } });
+    const answer = await instance.evaluate(source, many);
+    const partitioned = model === 'clef-flash';
+    assert.deepEqual(requests.map(request => JSON.parse(request.messages.at(-1).content).variables.length), partitioned ? [8, 8, 8, 8, 8, 7] : [47]);
+    assert.deepEqual(answer.results.map(result => [result.variableId, result.value]), many.map(variable => [variable.id, 1]));
+    assert.deepEqual(answer.validationErrors, []); assert.equal(answer.failure, undefined); assert.equal(answer.model, model);
+    if (partitioned) {
+      assert.deepEqual(answer.contextBatches.map(batch => batch.variableIds).flat(), many.map(variable => variable.id));
+      assert.ok(answer.contextBatches.every(batch => batch.reason === 'checklist-size'));
+      assert.equal(answer.outputSchemaVersion, CLEF_FLASH_OUTPUT_SCHEMA_VERSION);
+      assert.equal(answer.decisionInstructionsVersion, CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION);
+      assert.deepEqual(answer.usage, { prompt_tokens: 600, completion_tokens: 300, total_tokens: 900 });
+    } else assert.equal(answer.contextBatches, undefined);
+    for (const request of requests) {
+      const ids = JSON.parse(request.messages.at(-1).content).variables.map(variable => variable.id);
+      const subset = many.filter(variable => ids.includes(variable.id));
+      assert.equal(request.messages.at(-1).content, evaluationInput(source, subset));
+      assert.deepEqual(JSON.parse(request.messages.at(-1).content).mensajes, JSON.parse(evaluationInput(original, many)).mensajes);
+      assert.deepEqual(request.response_format.json_schema.schema, partitioned ? clefFlashEvaluationSchema(subset, source) : evaluationSchema(subset));
+      assert.equal(request.messages[0].content, partitioned ? `${evaluationInstructions}\n\n${clefFlashDecisionInstructions}` : evaluationInstructions);
+      assert.equal(request.model, model);
+    }
+    assert.deepEqual(source, original);
+  }
+});
+
+test('a verified gateway timeout divides the checklist, but configuration failures do not', async () => {
+  for (const status of [504, 400]) {
+    const sizes = [];
+    const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body).body;
+      const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties); sizes.push(ids.length);
+      if (ids.length > 1) return mockResponse({}, status);
+      return mockResponse(envelope(payload({ results: Object.fromEntries(ids.map(id => [id, valid().results[id]])) })));
+    } });
+    if (status === 504) {
+      const answer = await instance.evaluate(conversation, variables);
+      assert.equal(answer.results.length, 2);
+      assert.ok(answer.contextBatches.every(b => b.reason === 'gateway-timeout'));
+      assert.deepEqual(sizes, [2, 1, 1]);
+    } else {
+      await assert.rejects(instance.evaluate(conversation, variables), code('AI_CONFIGURATION'));
+      assert.deepEqual(sizes, [2]);
+    }
+  }
+});
+
+test('a later context batch failure retains validated earlier answers', async () => {
+  let singles = 0;
+  const instance = new GatewayEvaluator({ ...base, fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body).body;
+    const ids = Object.keys(request.response_format.json_schema.schema.properties.results.properties);
+    if (ids.length > 1) return mockResponse({ ...envelope(), ok: false, upstream_status_code: 400,
+      response: { error: { code: 'context_length_exceeded' } } });
+    if (++singles === 2) return mockResponse({}, 503);
+    const raw = valid(); raw.results = Object.fromEntries(ids.map(id => [id, raw.results[id]]));
+    return mockResponse(envelope(payload(raw)));
+  } });
+  const answer = await instance.evaluate(conversation, variables);
+  assert.deepEqual(answer.results.map(r => r.variableId), ['event']);
+  assert.equal(answer.failure.code, 'AI_TRANSIENT');
+  assert.equal(answer.contextBatches.length, 1);
+});
+
+test('Gemma format retries constrain valid combinations without rewriting decisions or profile identity', async () => {
+  const response = payload(); response.model = 'gemma-4-26b-a4b-it-mlx';
+  const { instance, calls } = evaluator(envelope(response), { model: response.model });
+  const answer = await instance.evaluate(conversation, variables, { validationErrors: [{ variableId: 'event', rules: ['inconsistent_status_value'] }] });
+  assert.equal(instance.outputSchemaVersion, undefined);
+  assert.equal(answer.formatRepair, 'status-value-evidence-1');
+  assert.deepEqual(JSON.parse(calls[0][1].body).body.response_format.json_schema.schema, clefFlashEvaluationSchema(variables, conversation));
+  assert.equal(answer.results.find(r => r.variableId === 'event').value, 1);
+  const raw = valid(); raw.results.event.status = 'no_evaluado';
+  response.choices[0].message.content = JSON.stringify(raw);
+  const invalid = await evaluator(envelope(response), { model: response.model }).instance.evaluate(conversation, variables,
+    { validationErrors: [{ variableId: 'event', rules: ['inconsistent_status_value'] }] });
+  assert.ok(!invalid.results.some(r => r.variableId === 'event'));
+  assert.ok(invalid.validationErrors.some(e => e.rules.includes('inconsistent_status_value')));
+});
+
+test('a timeout in a bounded Gemma group preserves earlier answers without recursive timeout retries', async () => {
+  const many = Array.from({ length: 19 }, (_, i) => ({ ...variables[0], id: `event_${i}` }));
+  let calls = 0; const model = 'gemma-synthetic';
+  const instance = new GatewayEvaluator({ ...base, model, fetchImpl: async (_url, options) => {
+    if (++calls > 1) return mockResponse({}, 504);
+    const ids = Object.keys(JSON.parse(options.body).body.response_format.json_schema.schema.properties.results.properties);
+    return mockResponse(envelope({ ...payload({ results: Object.fromEntries(ids.map(id => [id, valid().results.event])) }), model }));
+  } });
+  const answer = await instance.evaluate(conversation, many);
+  assert.equal(calls, 2); assert.equal(answer.results.length, 8); assert.equal(answer.failure.code, 'AI_TRANSIENT');
 });
 
 test('refusals and content filtering require intervention, while truncated answers remain incomplete', async () => {

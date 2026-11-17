@@ -100,6 +100,16 @@ test('audit suppresses changed-source agreement, handles missing source and inva
   assert.equal(audit.models[0].invalidAttemptTimestamps, 1);
 });
 
+test('audit reports memory limits explicitly while excluding private provider diagnostics', () => {
+  const { state, manifest, save } = fixture();
+  save(0, 'clef-local', { [FLAG]: null }, { code: 'AI_RESOURCE_LIMIT', message: 'PRIVATE_PROVIDER_TRACEBACK' });
+  const audit = localBatchAudit(state, manifest, CHECKED);
+  const clef = audit.models.find(model => model.profileId === 'clef-local');
+  assert.deepEqual(clef.taskErrors, { AI_RESOURCE_LIMIT: 1 });
+  assert.deepEqual(clef.attemptErrors, { AI_RESOURCE_LIMIT: 1 });
+  assert.equal(JSON.stringify(audit).includes('PRIVATE'), false);
+});
+
 test('audit rejects duplicate/out-of-scope tasks and unrelated stored results, and reports an unstarted cohort as pending', () => {
   for (const mutate of [f => { f.state.tasks[0].conversationId = 'PRIVATE_OTHER'; },
     f => { f.state.tasks[0] = structuredClone(f.state.tasks[1]); },

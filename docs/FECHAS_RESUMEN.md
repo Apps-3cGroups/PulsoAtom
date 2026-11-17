@@ -2,11 +2,13 @@
 
 El Resumen se organiza por la última actividad registrada en Atom. Un chat iniciado el 30 de octubre que recibe actividad el 4 de noviembre aparece una sola vez, en el 4 de noviembre. Esto no divide el chat en atenciones ni modifica sus evaluaciones.
 
-Antes, el período se anclaba al mayor día de inicio obtenido al abrir el portal. Eso podía dejar el Resumen en octubre aunque hubiera actividad en noviembre. Ahora, en modo real, los botones consultan días calendario hasta hoy en la zona horaria del portal; el valor inicial es siete días inclusivos. La demo mantiene sus fechas sintéticas.
+En modo real, el Resumen tiene un desfase de un día: sus períodos terminan **ayer según la hora de Honduras (`America/Tegucigalpa`)**. No incluyen el día en curso ni se anclan a la fecha máxima cargada. El período inicial es **3 días**; también están disponibles **Ayer** y **30 días**, todos inclusivos y con el mismo corte.
 
-El calendario permite seleccionar un rango propio, incluso entre meses o años. Limpiarlo restablece siete días. El rango queda en la URL y se conserva al recargar o regresar desde Conversación. País, variable, clasificación y doble detección se combinan con ese período.
+Por ejemplo, el viernes 13 de noviembre de 2026, la vista de 3 días presenta **jueves 12, miércoles 11 y martes 10**, de izquierda a derecha. Ayer muestra solo el jueves 12 y 30 días abarca del 14 de octubre al 12 de noviembre. El corte cambia a medianoche en Honduras, independientemente de la zona horaria del navegador. La demo conserva como corte su último día sintético válido para mantener sus datos estables.
 
-En períodos de más de 31 días, los indicadores abarcan el rango completo y el mapa muestra hasta 31 columnas a la vez, con navegación a los días anteriores y siguientes. Se conserva el desplazamiento interno del mapa, sin añadir scroll exterior al Resumen.
+La selección se guarda en `days=1`, `days=3` o `days=30`; los valores antiguos no admitidos vuelven a 3 días. Los países (`countries`) y las excepciones (`figures`) se conservan al cambiar el período, recargar y regresar desde Conversación. Los parámetros antiguos `from` y `to` no cambian el corte de los períodos del Resumen.
+
+El mapa mensual presenta sus 30 días en una ventana y rotula el extremo más reciente con su fecha real. Las consultas y los enlaces a Histórico utilizan el mismo rango visible. Se conserva el desplazamiento interno del mapa.
 
 ## API y compatibilidad
 
@@ -23,6 +25,6 @@ La validación de la integración con main tras el PR #28 figura en [QA_PR27_INT
 
 Pruebas de API: inicio en octubre con actividad en noviembre, cambio de día por zona horaria, fecha de ingesta distinta, fallback sin actividad, orden y filtros compatibles, y consultas sin ejecutar IA.
 
-Pruebas web: rangos inclusivos, cruces de mes/año, hoy frente a una fecha antigua de bootstrap, demo, fechas inválidas, un solo día y ventanas de 31 columnas para períodos largos. El informe de integración distingue estas pruebas de la comprobación visual realizada en el navegador disponible.
+Pruebas web: tres días hasta ayer, ausencia del día en curso en todos los períodos, medianoche de Honduras, cruces de mes/año y año bisiesto, independencia de la zona del navegador, fecha máxima antigua o futura, demo estable, etiquetas Ayer y fecha real del mapa mensual, filtros y retorno desde detalle.
 
-API y web deben desplegarse juntas. No se necesita migración de base de datos ni reevaluar conversaciones.
+El desfase del 13/11/2026 cambia únicamente las fechas consultadas y los textos de la web. No requiere cambios de API, reinicios de evaluadores, migraciones ni reevaluar conversaciones.

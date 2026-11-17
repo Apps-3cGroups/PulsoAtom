@@ -1,7 +1,9 @@
-import { Popover, Select, Tooltip } from 'antd';
+import { conversationClock } from '../services/conversationTime';
+import { Popover, Tooltip } from 'antd';
+import Select from './Select';
 import { CalendarOutlined, ClockCircleOutlined, CommentOutlined, InfoCircleOutlined, MessageOutlined } from '@ant-design/icons';
 import { metricValue, conversationMetricIds } from '../services/flags';
-import { dailyMetricsView, metricDateText, metricTimeText } from '../services/dailyMetrics';
+import { dailyMetricsView, metricDateText } from '../services/dailyMetrics';
 import { durationLabel, durationParts } from '../services/metricPresentation';
 import MetricActivityTimeline from './MetricActivityTimeline';
 
@@ -27,7 +29,7 @@ function Participation({ assistant, client, counts, children }) {
   const total = available ? assistant + client : null;
   const teamShare = total > 0 ? assistant / total : 0;
   return <article className="metric-participation-card">
-    <div className="metric-participation-heading"><h3>Quién escribió</h3><Explain label="Mensajes del día">Cuenta los mensajes del cliente y del equipo (Agente humano + Bot). Excluye eventos técnicos y emisores sin identificar. Las proporciones muestran participación, no calidad de atención.</Explain></div>
+    <div className="metric-participation-heading"><h3>Quién escribió</h3><Explain label="Mensajes del día">Cuenta los mensajes del cliente y del equipo (agente humano + bot). Excluye eventos técnicos y emisores sin identificar. Las proporciones muestran participación, no calidad de atención.</Explain></div>
     <div className="metric-participation-visual">
       <div className="metric-message-ring" role="img" aria-label={available ? `${numeric(total)} ${total === 1 ? 'mensaje' : 'mensajes'}: ${numeric(client)} del cliente y ${numeric(assistant)} del equipo` : 'Distribución de mensajes no disponible'}>
         <svg viewBox="0 0 132 132" aria-hidden="true"><circle cx="66" cy="66" r="55" className="metric-ring-base" />{total > 0 && <><circle cx="66" cy="66" r="55" pathLength="100" className="metric-ring-client" /><circle cx="66" cy="66" r="55" pathLength="100" strokeDasharray={`${teamShare * 100} 100`} className="metric-ring-team" /></>}</svg>
@@ -41,6 +43,7 @@ function Participation({ assistant, client, counts, children }) {
 }
 
 export default function ConversationMetrics({ conversation, selectedDate, onDateChange }) {
+  const clock = conversationClock(conversation);
   const view = dailyMetricsView(conversation.dailyMetrics, selectedDate);
   const day = view.selectedDay;
   const variables = (Array.isArray(day?.metrics) ? day.metrics : []).filter(v => conversationMetricIds.includes(v.id));
@@ -50,13 +53,15 @@ export default function ConversationMetrics({ conversation, selectedDate, onDate
   const pending = day?.pendingHumanWait;
   const crossDayWaits = Array.isArray(day?.crossDayWaits) ? day.crossDayWaits : [];
   const available = !!day && !view.unavailableReason;
-  const time = timestamp => metricTimeText(timestamp, view.timezone);
+  const spansLocalDates = day && clock.date(day.firstMessageAt) !== clock.date(day.lastMessageAt);
+  const time = timestamp => spansLocalDates ? clock.dateTime(timestamp) : clock.time(timestamp);
   const ratio = value('ratio_mensajes_asistente_entre_cliente'), turn = value('num_mensajes_por_turno_asistente');
   const duration = value('min_duracion_conversacion');
-  const explanation = <div className="metric-help-content"><p>Las cifras corresponden solo al día seleccionado. La transcripción y el checklist conservan su alcance original.</p><p>El tiempo transcurrido incluye pausas. La espera más larga solo considera intervalos que terminaron con una respuesta humana dentro del día.</p><p>Las esperas pendientes se observan hasta el último mensaje disponible; no avanzan con la hora actual.</p><p>{variables.filter(v => metricValue(v) !== null).length} de 7 métricas disponibles · Calculadas por código.</p>{view.timezone && <p>Zona horaria: {view.timezone}.</p>}</div>;
+  const explanation = <div className="metric-help-content"><p>Las cifras corresponden solo al día seleccionado. La transcripción y el checklist conservan su alcance original.</p><p>El tiempo transcurrido incluye pausas. La espera más larga solo considera intervalos que terminaron con una respuesta humana dentro del día.</p><p>Las esperas pendientes se observan hasta el último mensaje disponible; no avanzan con la hora actual.</p><p>{variables.filter(v => metricValue(v) !== null).length} de 7 métricas disponibles · Calculadas por código.</p>{view.timezone && <p>Jornada de cálculo: {view.timezone}. Horas mostradas: {clock.timezone}.</p>}</div>;
   return <section className="conversation-metrics" aria-label="Métricas del día de actividad">
     <header><div><span className="eyebrow">LA CONVERSACIÓN EN CIFRAS</span><h2>Así fue este día</h2><p className="metric-day-summary" aria-live="polite" aria-atomic="true">{available ? <><b>{metricDateText(day.date)}</b><span>·</span>{day.messageCount} {day.messageCount === 1 ? 'mensaje' : 'mensajes'}<span>·</span>{time(day.firstMessageAt)}–{time(day.lastMessageAt)}</> : 'Consulta la actividad registrada en esta conversación.'}</p></div><div className="metric-day-controls"><label htmlFor="conversation-metric-day"><CalendarOutlined /> Día de actividad</label><Select id="conversation-metric-day" aria-label="Día de actividad" value={view.selectedDate || undefined} onChange={onDateChange} disabled={!view.days.length} placeholder="Sin días disponibles" options={view.days.map(item => ({ value: item.date, label: metricDateText(item.date) }))} /></div></header>
     {available ? <>
+      <p className="message-timezone">{clock.label} · Jornada de cálculo: {view.timezone}</p>
       <div className="metric-overview-grid" key={day.date}>
         <div className="metric-story-panel">
           <div className="metric-time-kpis">
@@ -67,7 +72,7 @@ export default function ConversationMetrics({ conversation, selectedDate, onDate
             <ResponseCard id="first" label="Primera respuesta humana" subtitle="Desde el primer mensaje del cliente." variable={get('min_primera_respuesta_humano')} />
             <ResponseCard id="longest" label="Espera más larga con respuesta" subtitle={value('min_primera_respuesta_humano') !== null && value('min_primera_respuesta_humano') === value('min_silencio_max_humano') ? 'Coincide con la primera respuesta.' : 'Mayor espera atendida dentro del día.'} variable={get('min_silencio_max_humano')} />
           </div>
-          <MetricActivityTimeline conversation={conversation} day={day} timezone={view.timezone} firstResponse={get('min_primera_respuesta_humano')} />
+          <MetricActivityTimeline conversation={conversation} day={day} timezone={view.timezone} displayTimezone={clock.timezone} firstResponse={get('min_primera_respuesta_humano')} />
         </div>
         <Participation assistant={value('num_mensajes_asistente')} client={value('num_mensajes_cliente')} counts={day.messageCounts}>
       <div className="metric-rhythm-strip">

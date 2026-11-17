@@ -1,4 +1,16 @@
-import { flagCount, markKind, evaluationNeedsAttention, evaluationPending } from './flags.js';
+import { classificationOf, flagCount, markKind, evaluationNeedsAttention, evaluationPending } from './flags.js';
+import { queryString } from './api.js';
+export const activeFigureKinds = ['critical', 'normal', 'positive'];
+export function activeRequestPath({ countries, page, figures }) {
+  const query = new URLSearchParams(queryString({ countries: countries.join(','), page, pageSize: 12 }));
+  // Empty selection is meaningful: queryString intentionally drops empty strings.
+  if (!activeFigureKinds.every(kind => figures.includes(kind))) query.set('figures', figures.join(','));
+  return `/active?${query}`;
+}
+export const visibleActiveMarks = (conversation, selected = activeFigureKinds) => (conversation.marks || [])
+  .filter(mark => mark.effective !== false && (['critical', 'normal', 'positive', 'human', 'p1', 'p2'].includes(mark.kind)
+    || !mark.kind && activeFigureKinds.includes(mark.classification)) && selected.includes(classificationOf(mark)))
+  .sort((a, b) => activeFigureKinds.indexOf(classificationOf(a)) - activeFigureKinds.indexOf(classificationOf(b)));
 const markOrder = { critical: 0, p1: 0, normal: 1, p2: 1, human: 2, positive: 3, refuted: 4 };
 export const visibleBoardMarks = conversation => conversation.marks.filter(mark => Object.hasOwn(markOrder, mark.kind) && mark.kind !== 'coaching').sort((a, b) => (markOrder[markKind(a)] ?? 4) - (markOrder[markKind(b)] ?? 4));
 const rank = c => flagCount(c, 'critical') > 0 ? 0 : flagCount(c, 'normal') > 0 ? 1 : evaluationNeedsAttention(c) ? 2 : 3;

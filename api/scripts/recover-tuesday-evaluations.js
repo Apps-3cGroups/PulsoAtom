@@ -1,0 +1,227 @@
+import { readFile, mkdir, cp, symlink, open, unlink } from 'node:fs/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { RECOVERY_ID, RECOVERY_JOBS, recoveryPlan, prepareRecovery, verifyPreservedResults } from '../src/gemma-incident-recovery.js';
+import { resumeEvaluationBatch, evaluationModelProgress } from '../src/evaluation-service.js';
+import { sourceFingerprint } from '../src/evaluation-context.js';
+import { acquireBackfillLock, persistBackfillManifest } from '../src/gemma-backfill.js';
+import { assertGemmaIncidentHealth } from '../src/gemma-incident-health.js';
+import { readRecoveryCapacity, recoveryBaseline, recoveryPilotResult } from '../src/gemma-recovery-throughput.js';
+
+const productionApi = '/var/www/nodeapps/PulsoAtom/api';
+const directory = `${productionApi}/.data/incident-recovery/${RECOVERY_ID}`;
+const manifestFile = `${directory}/manifest.json`;
+const fail = code => { throw Object.assign(new Error(code), { code }); };
+const safeCode = e => /^[A-Z_]{3,80}$/.test(e?.code || '') ? e.code : 'RECOVERY_FAILED';
+const alive = pid => { if (!Number.isSafeInteger(pid) || pid < 1) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } };
+const readManifest = async () => JSON.parse(await readFile(manifestFile, 'utf8'));
+function assertManifest(m) { if (m?.id !== RECOVERY_ID || m.plan?.id !== RECOVERY_ID || !Array.isArray(m.plan.completed)) fail('INVALID_MANIFEST'); }
+function assertStable(state, manifest) {
+  assertManifest(manifest);
+  if (state.settings.evaluationMaintenance !== RECOVERY_ID) fail('MAINTENANCE_CHANGED');
+  if (state.jobs.some(j => j.status === 'running' && !RECOVERY_JOBS.includes(j.id))) fail('OTHER_JOB_RUNNING');
+  verifyPreservedResults(state, manifest.plan);
+}
+function status(state, manifest) {
+  assertManifest(manifest);
+  const tasks = state.tasks.filter(t => RECOVERY_JOBS.includes(t.jobId) && t.status !== 'deferred');
+  return { id: RECOVERY_ID, date: manifest.plan.activityDate, status: manifest.status,
+    workerAlive: alive(manifest.pid), startedAt: manifest.startedAt || null, updatedAt: manifest.updatedAt || null,
+    completedResultsPreserved: verifyPreservedResults(state, manifest.plan),
+    maintenanceActive: state.settings.evaluationMaintenance === RECOVERY_ID,
+    totalTasks: tasks.length, completed: tasks.filter(t => t.status === 'completed').length,
+    remaining: tasks.filter(t => t.status !== 'completed').length,
+    errors: tasks.filter(t => t.status !== 'completed').reduce((o,t) => { const code = t.error?.code || t.status; o[code] = (o[code] || 0) + 1; return o; }, {}),
+    jobs: RECOVERY_JOBS.map(id => { const job = state.jobs.find(j => j.id === id); return { id, status: job?.status, progress: evaluationModelProgress(state, job) }; }),
+    errorCode: manifest.errorCode || null, sourceChanged: manifest.sourceChanged || [] };
+}
+async function start(store) {
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const release = await acquireBackfillLock(`${directory}/launch.lock`, RECOVERY_ID);
+  try {
+    let existing; try { existing = await readManifest(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (existing) return { alreadyStarted: true, ...status(await store.read(), existing) };
+    // Workflow stops precisely this process before preparing in-flight tasks.
+    const processes = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
+      env: { ...process.env, PM2_HOME: '/home/td/.pm2' } }));
+    const api = processes.filter(p => p.name === 'pulso-atom-api');
+    if (api.length !== 1 || api[0].pm2_env.status !== 'stopped') fail('API_MUST_BE_STOPPED');
+    const state = await store.read(), plan = recoveryPlan(state);
+    const manifest = { id: RECOVERY_ID, status: 'prepared', plan, createdAt: new Date().toISOString() };
+    // Private backup, never printed or uploaded. Preserve the exact incident
+    // tasks, attempts, results and configuration before any state mutation.
+    await persistBackfillManifest(`${directory}/backup.json`, {
+      settings: state.settings, jobs: state.jobs.filter(j => RECOVERY_JOBS.includes(j.id)),
+      tasks: state.tasks.filter(t => RECOVERY_JOBS.includes(t.jobId)), attempts: state.attempts.filter(a => RECOVERY_JOBS.includes(a.jobId)),
+      evaluations: state.evaluations.filter(e => RECOVERY_JOBS.includes(e.jobId)),
+    });
+    const source = fileURLToPath(new URL('../', import.meta.url)), workerApi = `${directory}/worker-api`;
+    await mkdir(workerApi, { mode: 0o700 });
+    for (const entry of ['src', 'scripts', 'package.json']) await cp(path.join(source, entry), path.join(workerApi, entry),
+      { recursive: true, errorOnExist: true, force: false, filter: f => !['.env', '.data', 'node_modules'].includes(path.basename(f)) });
+    await symlink(`${productionApi}/node_modules`, `${workerApi}/node_modules`);
+    await store.transaction(draft => prepareRecovery(draft, plan, new Date().toISOString()));
+    await persistBackfillManifest(manifestFile, manifest);
+    const log = await open(`${directory}/worker.log`, 'wx', 0o600);
+    try {
+      const child = spawn(process.execPath, [`--env-file=${productionApi}/.env`, `${workerApi}/scripts/recover-tuesday-evaluations.js`, '--worker'],
+        { cwd: workerApi, env: process.env, detached: true, stdio: ['ignore', log.fd, log.fd] });
+      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
+      return { started: true, id: RECOVERY_ID, pendingTasks: plan.pending.length, preservedCompletedTasks: plan.completed.length, pid: child.pid };
+    } finally { await log.close(); }
+  } finally { await release(); }
+}
+async function worker(store, registry) {
+  const release = await acquireBackfillLock(`${directory}/worker.lock`, RECOVERY_ID);
+  let manifest;
+  try {
+    manifest = await readManifest(); assertManifest(manifest);
+    if (manifest.status !== 'prepared') fail('WORKER_ALREADY_STARTED');
+    Object.assign(manifest, { status: 'running', pid: process.pid, startedAt: new Date().toISOString() });
+    await persistBackfillManifest(manifestFile, manifest);
+    const initial = await store.read(); assertStable(initial, manifest);
+    const gemma = registry.forState(initial).resolve('gemma-local');
+    manifest.health = await assertGemmaIncidentHealth(gemma, { token: process.env.AGENT_SHARED_TOKEN });
+    const capacity = await readRecoveryCapacity(gemma, process.env.AGENT_SHARED_TOKEN);
+    manifest.health.parallelCapacity = capacity;
+    const setConcurrency = value => store.transaction(s => {
+      assertStable(s, manifest);
+      for (const job of s.jobs.filter(j => RECOVERY_JOBS.includes(j.id))) job.concurrency = Math.min(value, capacity);
+    });
+    await setConcurrency(manifest.concurrencyPilot?.concurrency || 2);
+    await persistBackfillManifest(manifestFile, manifest);
+    const guarded = { read: () => store.read(), readWithConversations: options => store.readWithConversations(options),
+      transaction: fn => store.transaction(s => { assertStable(s, manifest); return fn(s); }) };
+    // Three bounded recovery rounds. Each reuses valid profile answers and
+    // invokes only missing variables; successful tasks are never selected.
+    for (let round = 1; round <= 3; round++) {
+      // Restore the user's Tuesday column before cases whose latest activity
+      // moved to Wednesday, regardless of the models' eventual decisions.
+      for (const tuesdayFirst of [true, false]) {
+      for (const jobId of RECOVERY_JOBS) {
+        const snapshot = await store.read(); assertStable(snapshot, manifest);
+        const pending = snapshot.tasks.filter(t => t.jobId === jobId && !['completed', 'deferred'].includes(t.status));
+        if (!pending.length) continue;
+        const ids = [...new Set(pending.map(t => t.conversationId))];
+        const fresh = await store.readWithConversations({ fresh: true, conversationIds: ids });
+        const unchanged = ids.filter(id => { const c = fresh.conversations.find(c => c.id === id);
+          return c && pending.filter(t => t.conversationId === id).every(t => t.context.sourceHash === sourceFingerprint(c)); });
+        let stableIds = unchanged.filter(id => {
+          const c = fresh.conversations.find(c => c.id === id);
+          const timestamp = Date.parse(c.lastActivityAt);
+          const date = Number.isFinite(timestamp) ? new Date(timestamp - 6 * 3600000).toISOString().slice(0, 10) : null;
+          return (date === manifest.plan.activityDate) === tuesdayFirst;
+        });
+        manifest.sourceChanged = [...new Set([...(manifest.sourceChanged || []), ...ids.filter(id => !unchanged.includes(id))])];
+        Object.assign(manifest, { round, currentJob: jobId, updatedAt: new Date().toISOString() });
+        await persistBackfillManifest(manifestFile, manifest);
+        if (!manifest.concurrencyPilot && capacity >= 4 && manifest.baseline?.perMinute > 0 && stableIds.length >= 8) {
+          const pilotIds = stableIds.slice(0, 8), startedAt = new Date().toISOString();
+          await setConcurrency(4);
+          manifest.pilotRunning = { jobId, conversations: 8, concurrency: 4, startedAt };
+          await persistBackfillManifest(manifestFile, manifest);
+          await (await resumeEvaluationBatch(guarded, registry, jobId, { conversationIds: pilotIds })).completion;
+          const measured = await store.read(); assertStable(measured, manifest);
+          manifest.concurrencyPilot = recoveryPilotResult(measured, { jobId, conversationIds: pilotIds,
+            startedAt, finishedAt: new Date().toISOString(), baselineRate: manifest.baseline.perMinute });
+          delete manifest.pilotRunning;
+          await setConcurrency(manifest.concurrencyPilot.concurrency);
+          await store.transaction(s => { assertStable(s, manifest);
+            s.settings.gemmaIncidentRecovery.concurrencyPilot = structuredClone(manifest.concurrencyPilot);
+          });
+          await persistBackfillManifest(manifestFile, manifest);
+          console.log(JSON.stringify({ stage: 'concurrency-pilot', ...manifest.concurrencyPilot }));
+          stableIds = stableIds.slice(8);
+        }
+        if (stableIds.length) await (await resumeEvaluationBatch(guarded, registry, jobId, { conversationIds: stableIds })).completion;
+      }
+      }
+      const current = await store.read(); assertStable(current, manifest);
+      const remaining = current.tasks.filter(t => RECOVERY_JOBS.includes(t.jobId) && !['completed', 'deferred'].includes(t.status));
+      if (!remaining.length) break;
+      if (remaining.some(t => ['MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED', 'AI_CONFIGURATION'].includes(t.error?.code))) fail('PROVIDER_REQUIRES_INTERVENTION');
+    }
+    const final = status(await store.read(), manifest);
+    Object.assign(manifest, { status: final.remaining ? 'partial' : 'completed', updatedAt: new Date().toISOString() });
+    if (!final.remaining) await store.transaction(s => {
+      assertStable(s, manifest);
+      if (s.tasks.some(t => RECOVERY_JOBS.includes(t.jobId) && !['completed', 'deferred'].includes(t.status))) fail('RECOVERY_STATE_CHANGED');
+      s.settings.evaluationMaintenance = manifest.plan.priorMaintenance;
+      Object.assign(s.settings.gemmaIncidentRecovery, { status: 'completed', completedAt: manifest.updatedAt });
+    });
+    await persistBackfillManifest(manifestFile, manifest);
+    console.log(JSON.stringify(status(await store.read(), manifest)));
+  } catch (e) {
+    if (manifest) {
+      Object.assign(manifest, { status: 'blocked', errorCode: safeCode(e), updatedAt: new Date().toISOString() });
+      await persistBackfillManifest(manifestFile, manifest);
+      if (e.code === 'GEMMA_PROVIDER_UNAVAILABLE') await store.transaction(s => {
+        assertStable(s, manifest);
+        Object.assign(s.settings.gemmaIncidentRecovery, { status: 'blocked', errorCode: e.code, updatedAt: manifest.updatedAt });
+      });
+    }
+    throw e;
+  } finally { await release(); }
+}
+async function continueRecovery(store) {
+  const release = await acquireBackfillLock(`${directory}/launch.lock`, RECOVERY_ID);
+  try {
+    const manifest = await readManifest(); assertManifest(manifest);
+    const before = await store.read();
+    if (manifest.status === 'completed') return status(before, manifest);
+    assertStable(before, manifest);
+    const script = `${directory}/worker-api/scripts/recover-tuesday-evaluations.js`;
+    if (alive(manifest.pid)) {
+      const argv = (await readFile(`/proc/${manifest.pid}/cmdline`, 'utf8')).split('\0');
+      if (!argv.includes(script) || !argv.includes('--worker')) fail('WORKER_IDENTITY_CHANGED');
+      process.kill(manifest.pid, 'SIGTERM');
+      for (let i = 0; i < 50 && alive(manifest.pid); i++) {
+        try { if (/\) Z /.test(await readFile(`/proc/${manifest.pid}/stat`, 'utf8'))) break; }
+        catch (e) { if (['ENOENT', 'ESRCH'].includes(e.code)) break; throw e; }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      try { if (alive(manifest.pid) && !/\) Z /.test(await readFile(`/proc/${manifest.pid}/stat`, 'utf8'))) fail('WORKER_STILL_RUNNING'); }
+      catch (e) { if (!['ENOENT', 'ESRCH'].includes(e.code)) throw e; }
+    }
+    try {
+      const lock = JSON.parse(await readFile(`${directory}/worker.lock`, 'utf8'));
+      if (lock.pid !== manifest.pid || lock.maintenanceId !== RECOVERY_ID) fail('WORKER_LOCK_CHANGED');
+      await unlink(`${directory}/worker.lock`);
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    const current = await store.read(); assertStable(current, manifest);
+    const plan = recoveryPlan(current), priorMaintenance = manifest.plan.priorMaintenance;
+    const baseline = manifest.status === 'running' ? recoveryBaseline(current, manifest.plan, manifest.startedAt, new Date().toISOString()) : null;
+    await persistBackfillManifest(`${directory}/checkpoint-${Date.now()}.json`, { manifest, plan });
+    const source = fileURLToPath(new URL('../', import.meta.url)), workerApi = `${directory}/worker-api`;
+    for (const entry of ['src', 'scripts', 'package.json']) await cp(path.join(source, entry), path.join(workerApi, entry),
+      { recursive: true, force: true, filter: f => !['.env', '.data', 'node_modules'].includes(path.basename(f)) });
+    await store.transaction(draft => prepareRecovery(draft, plan, new Date().toISOString()));
+    Object.assign(manifest, { status: 'prepared', pid: null, errorCode: null, plan: { ...plan, priorMaintenance },
+      ...(baseline ? { baseline } : {}), updatedAt: new Date().toISOString() });
+    await persistBackfillManifest(manifestFile, manifest);
+    const log = await open(`${directory}/worker.log`, 'a', 0o600);
+    try {
+      const child = spawn(process.execPath, [`--env-file=${productionApi}/.env`, script, '--worker'],
+        { cwd: workerApi, env: process.env, detached: true, stdio: ['ignore', log.fd, log.fd] });
+      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); }); child.unref();
+      return { resumed: true, id: RECOVERY_ID, pendingTasks: plan.pending.length, preservedCompletedTasks: plan.completed.length, pid: child.pid };
+    } finally { await log.close(); }
+  } finally { await release(); }
+}
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length !== 1 || !['--start', '--continue', '--worker', '--status'].includes(args[0])) fail('INVALID_ARGUMENTS');
+  const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
+  const { MysqlStore, AtomHistoryStore } = await import('../src/store.js');
+  const { AtomReader } = await import('../src/atom.js');
+  const { registryFromEnv } = await import('../src/model-registry.js');
+  const db = databaseConfig(); if (config.demo || db?.database !== 'dbPulsosAtom') fail('REAL_MODE_REQUIRED');
+  const { GemmaIncidentStore } = await import('../src/gemma-incident-store.js');
+  const store = args[0] === '--worker' ? new AtomHistoryStore(new GemmaIncidentStore(db, (await readManifest()).plan), new AtomReader(atomDatabaseConfig(), config.timezone)) : new MysqlStore(db);
+  try {
+    const result = args[0] === '--start' ? await start(store) : args[0] === '--continue' ? await continueRecovery(store) : args[0] === '--worker' ? await worker(store, registryFromEnv()) : status(await store.read(), await readManifest());
+    if (result) console.log(JSON.stringify(result, null, 2));
+  } finally { await store.close(); }
+}
+main().catch(e => { console.error(JSON.stringify({ success: false, errorCode: safeCode(e) })); process.exitCode = 1; });

@@ -1,11 +1,13 @@
+import { conversationClock } from '../services/conversationTime';
 import { useMemo, useState } from 'react';
-import { Select, Tag, Tooltip } from 'antd';
+import { Tag, Tooltip } from 'antd';
+import Select from './Select';
 import { CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined, ReadOutlined } from '@ant-design/icons';
 import { modelReviewVariables, modelReviewStatusLabel } from '../services/modelReview';
 import FlagModelComparison from './FlagModelComparison';
-import { dateText, timeText } from './common';
 
 export default function ConversationModelReviews({ conversation }) {
+  const clock = conversationClock(conversation);
   const [selectedId, setSelectedId] = useState(null);
   const reviews = conversation.evaluation?.modelReviews || [];
   const variables = useMemo(() => modelReviewVariables(conversation.variables), [conversation.variables]);
@@ -20,7 +22,7 @@ export default function ConversationModelReviews({ conversation }) {
       return <article key={review.profileId} className={`model-review-card ${complete ? 'review-complete' : error ? 'review-error' : 'review-pending'}`}>
         <span className="model-review-icon" aria-hidden="true">{complete ? <CheckCircleOutlined /> : error ? <ExclamationCircleOutlined /> : <ClockCircleOutlined />}</span>
         <div className="model-review-description"><h3>{review.label || review.profileId}</h3><Tooltip title={review.model}><span className="model-review-model">{review.model}</span></Tooltip><span>{modelReviewStatusLabel(review.status)}</span></div>
-        <div className="model-review-coverage"><strong>{hasResult ? <>{review.evaluatedCount ?? 0}<small>/{review.totalVariables ?? 0}</small></> : '—'}</strong><span>{hasResult ? 'variables con resultado' : 'Sin resultado guardado'}</span>{review.abstainedCount > 0 && <small>{review.abstainedCount} sin contexto suficiente</small>}{review.errorCount > 0 && <Tag color="orange">{review.errorCount} con errores</Tag>}{review.createdAt && <small>{dateText(review.createdAt, { year: undefined })} · {timeText(review.createdAt)}</small>}</div>
+        <div className="model-review-coverage"><strong>{hasResult ? <>{review.evaluatedCount ?? 0}<small>/{review.totalVariables ?? 0}</small></> : '—'}</strong><span>{hasResult ? 'variables con resultado' : 'Sin resultado guardado'}</span>{review.abstainedCount > 0 && <small>{review.abstainedCount} sin contexto suficiente</small>}{review.errorCount > 0 && <Tag color="orange">{review.errorCount} con errores</Tag>}{review.createdAt && <small>{clock.date(review.createdAt)} · {clock.time(review.createdAt)}</small>}</div>
       </article>;
     })}</div>
     {selected ? <>

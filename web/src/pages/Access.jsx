@@ -1,9 +1,12 @@
 import { useState } from 'react';
-import { Alert, App, Button, Form, Input, Popconfirm, Select, Table, Tag } from 'antd';
+import { Alert, App, Button, Form, Input, Popconfirm, Table, Tag } from 'antd';
+import Select from '../components/Select';
 import { SearchOutlined, UserAddOutlined } from '@ant-design/icons';
 import { api } from '../services/api';
 import { useApi, usePortal } from '../hooks';
 import { EmptyState, ErrorState, LoadingState, PageHeading, tableLoading } from '../components/common';
+
+import AppearanceSettings from '../components/AppearanceSettings';
 
 const roles = [{ value: 'supervisor', label: 'Supervisor' }, { value: 'admin', label: 'Administrador' }];
 
@@ -38,6 +41,7 @@ export default function Access() {
   };
   return <div>
     <PageHeading eyebrow="ADMINISTRACIÓN" title="Accesos a Pulso" description="Usa las credenciales de Somos3C y asigna aquí los permisos de Pulso." />
+    <AppearanceSettings />
     {error && <Alert type="error" showIcon message={error.message} style={{ marginBottom: 16 }} />}
     <section className="evaluation-card access-create">
       <h2>Agregar acceso</h2>

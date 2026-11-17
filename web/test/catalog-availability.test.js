@@ -22,6 +22,6 @@ test('pending data does not disable an implemented phase-one rule; unsupported n
 test('flag counters use the matching singular and plural Spanish labels', () => {
   assert.equal(flagCountLabel('critical', 1), '1 flag crítico');
   assert.equal(flagCountLabel('critical', 2), '2 flags críticos');
-  assert.equal(flagCountLabel('normal', 2), '2 flags normales');
+  assert.equal(flagCountLabel('normal', 2), '2 flags menores');
   assert.equal(flagCountLabel('positive', 2), '2 positivos');
 });

@@ -1,6 +1,7 @@
 import { defaultDateRange } from '../services/dateRange';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Drawer, Form, Input, InputNumber, Radio, Select, Table, Tag } from 'antd';
+import { Alert, App, Button, Drawer, Form, Input, InputNumber, Radio, Table, Tag } from 'antd';
+import Select from './Select';
 import { SwapOutlined, SafetyCertificateOutlined, HistoryOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useApi, useDebounced, usePortal } from '../hooks';
@@ -8,16 +9,17 @@ import { api, queryString } from '../services/api';
 import { ErrorState, LoadingState, tableLoading } from './common';
 import LocalModelConfiguration from './LocalModelConfiguration';
 import { executableProfiles, policySelection } from '../services/localModels';
+import { countryLabel } from '../services/presentationText';
 
-export const jobStatus = status => ({ running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
+export const jobStatus = status => ({ queued: 'En cola', paused: 'Pausada', retry_wait: 'Esperando reintento', running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
 const keepReading = () => true;
 const executionReadError = error => error?.code === 'TIMEOUT' ? { message: 'La consulta tardó demasiado. Reintentar consulta el avance; no vuelve a ejecutar los modelos.' } : error;
-export function ModelControls({ onSaved, running }) {
+export function ModelControls({ onSaved, running, hideConfiguration = false }) {
   const request = useApi('/models');
   const { user, bootstrap } = usePortal();
   const refresh = () => { request.reload(); onSaved(); };
   const data = request.data && { ...request.data, profiles: executableProfiles(request.data.profiles, bootstrap.mode === 'demo') };
-  return <><LocalModelConfiguration demo={bootstrap.mode === 'demo'} isAdmin={user.role === 'admin'} running={running} onSaved={refresh} />{request.error ? <ErrorState error={request.error} retry={request.reload} /> : !data ? <LoadingState /> : <div className="model-controls-grid"><PolicyCard key={`${data.policy.version}:${data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')}`} data={data} isAdmin={user.role === 'admin'} onSaved={refresh} /><SampleCard key={data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')} profiles={data.profiles} isAdmin={user.role === 'admin'} running={running} /></div>}</>;
+  return <>{!hideConfiguration && <LocalModelConfiguration demo={bootstrap.mode === 'demo'} isAdmin={user.role === 'admin'} running={running} onSaved={refresh} />}{request.error ? <ErrorState error={request.error} retry={request.reload} /> : !data ? <LoadingState /> : <div className="model-controls-grid"><PolicyCard key={`${data.policy.version}:${data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')}`} data={data} isAdmin={user.role === 'admin'} onSaved={refresh} /><SampleCard key={data.profiles.map(p => `${p.viewId || p.id}:${p.available}`).join(',')} profiles={data.profiles} isAdmin={user.role === 'admin'} running={running} /></div>}</>;
 }
 function PolicyCard({ data, isAdmin, onSaved }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(null);
@@ -69,7 +71,7 @@ function SampleCard({ profiles, isAdmin, running }) {
     {available.length < 2 && <Alert type="info" showIcon message="Hace falta un segundo modelo habilitado" description="Configura y habilita un segundo modelo para comparar. Puedes seguir consultando el histórico." />}{error && <Alert type="error" showIcon message={error.message} />}
     <Form form={form} layout="vertical" onFinish={submit} initialValues={{ name: 'Comparación de calidad', modelIds: available.slice(0, 2).map(p => p.id), selection: 'random', max: 10, ...defaultDateRange(bootstrap.dateRange.max, bootstrap.timezone) }} disabled={!isAdmin || busy}>
       <div className="form-two-columns"><Form.Item name="name" label="Nombre de la muestra" rules={[{ required: true, min: 3, max: 100 }]}><Input maxLength={100} /></Form.Item><Form.Item name="modelIds" label="Modelos · máximo 3" rules={[{ required: true, type: 'array', min: 2, max: 3, message: 'Selecciona dos o tres modelos.' }]}><Select aria-label="Modelos a comparar" mode="multiple" maxCount={3} options={profiles.filter(p => !p.historical).map(p => ({ value: p.id, label: `${p.label} · ${p.model || 'Pendiente'}`, disabled: !p.available }))} /></Form.Item></div>
-      <div className="sample-filters"><Form.Item name="country" label="País"><Select aria-label="País de la muestra" allowClear placeholder="Todos los países" options={bootstrap.countries.map(c => ({ value: c.code, label: c.name }))} /></Form.Item><Form.Item name="from" label="Desde"><Input type="date" /></Form.Item><Form.Item name="to" label="Hasta" dependencies={['from']} rules={[({ getFieldValue }) => ({ validator(_, value) { return !value || !getFieldValue('from') || value >= getFieldValue('from') ? Promise.resolve() : Promise.reject(new Error('Revisa el período.')); } })]}><Input type="date" /></Form.Item></div>
+      <div className="sample-filters"><Form.Item name="country" label="País"><Select aria-label="País de la muestra" allowClear placeholder="Todos los países" options={bootstrap.countries.map(c => ({ value: c.code, label: countryLabel(c.code, c.name) }))} /></Form.Item><Form.Item name="from" label="Desde"><Input type="date" /></Form.Item><Form.Item name="to" label="Hasta" dependencies={['from']} rules={[({ getFieldValue }) => ({ validator(_, value) { return !value || !getFieldValue('from') || value >= getFieldValue('from') ? Promise.resolve() : Promise.reject(new Error('Revisa el período.')); } })]}><Input type="date" /></Form.Item></div>
       <Form.Item name="selection" label="Selección"><Radio.Group options={[{ label: 'Aleatoria', value: 'random' }, { label: 'Elegir conversaciones', value: 'manual' }]} /></Form.Item>
       {selection === 'random' ? <Form.Item name="max" label="Cantidad de conversaciones" rules={[{ required: true }]}><InputNumber min={1} max={20} /></Form.Item> : <Form.Item name="conversationIds" label="Conversaciones · máximo 20" rules={[{ required: true, type: 'array', min: 1, max: 20 }]}><Select aria-label="Conversaciones de la muestra" mode="multiple" maxCount={20} showSearch filterOption={false} onSearch={setSearch} loading={candidates.loading} options={(candidates.data?.items || []).map(c => ({ value: c.id, label: `${c.clientName} · ${c.country} · ${c.id}` }))} /></Form.Item>}
       {candidates.error && <Alert type="error" message={candidates.error.message} />}

@@ -132,6 +132,38 @@ test('a native partial configuration failure keeps valid decisions and does not 
   assert.equal(task.profileStates['clef-local'].results[0].reasonSource, 'adapter_template');
 });
 
+test('chat memory failures persist their exact code without automatic retries and resume only missing decisions', async () => {
+  const f = fixture((variables, number) => ({ model: 'clef-synthetic',
+    results: (number === 1 ? variables.slice(0, 1) : variables).map(variable => result(variable)),
+    validationErrors: [], ...(number === 1 ? { failure: { code: 'AI_RESOURCE_LIMIT' } } : {}) }));
+  f.nativeEvaluator.protocol = 'chat';
+  const historical = structuredClone(f.state.evaluations);
+  const job = await runEvaluationBatch(f.store, f.registry, { purpose: 'comparison', modelIds: ['gemma-local', 'clef-local'], max: 1 });
+  assert.equal(job.status, 'partial');
+  assert.equal(f.calls.native.length, 1);
+  const task = f.state.tasks.find(item => item.profile.id === 'clef-local');
+  assert.equal(task.profile.protocol, 'chat');
+  assert.equal(task.error.code, 'AI_RESOURCE_LIMIT');
+  assert.deepEqual(f.state.attempts.filter(attempt => attempt.profileId === 'clef-local').map(attempt => [attempt.status, attempt.error.code]),
+    [['partial', 'AI_RESOURCE_LIMIT']]);
+  const retained = structuredClone(task.profileStates['clef-local'].results);
+  assert.equal(retained.length, 1);
+  const partial = structuredClone(f.state.evaluations.find(evaluation => evaluation.id === task.evaluationId));
+  assert.deepEqual(partial.results.filter(item => item.status === 'evaluado'), retained);
+  assert.equal(partial.results.find(item => item.variableId === f.state.catalog[1].id).status, 'no_evaluado');
+
+  const resumed = await resumeEvaluationBatch(f.store, f.registry, job.id);
+  assert.equal((await resumed.completion).status, 'completed');
+  assert.deepEqual(f.calls.native, [f.state.catalog.map(variable => variable.id), [f.state.catalog[1].id]]);
+  assert.equal(f.calls.gemma, 1);
+  const completedTask = f.state.tasks.find(item => item.id === task.id);
+  assert.equal(completedTask.error, null);
+  const completed = f.state.evaluations.find(evaluation => evaluation.id === completedTask.evaluationId);
+  assert.deepEqual(completed.results.find(item => item.variableId === retained[0].variableId), retained[0]);
+  assert.deepEqual(f.state.evaluations.find(evaluation => evaluation.id === partial.id), partial);
+  assert.deepEqual(f.state.evaluations.slice(0, historical.length), historical);
+});
+
 test('changed native instructions cannot be merged with an already retained decision', async () => {
   const f = fixture((variables, number) => ({ model: 'clef-synthetic', ...nativeMetadata(number, variables),
     ...(number > 1 ? { instructionsHash: 'b'.repeat(64) } : {}),

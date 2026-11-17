@@ -6,11 +6,13 @@ El alcance es la corrida del 11 de noviembre sobre actividad del 10 de noviembre
 
 La actualización continúa cada 30 segundos incluso después de completar los lotes para detectar asignaciones posteriores. El encabezado distingue la fecha de ejecución de la fecha de actividad. No se mezcla el resultado del 9 de noviembre.
 
-## Publicación sin interrupción
+## Publicación y workflow
 
-La operación `daily-activity-monitor` de `.github/workflows/deploy-pulso-atom.yml` instala solo los archivos compilados del dashboard. No hace pull de main, no recompila el portal en el servidor, no cambia base de datos o modelos y no reinicia procesos. El instalador valida inventario, tipos de archivos y hashes, rechaza enlaces simbólicos y respalda un monitor previo de su propiedad antes del reemplazo atómico.
+Esta rama conserva íntegro el workflow de `main`, dedicado exclusivamente al despliegue del portal. La operación `daily-activity-monitor` fue retirada y no se vuelve a incorporar. Fusionar esta rama no instala ni reemplaza automáticamente este monitor histórico: el despliegue normal conserva el directorio `web/dist/monitor-evaluaciones` que ya esté publicado.
 
-Se publica desde `codex/monitor-diario-hn-pa`, sin merge durante la corrida. El despliegue vigente de main conserva `web/dist/monitor-evaluaciones` al reconstruir el portal; también puede reinstalarse con la misma operación. No debe presentarse como un monitor genérico de otras fechas sin cambiar y verificar su alcance.
+Si se necesita publicar este corte histórico, DevOps debe revisar el artefacto `web/temporary-daily` y realizar su instalación por separado. Se conserva `api/scripts/install-daily-monitor.js` como utilidad manual; espera una copia del artefacto en `static-monitor`, junto al directorio `api` dentro del paquete temporal. Valida inventario, tipos de archivos y hashes, rechaza enlaces simbólicos y respalda un monitor previo de su propiedad antes del reemplazo atómico. La utilidad no cambia la base de datos ni reinicia procesos.
+
+Este corte y el monitor del jueves del PR #71 utilizan la misma dirección y son alternativas de publicación. No debe presentarse este monitor como uno genérico de otras fechas sin cambiar y verificar su alcance.
 
 ## Construcción y verificación
 

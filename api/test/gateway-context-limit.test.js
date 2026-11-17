@@ -72,7 +72,88 @@ test('outer HTTP errors are not parsed as upstream context errors and successful
   assert.deepEqual((await clientFor(envelope(payload, 200)).invoke(operation)).response, payload);
 });
 
-test('a context-limited Clef case stays partially unevaluated while another completes without retries, fallback or Gemma calls', async () => {
+const metalMemoryError = '[METAL] Command buffer execution failed: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)';
+
+test('explicit upstream memory failures become a sanitized resource limit, including a complete MLX traceback', async () => {
+  const traceback = `Traceback (most recent call last):\n  File "/synthetic/private/model.py", line 123, in generate\n    private_value = "${base.token}"\nRuntimeError: ${metalMemoryError}`;
+  for (const body of [
+    { error: { code: 'out_of_memory' } }, { error: { code: 'insufficient_memory' } },
+    { message: 'RuntimeError: out of memory' }, { error: metalMemoryError },
+    { error: { message: traceback } }, { detail: { error: { message: `RuntimeError: ${metalMemoryError}` } } },
+  ]) {
+    await assert.rejects(clientFor(envelope(body)).invoke(operation), error => {
+      assert.equal(error.code, 'AI_RESOURCE_LIMIT');
+      assert.equal(error.message, 'El modelo no tiene memoria suficiente para esta solicitud. Se requiere reducir el checklist o revisar su capacidad.');
+      assert.equal(error.details, undefined);
+      assert.doesNotMatch(JSON.stringify(error) + error.message, /PRIVATE_SYNTHETIC_TOKEN|gateway\.synthetic|model\.py|00000008|Traceback|RuntimeError/);
+      return true;
+    });
+  }
+});
+
+test('nested LM Studio prediction wrappers recognize only a terminal Metal memory traceback', async () => {
+  const traceback = `Traceback (most recent call last):\n  File "/synthetic/private/model.py", line 123, in generate\n    private_value = "${base.token}"\nRuntimeError: ${metalMemoryError}`;
+  const prefix = 'Error in MLX prediction: Error in the MLX generation: ';
+  for (const wrapped of [
+    `${prefix}"${traceback}"`, `${prefix}${JSON.stringify(traceback)}`,
+    `${prefix}RuntimeError('${traceback.replaceAll('\n', '\\n')}\\n')`,
+  ]) for (const status of [400, 500, 503]) {
+    await assert.rejects(clientFor(envelope({ error: wrapped }, status)).invoke(operation), error => {
+      assert.equal(error.code, 'AI_RESOURCE_LIMIT');
+      assert.equal(error.details, undefined);
+      assert.doesNotMatch(JSON.stringify(error) + error.message, /PRIVATE_SYNTHETIC_TOKEN|model\.py|Traceback|RuntimeError|00000008/);
+      return true;
+    });
+  }
+  for (const error of [
+    `Invalid schema. Quoted provider text: ${prefix}${JSON.stringify(traceback)}`,
+    `${prefix}${JSON.stringify(traceback)} but the actual error is invalid schema.`,
+    `${prefix}"${metalMemoryError}"`,
+    `${prefix}Traceback (most recent call last):\nRuntimeError: Request quota exhausted.`,
+    `${prefix}Traceback (most recent call last):\nRuntimeError: out of memory'`,
+  ]) await assert.rejects(clientFor(envelope({ error })).invoke(operation), { code: 'AI_CONFIGURATION' });
+});
+
+test('ordinary 400s, quotas and quoted memory errors never become resource limits', async () => {
+  for (const body of [
+    { error: 'Bad request' }, { error: 'Invalid JSON schema: out of memory' },
+    { error: { code: 'resource_exhausted', message: 'Request quota exhausted.' } },
+    { error: { code: 'invalid_request', message: 'The memory field must be an integer.' } },
+    { error: 'The server does not report an out of memory error.' },
+    { error: `Invalid request. Quoted transcript: "${metalMemoryError}"` },
+    { error: 'Invalid request. Quoted transcript:\nRuntimeError: out of memory\nEnd of quoted input.' },
+    { error: `Quoted conversation:\n${metalMemoryError}` },
+    { error: `"${metalMemoryError}" was supplied in the user content.` },
+    { prompt: metalMemoryError }, { messages: [{ content: metalMemoryError }] },
+    { error: { content: metalMemoryError } }, { error: { details: { transcript: metalMemoryError } } },
+    { error: [{ message: metalMemoryError }] },
+    { error: { error: { error: { error: { message: metalMemoryError } } } } },
+    { error: metalMemoryError + 'x'.repeat(8192) },
+  ]) {
+    await assert.rejects(clientFor(envelope(body)).invoke(operation), { code: 'AI_CONFIGURATION' });
+  }
+});
+
+test('memory classification is confined to failed upstream chat responses', async () => {
+  const body = { error: { code: 'out_of_memory' } };
+  for (const status of [401, 403, 404]) {
+    await assert.rejects(clientFor(envelope(body, status)).invoke(operation), { code: 'AI_CONFIGURATION' });
+  }
+  for (const status of [408, 429]) {
+    await assert.rejects(clientFor(envelope(body, status)).invoke(operation), { code: 'AI_TRANSIENT' });
+  }
+  for (const changed of [{ method: 'GET', path: '/v1/models' }, { method: 'POST', path: '/v1/systemone' }]) {
+    await assert.rejects(clientFor(envelope(body, 400, changed)).invoke({ ...operation, ...changed }), { code: 'AI_CONFIGURATION' });
+  }
+  let read = false;
+  const client = new GatewayApiClient({ ...base, fetchImpl: async () => ({ status: 400, ok: false,
+    async json() { read = true; return envelope(body); } }) });
+  await assert.rejects(client.invoke(operation), { code: 'AI_CONFIGURATION' });
+  assert.equal(read, false);
+  assert.deepEqual((await clientFor(envelope(body, 200)).invoke(operation)).response, body);
+});
+
+test('a Clef case exceeding even a single-variable request stays partial without fallback or Gemma calls', async () => {
   const state = createState(false), calls = [], maintenanceId = 'synthetic-context-maintenance';
   const flags = state.catalog.filter(v => v.active && !v.retired && v.type === 'Flag' && v.method === 'IA').slice(0, 2);
   const codeVariable = state.catalog.find(v => v.active && !v.retired && supportsCodeVariable(v));
@@ -110,7 +191,7 @@ test('a context-limited Clef case stays partially unevaluated while another comp
   }, async transaction(fn) { const draft = structuredClone(state), result = await fn(draft); Object.assign(state, draft); return structuredClone(result); } };
   const execution = await resumeEvaluationBatch(store, registry, job.id, { profileIds: ['clef-local'] });
   assert.equal((await execution.completion).status, 'partial');
-  assert.deepEqual(calls, ['large', 'small']);
+  assert.deepEqual(calls, ['large', 'large', 'small']);
   const large = state.tasks.find(t => t.id === 'large-clef-local'), small = state.tasks.find(t => t.id === 'small-clef-local');
   assert.equal(large.status, 'partial'); assert.equal(large.error.code, 'AI_CONTEXT_LIMIT');
   assert.equal(small.status, 'completed');

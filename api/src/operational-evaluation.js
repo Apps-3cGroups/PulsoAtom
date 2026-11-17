@@ -1,5 +1,12 @@
 import { sourceFingerprint } from './evaluation-context.js';
 
+export function evaluationMatchesPrompt(evaluation, task, job) {
+  if (!job?.promptSnapshot) return true;
+  const expected = job.promptSnapshot.profiles[task?.profile.id]?.hash;
+  return !!expected && evaluation?.modelPromptHash === expected && task.context.modelPromptHash === expected
+    && evaluation.promptHash === job.promptSnapshot.hash;
+}
+
 // Derive one operational result without modifying either provider's stored answer.
 const equivalent = (a, b) => a.conversationId === b.conversationId && ['sourceHash', 'catalogHash', 'promptHash', 'rulesVersion'].every(key => a[key] && a[key] === b[key]);
 const conclusive = r => r?.status === 'evaluado' && [0, 1].includes(r.value);
@@ -132,7 +139,9 @@ export function operationalEvaluation(state, anchor) {
   const evaluations = dual ? job.modelProfiles.map(profile => {
     const task = tasks.find(t => t.profile.id === profile.id);
     const evaluation = state.evaluations.find(e => e.id === task?.evaluationId && e.jobId === job.id
-      && e.taskId === task?.id && e.profileId === profile.id && equivalent(e, anchor) && evaluationMatchesProfile(e, profile));
+      && e.taskId === task?.id && e.profileId === profile.id
+      && evaluationMatchesPrompt(e, task, job)
+      && equivalent(e, anchor) && evaluationMatchesProfile(e, profile));
     return { profile, task, evaluation };
   }) : cohort?.participants;
   if (!evaluations) {

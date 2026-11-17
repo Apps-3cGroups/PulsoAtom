@@ -1,43 +1,53 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, Select, Tooltip } from 'antd';
-import { ArrowRightOutlined, AppstoreOutlined, CalendarOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
+import { conversationClock } from '../services/conversationTime';
+import { countryLabel } from '../services/presentationText';
+import { conversationLink } from '../services/conversationNavigation';
+import { selectedCountries, selectedFigures, figureKinds, cleanOverviewParams, filterSummaryConversations, summaryMetrics } from '../services/summaryFilters';
+import { useEffect, useMemo, useRef } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Button, ConfigProvider, Tooltip } from 'antd';
+import { AppstoreOutlined, CalendarOutlined, InfoCircleOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
-import { PageHeading, LoadingState, ErrorState, EmptyState, Mark, DualBadge, dateText, timeText } from '../components/common';
+import { LoadingState, ErrorState, EmptyState, Mark, dateText } from '../components/common';
 import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../services/summaryDates';
+import { summaryRangeLabel, summaryPercentage } from '../services/summaryPresentation';
 import { buildSummaryLanes } from '../services/summaryMap';
-import { classificationOf, dualMarks, flagVariables, markKind, noVisibleFlagsLabel, evaluationStatus, evaluationStatusLabel, evaluationCoverage } from '../services/flags';
+import CompactSummaryMap from '../components/CompactSummaryMap';
+import { CountrySelect, ExceptionsFilter } from '../components/ExceptionControls';
+import { useAppearance } from '../appearance';
+import { classificationOf, dualMarks, markKind, noVisibleFlagsLabel, evaluationStatus, evaluationStatusLabel } from '../services/flags';
+import './Summary.css';
 
-const legends = [['critical', 'Crítico'], ['normal', 'Normal'], ['positive', 'Positivo'], ['refuted', 'Refutado'], ['human', 'Humano']];
-const variableOptions = catalog => [
-  { label: 'Todas las variables', value: 'all' },
-  ...[
-    ['Críticos', variable => classificationOf(variable) === 'critical'],
-    ['Normales', variable => classificationOf(variable) === 'normal'],
-    ['Positivos', variable => classificationOf(variable) === 'positive'],
-  ].map(([label, predicate]) => ({
-    label: <span className={`variable-group-heading group-${label.toLowerCase()}`}><span className="variable-group-dot" aria-hidden="true" />{label}</span>,
-    options: flagVariables(catalog).filter(predicate).map(variable => ({ label: variable.name, value: variable.id })),
-  })).filter(group => group.options.length),
-];
+const countTooltip = (count, total, description) => <div className="summary-stat-tooltip">
+  <strong>{count.toLocaleString('es-HN')} {count === 1 ? 'conversación' : 'conversaciones'} {description}</strong>
+  <span>{total ? `De ${total.toLocaleString('es-HN')} ${total === 1 ? 'conversación visible' : 'conversaciones visibles'}.` : 'No hay conversaciones con estos filtros.'}</span>
+</div>;
 export default function Summary() {
   const { bootstrap } = usePortal();
+  const { fontScale } = useAppearance();
   const navigate = useNavigate();
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const mapRef = useRef(null);
-  const [country, setCountry] = useState();
-  const [variable, setVariable] = useState();
-  const [classification, setClassification] = useState('all');
-  const [agreement, setAgreement] = useState('all');
-  const [visible, setVisible] = useState(legends.map(([kind]) => kind));
+  const countries = selectedCountries(params, bootstrap.countries);
+  const classification = 'all';
+  const visible = selectedFigures(params);
+  const patchFilters = values => setParams(previous => {
+    const next = cleanOverviewParams(previous);
+    for (const [key, value] of Object.entries(values)) value == null ? next.delete(key) : next.set(key, value);
+    return next;
+  });
+  useEffect(() => {
+    const next = cleanOverviewParams(params);
+    if (next.toString() !== params.toString()) setParams(next, { replace: true });
+  }, [params, setParams]);
   const { from, to, preset } = resolveSummaryRange({
     days: params.get('days'),
     latest: bootstrap.activityDateRange?.max || bootstrap.dateRange.max,
-    mode: bootstrap.mode, timezone: bootstrap.timezone,
+    mode: bootstrap.mode, timezone: 'America/Tegucigalpa',
   });
-  const summaryPath = `/summary?${queryString({ from, to, country, variable, classification, agreement, dateBasis: 'activity' })}`;
-  const { data, dataPath, loading, error, reload } = useApi(summaryPath);
+  const summaryPath = `/summary?${queryString({ from, to, countries: countries.join(','), dateBasis: 'activity' })}`;
+  const { data, dataPath, loading, error, reload } = useApi(summaryPath, { timeoutMs: 60000 });
   const waiting = loading || dataPath !== summaryPath;
   const current = !waiting && !error ? data : null;
   const window = useMemo(() => summaryDayWindow({ from, to }), [from, to]);
@@ -45,46 +55,54 @@ export default function Summary() {
   useEffect(() => { mapRef.current?.scrollTo(0, 0); }, [from, to]);
   const changeRange = values => {
     setParams(previous => {
-      const next = new URLSearchParams(previous);
+      const next = cleanOverviewParams(previous);
       ['from', 'to', 'days'].forEach(key => next.delete(key));
       for (const [key, value] of Object.entries(values)) next.set(key, String(value));
       return next;
     }, { replace: true });
   };
-  const open = c => navigate(`/conversacion/${encodeURIComponent(c.id)}`);
+  const open = c => navigate(conversationLink(c.id, `${location.pathname}${location.search}`));
   const openHistory = code => navigate(`/historico?${queryString({ from, to, country: code, dateBasis: 'activity' })}`);
-  const toggle = kind => setVisible(current => current.includes(kind) ? current.filter(v => v !== kind) : [...current, kind]);
-  const metrics = current?.metrics;
-  const coverage = evaluationCoverage(current?.conversations || []);
-  const groups = useMemo(() => buildSummaryLanes(current?.conversations || [], bootstrap.countries, days), [current, bootstrap.countries, days]);
-  const slots = Math.max(1, ...groups.flatMap(g => g.agents.flatMap(a => days.map(day => a.byDay[day].length))));
-  const rows = groups.reduce((n, g) => n + g.agents.length + 1, 0);
+  const toggle = kind => patchFilters({ figures: (visible.includes(kind) ? visible.filter(v => v !== kind) : [...visible, kind]).join(',') });
+  const filtered = useMemo(() => filterSummaryConversations(current?.conversations || [], visible), [current, visible.join(',')]);
+  const metrics = current ? summaryMetrics(filtered) : null;
+  const flagPercentage = summaryPercentage(metrics?.withAlerts, metrics?.total);
+  const positivePercentage = summaryPercentage(metrics?.withPositives, metrics?.total);
+  const groups = useMemo(() => buildSummaryLanes(filtered, bootstrap.countries, days), [filtered, bootstrap.countries, days]);
   return <div className={`summary-page ${preset === 30 ? 'summary-month' : ''}`}>
-    <PageHeading eyebrow="VISIÓN REGIONAL" title="Resumen de conversaciones" description="Flags automáticos con coincidencia de ambos modelos y revisiones humanas." actions={<div className="summary-heading-actions">
-      <div className="period-note"><CalendarOutlined /><span>{dateText(from)} — {dateText(to)}</span><Tooltip title="Actualizar resumen"><Button type="text" size="small" aria-label="Actualizar resumen" icon={<ReloadOutlined />} disabled={loading} onClick={reload} /></Tooltip></div>
-      <Tooltip title="Cada chat aparece una vez, en el día de su última actividad registrada en Atom, aunque haya comenzado antes."><span className="small muted">Por última actividad</span></Tooltip>
-    </div>} />
-    <div className="metrics-grid" aria-busy={waiting}>
-      <Metric value={metrics?.total.toLocaleString('es-HN') ?? '—'} label="Conversaciones" detail={metrics ? `${metrics.evaluated} con resultados · ${metrics.pending} sin evaluar` : waiting ? 'Consultando período…' : 'Sin datos disponibles'} title={`${coverage.evaluated} evaluadas · ${coverage.review_pending} por completar con ambos modelos · ${coverage.partial} evaluadas con incidencias. Las variables sin datos suficientes no indican una ejecución pendiente.`} />
-      <Metric value={metrics?.alertPercent == null ? '—' : `${metrics.alertPercent}%`} label="Con flags de atención" detail={metrics ? `${metrics.withAlerts} conversaciones con flags vigentes` : 'Resultados del período'} accent title="Conversaciones evaluadas con al menos un flag crítico o normal vigente, de la IA o de una revisión humana, divididas entre conversaciones evaluadas del período." />
-      <Metric value={metrics?.refutedPercent == null ? '—' : `${metrics.refutedPercent}%`} label="Alertas refutadas" detail={metrics ? 'Revisiones sobre alertas detectadas por IA' : 'Revisiones del período'} title="Refutaciones sobre flags automáticos con doble detección más refutaciones históricas conservadas. No incluye detecciones individuales." />
-      <Metric value={current ? current.conversations.filter(c => c.human > 0).length : '—'} label="Con revisión humana" detail="Conversaciones con flags humanos" />
-      <Metric value={metrics?.withPositives ?? '—'} label="+ Con positivos" detail="Conversaciones con buenos resultados" positive />
+    <h1 className="visually-hidden">Resumen de conversaciones</h1>
+    <div className="summary-stats-bar">
+      <div className="summary-totals" aria-label="Indicadores de las conversaciones visibles" aria-busy={waiting}>
+        <div className="summary-stat-card"><span className="summary-stat-label">Conversaciones</span><strong>{metrics?.total.toLocaleString('es-HN') ?? '—'}</strong></div>
+        <Tooltip trigger={['hover', 'focus']} placement="bottom" title={metrics ? countTooltip(metrics.withAlerts, metrics.total, 'con flags de atención') : null}>
+          <div className="summary-stat-card summary-total-flags" tabIndex={metrics ? 0 : undefined} aria-label={`Con flags: ${flagPercentage}`}><span className="summary-stat-label">Con flags <InfoCircleOutlined aria-hidden="true" /></span><strong>{flagPercentage}</strong></div>
+        </Tooltip>
+        <Tooltip trigger={['hover', 'focus']} placement="bottom" title={metrics ? countTooltip(metrics.withPositives, metrics.total, 'con resultados positivos') : null}>
+          <div className="summary-stat-card summary-total-positive" tabIndex={metrics ? 0 : undefined} aria-label={`Positivos: ${positivePercentage}`}><span className="summary-stat-label">+ Positivos <InfoCircleOutlined aria-hidden="true" /></span><strong>{positivePercentage}</strong></div>
+        </Tooltip>
+      </div>
+      <div className="summary-range-actions">
+        <Tooltip trigger={['hover', 'focus']} title={`${bootstrap.mode === 'demo' ? 'La demo conserva su último día de datos como fecha de corte.' : 'El Resumen muestra los días hasta ayer, según la hora de Honduras; no incluye hoy.'} Cada chat aparece una vez, en el día de su última actividad registrada en Atom, aunque haya comenzado antes.`}><span className="summary-range" tabIndex={0}><CalendarOutlined /><span>{summaryRangeLabel(from, to)}</span></span></Tooltip>
+        <Button type="text" size="small" aria-label="Actualizar resumen" title="Actualizar resumen" icon={<ReloadOutlined />} loading={loading} onClick={reload} />
+      </div>
     </div>
-    <section className="overview-panel"><div className="overview-header"><div><div className="eyebrow">MAPA DE CONVERSACIONES</div><h2>La atención, en perspectiva</h2></div><span className="muted small"><AppstoreOutlined /> Cada rectángulo es una conversación</span></div><div className="overview-controls">
-      <div className="control-group"><span className="control-label">PERÍODO</span><div className="segmented-range">{SUMMARY_PRESETS.map(value => <button key={value} aria-pressed={preset === value} onClick={() => changeRange({ days: value })}>{value === 1 ? 'Hoy' : `${value} días`}</button>)}</div></div>
-      <Select aria-label="País del resumen" value={country || 'all'} onChange={value => setCountry(value === 'all' ? undefined : value)} options={[{ label: 'Todos los países', value: 'all' }, ...bootstrap.countries.map(c => ({ label: c.name, value: c.code }))]} style={{ minWidth: 170 }} />
-      <Select aria-label="Variable visible en el mapa" value={variable || 'all'} onChange={value => setVariable(value === 'all' ? undefined : value)} showSearch optionFilterProp="label" options={variableOptions(bootstrap.catalog)} className="map-variable" classNames={{ popup: { root: 'summary-variable-menu' } }} />
-    </div><div className="map-legend"><span className="control-label">FIGURAS VISIBLES</span>{legends.map(([kind, label]) => <button key={kind} className={`legend-toggle ${visible.includes(kind) ? 'selected' : ''}`} aria-pressed={visible.includes(kind)} onClick={() => toggle(kind)}><Mark kind={kind} />{label}</button>)}<Select size="small" aria-label="Clasificación del resumen" value={classification} onChange={setClassification} options={[{ value: 'all', label: 'Todos los flags' }, { value: 'critical', label: 'Críticos' }, { value: 'normal', label: 'Normales' }, { value: 'positive', label: '+ Positivos' }]} /><button className={`legend-toggle dual-toggle ${agreement === 'both' ? 'selected' : ''}`} aria-pressed={agreement === 'both'} onClick={() => setAgreement(agreement === 'both' ? 'all' : 'both')}><DualBadge compact />Detectado por ambos</button><Tooltip title="El borde discontinuo señala falta de evaluación, revisión pendiente o incidencias. El detalle conserva el estado y los resultados de ambos modelos."><span className="not-evaluated-legend"><i aria-hidden="true" />Pendiente / parcial</span></Tooltip></div>
-      {error ? <ErrorState error={error} retry={reload} /> : waiting || !current ? <LoadingState /> : !metrics.total ? <EmptyState description="No hay conversaciones cuya última actividad esté en este período. Prueba otro período o ajusta los filtros." /> : <div ref={mapRef} className="conversation-map" style={{ '--days': days.length, '--day-slots': slots, '--map-rows': rows }}><div className="map-scroll"><div className="map-head"><div className="map-name-head">PAÍS / ASISTENTE DE VENTA</div><div className="map-day-heads">{days.map((day, i) => <div key={day} className={i === 0 ? 'latest-day' : ''}><span title={dateText(day)}>{preset === 30 ? i === 0 ? 'Hoy' : i % 7 === 0 ? dateText(day, { year: undefined }) : '' : <>{i === 0 ? 'Hasta · ' : ''}{dateText(day, { year: undefined, weekday: 'short' })}</>}</span></div>)}</div></div>{groups.map(group => {
-        return <section className="country-lanes" key={group.code}><div className="country-title"><button onClick={() => openHistory(group.code)}>{group.name}<span className="country-code">{group.code}</span><RightOutlined /></button></div>{group.agents.map(agent => <div className="agent-lane" key={agent.id}><div className="lane-name" title={agent.name}><span className="agent-dot" /><span>{agent.name}</span></div><div className="lane-days">{days.map(day => <div className="day-cells" key={day}>{agent.byDay[day].map(c => {
-          const marks = c.marks.filter(m => (visible.includes(markKind(m)) || visible.includes(classificationOf(m)) && m.effective) && (!variable || m.id === variable) && (classification === 'all' || classificationOf(m) === classification));
+    <ConfigProvider theme={{
+      // Keep filter options above map tooltips so overlapping hints cannot intercept clicks.
+      components: { Select: { zIndexPopup: 1100 } },
+      ...(preset === 30 ? { token: { colorBgBase: '#f8fafc', colorBgContainer: '#ffffff', colorTextBase: '#243449', colorPrimary: '#5267a3', colorBorder: '#d5dde7', colorTextPlaceholder: '#69788a', controlHeight: 30 * fontScale } } : {}),
+    }}><section className="overview-panel"><div className="summary-controls" aria-label="Filtros del resumen">
+      <div className="summary-figures"><ExceptionsFilter kinds={figureKinds} selected={visible} onToggle={toggle} /><span className="summary-map-hint"><AppstoreOutlined />{preset === 30 ? 'Cada rectángulo es una conversación o grupo' : 'Cada rectángulo es una conversación'}</span></div>
+      <div className="control-group summary-period"><span className="control-label">PERÍODO</span><div className="segmented-range">{SUMMARY_PRESETS.map(value => <button key={value} aria-pressed={preset === value} onClick={() => changeRange({ days: value })}>{value === 1 ? 'Ayer' : `${value} días`}</button>)}</div></div>
+      <CountrySelect label="Países del resumen" countries={bootstrap.countries} value={countries} onChange={values => patchFilters({ countries: values.length ? values.sort().join(',') : null })} />
+    </div>
+      {error ? <ErrorState error={error} retry={reload} /> : waiting || !current ? <LoadingState /> : !metrics.total ? <div><EmptyState title={visible.length ? "Sin coincidencias" : "Ninguna excepción seleccionada"} description={visible.length ? "No hay conversaciones evaluadas que coincidan con el período y los filtros." : "Selecciona alguna excepción para mostrar conversaciones."} /><Button className="reset-figures" onClick={() => patchFilters({ figures: null })}>Restablecer excepciones</Button></div> : preset === 30 ? <CompactSummaryMap groups={groups} days={days} visible={visible} classification={classification} onOpen={open} onHistory={openHistory} /> : <div ref={mapRef} className="conversation-map" style={{ '--days': days.length }}><div className="map-scroll"><div className="map-head"><div className="map-name-head">PAÍS / ASISTENTE DE VENTA</div><div className="map-day-heads">{days.map((day, i) => <div key={day} className={i === 0 ? 'latest-day' : ''}><span title={dateText(day)}><>{i === 0 ? 'Hasta · ' : ''}{dateText(day, { year: undefined, weekday: 'short' })}</></span></div>)}</div></div>{groups.map(group => {
+        return <section className="country-lanes" key={group.code}><div className="country-title"><button onClick={() => openHistory(group.code)}>{countryLabel(group.code, group.name)}<span className="country-code">{group.code}</span><RightOutlined /></button></div>{group.agents.map(agent => <div className="agent-lane" key={agent.id}><div className="lane-name" title={agent.name}><span className="agent-dot" /><span>{agent.name}</span></div><div className="lane-days">{days.map(day => <div className="day-cells" key={day}>{agent.byDay[day].map(c => {
+          const marks = c.marks.filter(m => (visible.includes(markKind(m)) || visible.includes(classificationOf(m)) && m.effective) && (classification === 'all' || classificationOf(m) === classification));
           const kinds = [...new Set(marks.flatMap(m => m.kind === 'refuted' ? ['refuted'] : [classificationOf(m), ...(m.origin === 'human' || m.kind === 'human' ? ['human'] : [])]).filter(kind => visible.includes(kind)))];
-          const agreed = dualMarks(c, variable).filter(m => classification === 'all' || classificationOf(m) === classification);
+          const agreed = dualMarks(c).filter(m => classification === 'all' || classificationOf(m) === classification);
           const status = evaluationStatus(c), pending = status !== 'evaluated';
-          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {dateText(c.displayDate, { year: undefined })} · {timeText(c.displayAt)} · {c.channel}</span><strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>Detectado por ambos modelos: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} status-${status} ${agreed.length ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => preset === 30 ? <span key={kind} className="compact-cell-mark" aria-hidden="true"><Mark kind={kind} small /><span className={`cell-stripe stripe-${kind}`} /></span> : <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
+          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {conversationClock(c).dateTime(c.displayAt)} · {c.channel}</span><span>{conversationClock(c).label}</span><strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ') : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>Detectado por ambos modelos: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} status-${status} ${agreed.length ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
         })}</div>)}</div></div>)}</section>;
-      })}</div></div>}<div className="map-footer"><span><span className="mini-rectangle" />Sin flags visibles · consulta el detalle</span><span>Más reciente a la izquierda <ArrowRightOutlined /> más antiguo</span></div></section>
+      })}</div></div>}</section></ConfigProvider>
   </div>;
 }
-function Metric({ value, label, detail, accent, positive, title }) { return <Tooltip title={title}><div className={`metric-card ${accent ? 'metric-attention' : ''} ${positive ? 'metric-positive' : ''}`}><div className="metric-label">{label}{accent && <span className="attention-dot" />}</div><strong>{value}</strong><div className="metric-detail">{detail}</div></div></Tooltip>; }
