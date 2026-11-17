@@ -109,6 +109,27 @@ test('country and global pause controls are audited without deleting work', asyn
   await f.admin.get(`${base}/evaluations/automation`).expect(200);
 });
 
+test('prefilled item criteria persist and reach both model previews without truncation or changing other prompts', async t => {
+  const f = await setup(t);
+  const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  const item = current.checklist.find(v => v.method === 'IA');
+  const text = `Definición: ${'D'.repeat(5000)}\nCondición: ${'C'.repeat(5000)}`;
+  const automation = structuredClone(current.automation);
+  automation.prompts.byItem[item.id] = { mode: 'shared', shared: text };
+  const saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: current.settings.version, automation }).expect(200)).body;
+  const persisted = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  assert.equal(persisted.automation.prompts.byItem[item.id].shared, text);
+  assert.equal(persisted.automation.prompts.shared, current.automation.prompts.shared);
+  const preview = (await f.admin.post(`${base}/evaluations/settings/preview`).set('Origin', f.config.origin)
+    .send({ automation: saved.automation }).expect(200)).body;
+  assert.ok(preview.profiles.every(p => p.itemPrompts[item.id] === text));
+  automation.prompts.byItem[item.id].shared = 'X'.repeat(12001);
+  await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: saved.settings.version, automation }).expect(422);
+  assert.equal((await f.store.read()).settings.version, saved.settings.version);
+});
+
 test('Atom detection queries message activity without loading transcript text and distinguishes load metadata', async () => {
   const reader = Object.create(AtomReader.prototype);
   reader.tables = { conversations: '`conversations`', documents: '`documents`', countries: '`countries`', batches: '`batches`', events: '`events`' };

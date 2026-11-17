@@ -10,8 +10,8 @@ const countryCode = z.string().regex(/^[A-Z]{2}$/);
 const positive = max => z.number().int().min(1).max(max);
 const prompt = z.string().trim().min(1).max(30000);
 const itemPromptSchema = z.object({
-  mode: z.enum(['inherit', 'shared', 'per-model']), shared: z.string().trim().max(6000).default(''),
-  byModel: z.object({ 'clef-local': z.string().trim().max(6000).default(''), 'gemma-local': z.string().trim().max(6000).default('') }).strict().default({}),
+  mode: z.enum(['inherit', 'shared', 'per-model']), shared: z.string().trim().max(12000).default(''),
+  byModel: z.object({ 'clef-local': z.string().trim().max(12000).default(''), 'gemma-local': z.string().trim().max(12000).default('') }).strict().default({}),
 }).strict().superRefine((value, context) => {
   if (value.mode === 'shared' && !value.shared) context.addIssue({ code: 'custom', path: ['shared'], message: 'Escribe el prompt compartido del ítem.' });
   if (value.mode === 'per-model') for (const id of AUTOMATION_MODELS) if (!value.byModel[id]) context.addIssue({ code: 'custom', path: ['byModel', id], message: 'Escribe el prompt de cada modelo para este ítem.' });
