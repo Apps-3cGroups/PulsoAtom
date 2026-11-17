@@ -133,24 +133,18 @@ test('working tree guard rejects every unknown untracked or tracked change', asy
     await assert.rejects(assertSafeWorkingTree('/unused', () => changes), { code: 'DEPLOYMENT_WORKTREE_CHANGED' });
   }
 });
-test('workflow leases before checkout/dependencies/restart, releases only after health, and retains lease on failure', async () => {
+test('the deployment shell is valid and keeps its health checks without invoking retired recovery operations', async () => {
   const workflow = await readFile(new URL('../../.github/workflows/deploy-pulso-atom.yml', import.meta.url), 'utf8');
   const script = workflow.match(/\$remoteScript = @'\n([\s\S]*?)\n {10}'@/)?.[1];
   assert.ok(script);
-  const claim = script.indexOf('--claim --id');
-  assert.ok(claim > script.indexOf('git fetch origin main'));
-  assert.ok(claim > script.indexOf('"$(git rev-parse FETCH_HEAD)" = "$TARGET_SHA"'));
-  assert.ok(claim < script.indexOf('git merge --ff-only'));
-  assert.ok(claim < script.indexOf('npm ci --prefix "$API"'));
-  assert.ok(claim < script.indexOf('pm2 startOrReload'));
-  const release = script.indexOf('--release --id');
-  assert.ok(release > script.indexOf('Checking PulsoAtom health and web'));
-  assert.match(script, /--wait-idle-seconds 2700/);
-  const cleanup = script.match(/cleanup\(\) \{([\s\S]*?)\n {10}\}/)?.[1];
-  assert.match(cleanup, /Deployment maintenance retained/); assert.doesNotMatch(cleanup, /--release/);
   assert.match(workflow, /timeout-minutes: 60/);
-  assert.match(script, /--check-working-tree/);
-  assert.doesNotMatch(script, /git pull/);
+  assert.doesNotMatch(script, /git pull|deployment-lease\.mjs|--claim --id|--release --id/);
+  const restart = script.indexOf('pm2 startOrReload');
+  const health = script.indexOf('Waiting for API startup and its initialization transaction');
+  const onlineIndexes = script.indexOf('Applying online navigation indexes after API startup');
+  assert.ok(restart >= 0 && health > restart && onlineIndexes > health);
+  assert.match(script, /curl --fail --silent --show-error[^\n]+http:\/\/127\.0\.0\.1:4001\/pulsoAtom\/api\/health/);
+  assert.match(script, /curl --fail --silent --show-error[^\n]+http:\/\/127\.0\.0\.1:3000\/pulsoAtom\//);
   const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), 'pulso-deploy-shell-')));
   try {
     const file = path.join(directory, 'deploy.sh'); await writeFile(file, script.replace(/^ {10}/gm, ''));
