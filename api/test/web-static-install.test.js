@@ -106,16 +106,10 @@ test('artifact writer validates checksum and never overwrites reviewed output', 
   assert.equal(artifact.files.size, 3); assert.equal(f.result.indexSha256, sha256(html()));
   await assert.rejects(prepareStaticArtifact({ dist: f.build, output: f.source, expectedIndexSha256: sha256(html('old')) }), { code: 'EEXIST' });
 });
-test('workflow web-static-install is isolated and cannot select the full deploy job', async () => {
+test('static installation remains a manual utility outside the deployment workflow', async () => {
   const workflow = await readFile(new URL('../../.github/workflows/deploy-pulso-atom.yml', import.meta.url), 'utf8');
-  for (const pattern of [/options: \[([^\]]+)\]/, /\$env:GEMMA_OPERATION -cnotin @\(([^)]+)\)/, /\$useCheckoutSource = \$env:GEMMA_OPERATION -cin @\(([^)]+)\)/,
-    /gemma-check:\n\s+if: ([^\n]+)/, /uses: actions\/checkout@v4\n\s+if: ([^\n]+)/]) assert.ok(workflow.match(pattern)?.[1].includes('web-static-install'));
-  assert.match(workflow, /'web-static-install' \{ \$entryScript = 'scripts\/install-web-static\.js'; \$scriptArguments = '' \}/);
-  assert.match(workflow, /web\/temporary-static/); assert.match(workflow, /\$remoteRoot\/static-web/);
-  const staticBranch = workflow.match(/if \[ '\$env:GEMMA_OPERATION' = 'web-static-install' \]; then([\s\S]*?)\n {10}else/)?.[1];
-  assert.ok(staticBranch); assert.match(staticBranch, /exec node scripts\/install-web-static\.js/);
-  assert.doesNotMatch(staticBranch, /--env-file|node_modules|pm2|npm|git|\.env/);
-  assert.equal(workflow.match(/\n  deploy:\n\s+if: ([^\n]+)/)?.[1], "${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'deploy') }}");
-  assert.match(workflow, /push:\n\s+branches:\n\s+- main\n/);
-  assert.match(workflow, /group: deploy-pulso-atom-production\n\s+cancel-in-progress: false/);
+  assert.doesNotMatch(workflow, /web-static-install|scripts\/install-web-static\.js|\$remoteRoot\/static-web|web\/temporary-static/);
+  const script = await readFile(new URL('../scripts/install-web-static.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(script, /from ['"].*(?:store|mysql|evaluation-service)|child_process|pm2|execSync|spawn\(/);
+  assert.match(script, /installWebStatic/);
 });
