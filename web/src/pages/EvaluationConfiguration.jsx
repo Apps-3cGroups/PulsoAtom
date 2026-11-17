@@ -9,6 +9,7 @@ import { PageHeading, LoadingState, ErrorState, dateText } from '../components/c
 import LocalModelConfiguration from '../components/LocalModelConfiguration';
 import ChecklistPrompts, { resolvedItemPrompts } from '../components/ChecklistPrompts';
 import { jobStatus } from '../components/ModelControls';
+import { automationCountryRows } from '../services/automationCountries';
 import './evaluation-configuration.css';
 
 const modelNames = { 'clef-local': 'Clef', 'gemma-local': 'Gemma' };
@@ -73,7 +74,7 @@ export default function EvaluationConfiguration() {
   const controlsDisabled = busy || unknown;
   const runControl = country => mutate('/evaluations/automation/control', { expectedVersion: saved.settings.version,
     action: (country ? saved.automation.countries.find(c => c.code === country)?.paused : saved.automation.paused) ? 'resume' : 'pause', ...(country ? { country } : {}) });
-  const countryRows = draft.countries.map((c, index) => ({ ...c, index })).filter(c => `${c.name} ${c.code}`.toLowerCase().includes(countrySearch.toLowerCase()));
+  const countryRows = automationCountryRows(draft.countries, saved.countries, countrySearch);
   const field = (label, content, hint) => <label className="automation-field"><span>{label}</span>{content}{hint && <small>{hint}</small>}</label>;
   const integer = (path, label, min, max, suffix) => field(suffix ? `${label} (${suffix})` : label, <InputNumber aria-label={label} min={min} max={max} precision={0} value={path.reduce((o, k) => o[k], draft)} onChange={value => change(path, value)} disabled={controlsDisabled} />);
   return <div className="automation-page">
@@ -98,9 +99,9 @@ export default function EvaluationConfiguration() {
           {field('Selección de conversaciones', <Select aria-label="Selección de conversaciones" value={draft.selection} disabled={controlsDisabled} onChange={value => change(['selection'], value)} options={[{ value: 'random', label: 'Aleatoria reproducible' }, { value: 'newest', label: 'Actividad más reciente' }, { value: 'oldest', label: 'Actividad más antigua' }]} />)}
           {field('Incluir conversaciones abiertas', <Switch aria-label="Incluir conversaciones abiertas" checked={draft.includeOpen} disabled={controlsDisabled} onChange={value => change(['includeOpen'], value)} />, 'Sus resultados se identifican como provisionales.')}
         </div>
-        <p>Se revisa la actividad del día anterior entre las conversaciones disponibles. Ambos modelos comparten la selección; cada conversación consume un solo cupo.</p>
+        <p>Se muestran los países con conversaciones registradas en Atom. Se revisa la actividad del día anterior entre las conversaciones disponibles. Ambos modelos comparten la selección; cada conversación consume un solo cupo.</p>
         <Input.Search aria-label="Buscar país" placeholder="Buscar país" value={countrySearch} onChange={e => setCountrySearch(e.target.value)} className="automation-country-search" allowClear />
-        <Table rowKey="code" dataSource={countryRows} pagination={{ pageSize: 12, hideOnSinglePage: true }} scroll={{ x: 650 }} locale={{ emptyText: 'No hay países disponibles. Se incorporan automáticamente desde el catálogo de origen.' }} columns={[
+        <Table rowKey="code" dataSource={countryRows} pagination={{ pageSize: 12, hideOnSinglePage: true }} scroll={{ x: 650 }} locale={{ emptyText: countrySearch.trim() ? 'No hay países que coincidan con la búsqueda.' : 'No hay países con conversaciones registradas en Atom.' }} columns={[
           { title: 'País', render: (_, c) => <><strong>{c.name}</strong> <span className="muted">{c.code}</span></> },
           { title: 'Habilitado', render: (_, c) => <Switch aria-label={`Habilitar ${c.name}`} checked={c.enabled} disabled={controlsDisabled} onChange={value => change(['countries', c.index, 'enabled'], value)} /> },
           { title: 'Cupo diario', render: (_, c) => <InputNumber aria-label={`Cupo de ${c.name}`} value={c.dailyLimit} min={1} max={100000} precision={0} disabled={controlsDisabled} onChange={value => change(['countries', c.index, 'dailyLimit'], value)} /> },
