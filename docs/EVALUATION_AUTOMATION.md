@@ -6,7 +6,7 @@ Ruta administrativa: `/pulsoAtom/configuracion/evaluaciones`. Solo administrador
 
 La carga de Atom continúa completa a las 00:01 de Honduras. El detector consulta metadatos de documentos `LISTO`, referencias de ingesta y actividad del día anterior. Solo obtiene transcripciones de conversaciones seleccionadas. Las cargas parciales posteriores pueden completar el cupo.
 
-El catálogo de países procede de Atom: aquí se habilitan, pausan y editan sus cupos. Las altas se incorporan deshabilitadas mediante una revisión auditada. Desaparecer temporalmente de la fuente no borra su configuración. Las evaluaciones manuales no consumen este cupo.
+El listado incluye solo países con conversaciones registradas en Atom, no todo el catálogo corporativo mundial. No depende de la actividad de la jornada, del estado del documento ni de que la evaluación esté habilitada. Aquí se habilitan, pausan y editan sus cupos. Las altas se incorporan deshabilitadas mediante una revisión auditada. Desaparecer temporalmente de la fuente no borra su configuración. Las configuraciones anteriores conservan sus datos e historial, pero sus países sin operación no se muestran en el listado. Las evaluaciones manuales no consumen este cupo.
 
 `evaluation_daily_assignments` reserva una conversación por país y fecha de actividad. Las reservas y tareas se guardan en la misma transacción del almacén, protegida por el bloqueo existente y una clave única de MySQL. Reintentos, cambios de límite y reinicios no liberan cupos. El excedente queda fuera de muestra; nunca se convierte automáticamente en deuda del día siguiente.
 

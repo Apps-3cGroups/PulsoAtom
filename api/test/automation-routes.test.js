@@ -103,3 +103,30 @@ test('Atom detection queries message activity without loading transcript text an
   assert.equal(queries[0].values[0].toISOString(), '2026-11-15T06:00:00.000Z');
   assert.equal(queries[0].values[1].toISOString(), '2026-11-16T06:00:00.000Z');
 });
+
+test('Atom country discovery requires an existing operation without filtering by day or document readiness', async () => {
+  const reader = Object.create(AtomReader.prototype);
+  reader.tables = { countries: '`corporate`.`countries`', conversations: '`atom`.`conversations`' };
+  let query;
+  reader.pool = { async query(sql) {
+    query = sql;
+    return [[{ code: 57, iso2: 'HN', name: 'Honduras' }, { code: 99, iso2: null, name: 'Sin código' }]];
+  } };
+  assert.deepEqual(await reader.readCountryCatalog(), [{ code: 'HN', name: 'Honduras', sourceCode: 57 }]);
+  assert.match(query, /FROM `corporate`\.`countries` p/);
+  assert.match(query, /WHERE EXISTS \(SELECT 1 FROM `atom`\.`conversations` c WHERE c\.CodigoPais = p\.CodigoPais\)/);
+  assert.doesNotMatch(query, /Fecha|Estado|LISTO|LIMIT/);
+});
+
+test('configuration offers every operating country, including those not yet enabled, without the world catalog', async t => {
+  const f = await setup(t);
+  const countries = [{ code: 'HN', name: 'Honduras' }, { code: 'PA', name: 'Panamá' }, { code: 'CR', name: 'Costa Rica' }];
+  f.store.readCountryCatalog = async () => countries;
+  await f.store.transaction(state => { state.settings.dailyCountries = ['HN', 'PA']; state.settings.dailyLimitPerCountry = 200; });
+  const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  assert.deepEqual(current.countries, countries);
+  assert.deepEqual(current.automation.countries.map(c => [c.code, c.enabled, c.dailyLimit]), [['HN', true, 200], ['PA', true, 200], ['CR', false, 100]]);
+  const saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: current.settings.version, automation: current.automation }).expect(200)).body;
+  assert.deepEqual(saved.automation.countries, current.automation.countries);
+});

@@ -136,7 +136,12 @@ export class AtomReader {
     return { conversations, countries, loadedAt: new Date().toISOString() };
   }
   async readCountryCatalog() {
-    const [rows] = await this.pool.query(`SELECT CodigoPais AS code, ISO_Code2 AS iso2, NombrePais AS name FROM ${this.tables.countries} ORDER BY NombrePais`);
+    // The corporate catalog contains every country. Keep only operations already
+    // represented in Atom, independently of today's activity or document status.
+    const [rows] = await this.pool.query(`SELECT p.CodigoPais AS code, p.ISO_Code2 AS iso2, p.NombrePais AS name
+      FROM ${this.tables.countries} p
+      WHERE EXISTS (SELECT 1 FROM ${this.tables.conversations} c WHERE c.CodigoPais = p.CodigoPais)
+      ORDER BY p.NombrePais`);
     return rows.filter(row => /^[A-Z]{2}$/.test(row.iso2 || '')).map(row => ({ code: row.iso2, name: row.name, sourceCode: Number(row.code) }));
   }
   async readAutomationSource({ date, timezone }) {
