@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { AppError } from '../src/errors.js';
-import { automationConfiguration, saveAutomationConfiguration, runtimeConfiguration, fingerprint } from '../src/automation-configuration.js';
-import { runAutomationTick, startAutomationWorker, automationClock } from '../src/automation-scheduler.js';
+import { automationConfiguration, saveAutomationConfiguration, runtimeConfiguration, fingerprint, countryCanRun } from '../src/automation-configuration.js';
+import { runAutomationTick, startAutomationWorker, automationClock, cancelAutomationJob, refreshAutomationJob } from '../src/automation-scheduler.js';
 import { startEvaluationBatch, resumeEvaluationBatch } from '../src/evaluation-service.js';
 import { operationalEvaluation } from '../src/operational-evaluation.js';
 import { selectAutomationCandidates, zonedDayBounds } from '../src/automation-source.js';
@@ -61,6 +61,113 @@ test('daily country quotas reserve unique conversations, share model membership,
   const report = automationMonitor(await f.store.read(), f.activityDate);
   assert.equal(report.countries.find(c => c.code === 'HN').outsideSample, 2);
   assert.equal(report.countries.find(c => c.code === 'CR').selected, 0);
+});
+
+async function queuedSingleConversation(f) {
+  await f.store.transaction(s => { s.settings.automation.countries.forEach(c => { c.enabled = c.code === 'HN'; c.dailyLimit = 1; }); });
+  const state = await f.store.read(), configuration = state.settings.automation;
+  return (await startEvaluationBatch(f.store, f.registry, { conversationIds: ['HN-0'], max: 1, pendingOnly: false,
+    modelIds, executionOrder: 'conversation-first', runtimeConfiguration: runtimeConfiguration(configuration),
+    automation: { activityDate: f.activityDate, runDate: automationClock(f.date, configuration.timezone).date,
+      configurationVersion: state.settings.version, configuration: structuredClone(configuration) } })).job;
+}
+
+test('a future activation blocks detection and queued workers until the exact persisted instant', async () => {
+  const f = fixture();
+  const job = await queuedSingleConversation(f);
+  const startsAt = new Date(f.date.getTime() + 60000).toISOString();
+  await f.store.transaction(s => { s.settings.automation.startsAt = startsAt; });
+  const source = f.store.readAutomationSource; let detections = 0;
+  f.store.readAutomationSource = async options => { detections++; return source.call(f.store, options); };
+  assert.equal(await f.tick(59999), null);
+  assert.equal(await startAutomationWorker(f.store, f.registry, job.id, new Date(f.date.getTime() + 59999)), null);
+  assert.equal(detections, 0); assert.equal(f.calls.length, 0);
+  await f.tick(60000);
+  const state = await f.store.read();
+  assert.equal(detections, 1); assert.equal(f.calls.length, 2);
+  assert.equal(state.jobs.find(j => j.id === job.id).status, 'completed');
+  assert.equal(state.settings.automation.startsAt, startsAt);
+  assert.equal(state.dailyAssignments.length, 1);
+});
+
+test('00:01 Honduras starts at 06:01 UTC, and a later global pause still applies', () => {
+  const settings = { automation: { enabled: true, paused: false, startsAt: '2026-11-19T06:01:00.000Z',
+    countries: [{ code: 'HN', enabled: true, paused: false }] } };
+  assert.equal(countryCanRun(settings, 'HN', new Date('2026-11-19T06:00:59.999Z')), false);
+  assert.equal(countryCanRun(settings, 'HN', new Date('2026-11-19T06:01:00.000Z')), true);
+  settings.automation.paused = true;
+  assert.equal(countryCanRun(settings, 'HN', new Date('2026-11-19T06:02:00.000Z')), false);
+});
+
+test('scheduling an active worker lets its request finish and prevents the next request', async () => {
+  const hold = gate(), started = gate();
+  const f = fixture(async () => { started.resolve(); await hold.promise; });
+  await f.store.transaction(s => { s.settings.automation.executionOrder = 'model-first'; });
+  const execution = await runAutomationTick(f.store, f.registry, f.date);
+  await started.promise;
+  await f.store.transaction(s => { s.settings.automation.startsAt = new Date(f.date.getTime() + 3600000).toISOString(); });
+  hold.resolve(); await execution.completion;
+  const state = await f.store.read();
+  assert.equal(f.calls.length, 1); assert.equal(state.evaluations.length, 1);
+  assert.equal(state.jobs[0].status, 'paused');
+  assert.equal(state.tasks.filter(t => t.status === 'completed').length, 1);
+});
+
+test('cancelled historical work cannot run or resume and preserves completed evidence', async () => {
+  const hold = gate(), started = gate();
+  const f = fixture(async () => { started.resolve(); await hold.promise; });
+  const job = await queuedSingleConversation(f);
+  const execution = await startAutomationWorker(f.store, f.registry, job.id, f.date);
+  await started.promise;
+  await assert.rejects(f.store.transaction(s => cancelAutomationJob(s, s.jobs.find(j => j.id === job.id), { reason: 'Solicitud del administrador', author: 'admin' })), { code: 'EVALUATION_RUNNING' });
+  await f.store.transaction(s => { s.settings.automation.paused = true; });
+  hold.resolve(); await execution.completion;
+  const before = await f.store.read();
+  assert.equal(before.evaluations.length, 1);
+  await f.store.transaction(s => {
+    const j = s.jobs.find(j => j.id === job.id);
+    cancelAutomationJob(s, j, { reason: 'No ejecutar pendientes anteriores', author: 'admin' }, f.date);
+    s.settings.automation.paused = false;
+    // Saving configuration or discovering a changed source cannot revive it.
+    refreshAutomationJob(s, j);
+    s.conversations[0].sourceUpdatedAt = f.date.toISOString();
+    j.sourceRecheckIds = ['HN-0'];
+  });
+  await f.tick();
+  await assert.rejects(resumeEvaluationBatch(f.store, f.registry, job.id), { code: 'AUTOMATION_CANCELLED' });
+  assert.equal(await startAutomationWorker(f.store, f.registry, job.id, new Date(f.date.getTime() + 86400000)), null);
+  const state = await f.store.read();
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(state.evaluations, before.evaluations);
+  assert.deepEqual(state.attempts, before.attempts);
+  assert.equal(state.jobs.find(j => j.id === job.id).status, 'cancelled');
+  assert.equal(state.jobs.find(j => j.id === job.id).completed, 1);
+  assert.equal(state.tasks.filter(t => t.status === 'deferred').length, 1);
+  assert.equal(automationMonitor(state, f.activityDate).jobs[0].cancellationReason, 'No ejecutar pendientes anteriores');
+});
+
+test('cancelling an already complete run leaves its history unchanged', async () => {
+  const f = fixture(); await f.tick();
+  const before = await f.store.read();
+  await f.store.transaction(s => cancelAutomationJob(s, s.jobs[0], { reason: 'Cancelación de pendientes', author: 'admin' }));
+  assert.deepEqual(await f.store.read(), before);
+});
+
+test('the next day selects only the new activity day and never reopens cancelled backlog', async () => {
+  const f = fixture(), job = await queuedSingleConversation(f);
+  const today = automationClock(f.date, 'America/Tegucigalpa').date;
+  const tomorrow = new Date(f.date.getTime() + 86400000);
+  await f.store.transaction(s => {
+    cancelAutomationJob(s, s.jobs.find(j => j.id === job.id), { reason: 'Omitir días anteriores', author: 'admin' });
+    s.settings.automation.startsAt = tomorrow.toISOString();
+    s.conversations.push({ ...s.conversations[0], id: 'HN-today', date: today, lastActivityAt: `${today}T12:00:00Z`, sourceUpdatedAt: `${today}T12:00:00Z` });
+  });
+  await f.tick(86400000 - 1); assert.equal(f.calls.length, 0);
+  await f.tick(86400000);
+  assert.deepEqual(f.calls.map(c => c.conversationId), ['HN-today', 'HN-today']);
+  const state = await f.store.read();
+  assert.equal(state.jobs.find(j => j.id === job.id).status, 'cancelled');
+  assert.equal(state.dailyAssignments.filter(a => a.activityDate === today).length, 1);
 });
 
 test('late imports fill only remaining slots and lowering quota never releases existing assignments', async () => {

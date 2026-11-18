@@ -18,6 +18,7 @@ const itemPromptSchema = z.object({
 });
 export const automationSchema = z.object({
   enabled: z.boolean(), paused: z.boolean(), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  startsAt: z.string().datetime({ offset: true }).nullable().optional(),
   timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; } }),
   countries: z.array(z.object({ code: countryCode, name: z.string().trim().min(1).max(120), enabled: z.boolean(), paused: z.boolean(), dailyLimit: positive(100000) }).strict()).max(300)
     .refine(rows => new Set(rows.map(c => c.code)).size === rows.length, 'Un país solo puede configurarse una vez.'),
@@ -161,10 +162,15 @@ export function reserveDailyAssignments(state, conversations, job) {
   }
 }
 
-export function countryCanRun(settings, country) {
+export function automationHasStarted(settings, date = new Date()) {
+  const startsAt = settings.automation?.startsAt;
+  return !startsAt || Date.parse(startsAt) <= date.getTime();
+}
+
+export function countryCanRun(settings, country, date = new Date()) {
   const config = settings.automation;
   const row = config?.countries.find(c => c.code === country);
-  return !!(config?.enabled && !config.paused && row?.enabled && !row.paused && !settings.evaluationMaintenance);
+  return !!(config?.enabled && !config.paused && row?.enabled && !row.paused && !settings.evaluationMaintenance && automationHasStarted(settings, date));
 }
 
 export function recordAutomationAlert(settings, { id, type, message, country = null, modelId = null, activityDate = null }, now = new Date()) {
