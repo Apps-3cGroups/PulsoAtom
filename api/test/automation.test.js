@@ -27,7 +27,7 @@ function fixture(handler) {
   const calls = [];
   const evaluator = (id, runtime) => ({ configured: true, withRuntime: runtime => evaluator(id, runtime), instructionsText: runtime?.promptText,
     async evaluate(conversation, variables) {
-      const call = { id, conversationId: conversation.id, prompt: runtime?.promptText, itemPrompts: runtime?.itemPrompts, text: conversation.messages[0].text }; calls.push(call);
+      const call = { id, conversationId: conversation.id, prompt: runtime?.promptText, itemPrompts: runtime?.itemPrompts, itemCriteria: runtime?.itemCriteria, text: conversation.messages[0].text }; calls.push(call);
       if (handler) await handler(call, state);
       return { model: registry.profiles.find(p => p.id === id).model, results: variables.map(v => ({ variableId: v.id, type: v.type, method: v.method, status: 'evaluado', value: 1, reason: 'Evidencia sintética.', evidence: [{ messageId: conversation.messages[0].id, quote: conversation.messages[0].text }] })) };
     } });
@@ -216,6 +216,36 @@ test('per-item prompts resolve independently, survive JSON key reordering and st
   const next = structuredClone(saved.settings.automation);
   next.prompts.byItem.unknown_item = { mode: 'shared', shared: 'Incorrecto' };
   await assert.rejects(f.store.transaction(s => saveAutomationConfiguration(s, { expectedVersion: s.settings.version, automation: next }, { name: 'Admin' }, f.countries)), { code: 'INVALID_PROMPT_ITEM' });
+});
+
+test('replacement criteria are model-specific, versioned and frozen while legacy additions keep their meaning', async () => {
+  let fail = true;
+  const f = fixture(call => { if (call.id === 'gemma-local' && fail) throw new AppError(502, 'Reintentar', 'AI_UNAVAILABLE'); });
+  const initial = await f.store.read(), [first, second] = initial.catalog;
+  assert.ok(!Object.hasOwn(runtimeConfiguration(initial.settings.automation)['clef-local'], 'itemCriteria'));
+  await f.store.transaction(s => {
+    s.settings.automation.prompts.byItem = {
+      [first.id]: { application: 'replace', mode: 'per-model', shared: '', byModel: { 'clef-local': 'Criterio Clef original', 'gemma-local': 'Criterio Gemma original' } },
+      [second.id]: { mode: 'shared', shared: 'Indicación adicional anterior' },
+    };
+  });
+  await f.tick();
+  const started = await f.store.read();
+  const originalHash = started.jobs[0].promptSnapshot.profiles['gemma-local'].hash;
+  await f.store.transaction(s => {
+    const automation = structuredClone(s.settings.automation);
+    automation.prompts.byItem[first.id].byModel['gemma-local'] = 'Criterio Gemma nuevo';
+    saveAutomationConfiguration(s, { expectedVersion: s.settings.version, automation }, { name: 'Admin' }, f.countries);
+  });
+  fail = false; await f.tick(31000);
+  assert.ok(f.calls.filter(c => c.id === 'clef-local').every(c => c.itemCriteria[first.id] === 'Criterio Clef original'));
+  assert.ok(f.calls.filter(c => c.id === 'gemma-local').every(c => c.itemCriteria[first.id] === 'Criterio Gemma original'));
+  assert.ok(f.calls.every(c => c.itemPrompts[first.id] === undefined && c.itemPrompts[second.id] === 'Indicación adicional anterior'));
+  const saved = await f.store.read();
+  assert.equal(saved.evaluations.length, 6);
+  assert.equal(saved.jobs[0].promptSnapshot.profiles['gemma-local'].hash, originalHash);
+  assert.equal(saved.jobs[0].promptSnapshot.profiles['gemma-local'].itemCriteria[first.id], 'Criterio Gemma original');
+  assert.equal(runtimeConfiguration(saved.settings.automation)['gemma-local'].itemCriteria[first.id], 'Criterio Gemma nuevo');
 });
 
 test('expired worker leases fence late responses and recovery retains a single saved result', async () => {

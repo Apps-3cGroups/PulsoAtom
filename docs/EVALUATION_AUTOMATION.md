@@ -14,19 +14,22 @@ La selección puede ser aleatoria reproducible, por actividad más reciente o m�
 
 ## Prompts por ítem
 
-Cada ítem del checklist evaluado con IA admite:
+El criterio del flag forma parte del prompt completo que recibe el modelo, junto con las instrucciones generales, las reglas de respuesta y los mensajes de la conversación. Al abrir un ítem se muestra su criterio en una caja editable: el texto personalizado guardado, o su definición y condición vigentes del catálogo cuando no tiene personalización.
 
-- Instrucciones generales y sus criterios existentes, sin instrucciones adicionales.
-- Un prompt del ítem compartido por Clef y Gemma.
-- Un prompt del ítem para Clef y otro para Gemma.
+Dos opciones de radio controlan a quién se aplica el texto:
 
-Los ítems calculados por código se identifican como tales. Las instrucciones del ítem solo se transmiten en su propia entrada del checklist; Clef nativo las recibe tanto al clasificar como al elegir evidencia. Las instrucciones generales también pueden compartirse o separarse por modelo. Ningún modelo recibe respuestas del otro.
+- «Prompt para ambos modelos»: una caja compartida por Clef y Gemma.
+- «Prompts separados»: una caja para Clef y otra para Gemma. Al separar por primera vez se copia el texto compartido a ambas; alternar entre modos conserva los borradores ya escritos.
 
-Al abrir un ítem, el editor muestra prellenadas su definición y condición vigentes del catálogo. Consultar ese texto no crea instrucciones adicionales ni cambia la configuración. Editarlo activa el modo compartido en el borrador; cambiar a «Por modelo» completa los campos vacíos con el texto compartido o los criterios del catálogo y conserva cualquier prompt personalizado existente. El modo «Del catálogo» vuelve a usar los criterios vigentes sin instrucciones adicionales. Los prompts personalizados admiten hasta 12 000 caracteres para incluir sin recortes la definición y condición completas, de hasta 5 000 caracteres cada una. Guardar configuración mantiene el límite global de tamaño y crea la revisión auditada habitual.
+La tabla distingue el método de evaluación. Los ítems de «Código» o «Cálculo» no pasan por el modelo: muestran «No utiliza prompt» y «Fórmula o regla de código», sin botón para editar prompt. Este editor no modifica fórmulas ni habilita integraciones pendientes. «Último mensaje sin respuesta» se identifica como «IA + reglas de código», porque además del juicio del modelo aplica dos reglas posteriores: una conversación abierta que termina en cliente queda sin evaluar y un último mensaje que no sea del cliente fuerza el resultado a 0. El editor muestra esas reglas expresamente.
 
-Se conservan las reglas técnicas de formato, tipos, evidencia y protocolos locales. La vista previa muestra la composición de instrucciones generales y las adicionales por ítem. El historial guarda todo el conjunto; restaurarlo crea una nueva revisión sin reevaluar el histórico.
+**Editar y guardar reemplaza la definición y la condición base de ese ítem para el modelo correspondiente en las evaluaciones nuevas.** El catálogo original no se modifica. El criterio personalizado solo se transmite en la entrada de ese ítem; Clef nativo lo recibe tanto al clasificar como al elegir evidencia. Las instrucciones generales, formato, tipos y requisitos de evidencia se mantienen. En los ítems «IA + código» también siguen aplicándose las reglas automáticas de código, y el editor lo indica. Los ítems calculados solo por código no tienen prompt editable. Ningún modelo recibe respuestas del otro.
 
-El lote congela catálogo, perfiles, configuración y textos de prompts, incluidas las instrucciones por ítem. Cada modelo tiene una huella propia; una huella del conjunto permite comprobar la compatibilidad de la pareja sin exigir textos iguales. Consenso, comparaciones y dashboard verifican ambas identidades. Las huellas nuevas son independientes del orden de claves de JSON en MySQL.
+Consultar el editor no cambia el borrador. «Restaurar texto del catálogo» descarta explícitamente la personalización de ambos modelos para ese ítem y vuelve al criterio base; también requiere guardar configuración. Los textos admiten hasta 24 000 caracteres para conservar la definición y condición completas (hasta 5 000 cada una), junto con cualquier indicación adicional guardada antes de este cambio (hasta 12 000). Se mantiene el límite global de configuración de 750 000 bytes y la revisión auditada habitual.
+
+Las configuraciones anteriores sin `application: "replace"` conservan su significado original: indicaciones adicionales sobre el criterio del catálogo. El editor muestra ambos textos juntos; solo al editar el ítem o cambiar su opción se guarda como criterio de reemplazo. Abrirlo o guardar un ajuste ajeno no migra silenciosamente esos prompts. La vista previa distingue los criterios efectivos personalizados de las indicaciones adicionales heredadas. El historial guarda todo el conjunto; restaurarlo crea una nueva revisión sin reevaluar el histórico.
+
+El lote congela catálogo, perfiles, configuración y textos de prompts, incluidos los criterios efectivos por ítem y modelo. Los lotes iniciados y sus reintentos mantienen su criterio original aunque después se guarde otra configuración. Cada modelo tiene una huella propia; una huella del conjunto permite comprobar la compatibilidad de la pareja sin exigir textos iguales. Consenso, comparaciones y dashboard verifican ambas identidades. Las huellas nuevas son independientes del orden de claves de JSON en MySQL; las configuraciones antiguas sin criterios de reemplazo conservan sus huellas anteriores.
 
 ## Ejecución y recuperación
 

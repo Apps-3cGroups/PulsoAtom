@@ -15,5 +15,9 @@
 .automation-country-search { max-width: 360px; margin-bottom: 16px; }
 .automation-prompt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .automation-prompt-preview { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.65; }
+.item-prompt-editor { display: grid; gap: 16px; min-width: 0; }
+.item-prompt-editor > p { margin: 0; line-height: 1.6; }
+.item-prompt-options { display: flex; gap: 12px 24px; flex-wrap: wrap; }
+.item-prompt-options .ant-radio-wrapper { margin-inline-end: 0; align-items: flex-start; white-space: normal; }
 .automation-page .ant-tabs-tab { padding-block: 12px; }
 @media (max-width: 760px) { .automation-panel { padding: 16px; } .automation-prompt-grid { grid-template-columns: 1fr; } .automation-toolbar { align-items: flex-start; } }

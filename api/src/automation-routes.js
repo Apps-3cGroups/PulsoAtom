@@ -82,6 +82,7 @@ export function mountAutomationRoutes(app, prefix, { store, registry, requireAdm
       const p = bound.profiles.find(p => p.id === id);
       return { id, label: id === 'clef-local' ? 'Clef' : 'Gemma', protocol: p?.evaluator.protocol || 'chat',
         itemPrompts: runtime[id].itemPrompts,
+        ...(runtime[id].itemCriteria ? { itemCriteria: runtime[id].itemCriteria } : {}),
         text: p?.evaluator.effectiveInstructionsText || p?.evaluator.instructionsText || runtime[id].promptText + evaluationInstructions.slice(systemInstructions.length) + '\n\n' + configurablePromptContract };
     }) });
   });

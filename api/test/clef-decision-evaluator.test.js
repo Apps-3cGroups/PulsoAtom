@@ -31,6 +31,21 @@ function fixture({ choose = (_id, question, stage) => stage === 'evidence' ? 'm1
 }
 const inferenceCalls = calls => calls.filter(call => call.invocation.path === '/v1/systemone');
 
+test('effective criteria replace both native classification and evidence criteria without changing legacy hashes', async () => {
+  const { evaluator, calls } = fixture({ choose: (_id, _q, stage) => stage === 'evidence' ? 'm1' : 'present' });
+  const first = { ...flag('first'), definition: 'OLD_DEFINITION', condition: 'OLD_CONDITION' };
+  const configured = evaluator.withRuntime({ itemCriteria: { first: 'Criterio efectivo personalizado' } });
+  await configured.evaluate(conversation, [first, flag('second')]);
+  for (const call of inferenceCalls(calls)) {
+    assert.match(call.invocation.body.questions.first.instructions, /Criterio efectivo personalizado/);
+    assert.doesNotMatch(call.invocation.body.questions.first.instructions, /OLD_DEFINITION|OLD_CONDITION/);
+    assert.doesNotMatch(call.invocation.body.questions.second.instructions, /Criterio efectivo personalizado/);
+  }
+  assert.notEqual(configured.instructionsHash, evaluator.instructionsHash);
+  assert.equal(evaluator.withRuntime({ itemCriteria: {} }).instructionsHash, evaluator.instructionsHash);
+  assert.equal(first.definition, 'OLD_DEFINITION');
+});
+
 test('item instructions stay scoped in native classification and independent evidence questions', async () => {
   const { evaluator, calls } = fixture({ choose: (_id, _q, stage) => stage === 'evidence' ? 'm1' : 'present' });
   const configured = evaluator.withRuntime({ promptText: 'Instrucciones generales.', itemPrompts: { first: 'Solo una confirmación explícita.', unrelated: 'No transmitir.' } });
