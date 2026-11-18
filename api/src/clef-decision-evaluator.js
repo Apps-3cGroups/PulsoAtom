@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { AppError } from './errors.js';
-import { systemInstructions, configurablePromptContract, catalogInstructions, interactionTypes, supportsAiVariable, validateEvaluation } from './evaluator.js';
+import { systemInstructions, configurablePromptContract, catalogInstructions, interactionTypes, supportsAiVariable, validateEvaluation, effectiveAiVariable } from './evaluator.js';
 import { CATALOG_RULES_INSTRUCTIONS } from './catalog-v5.js';
 import { GatewayApiClient } from './services/gatewayApiClient.js';
 import { getLoadedDecisionInstance } from './services/gatewayDecisionDiscovery.js';
@@ -43,13 +43,14 @@ function decision(answer, criteria) {
 export class ClefDecisionEvaluator {
   #options;
   #client;
-  constructor({ baseUrl, token, portalKey, toolKey, model, timeoutMs = 180000, fetchImpl = fetch, promptText, itemPrompts = {} } = {}) {
+  constructor({ baseUrl, token, portalKey, toolKey, model, timeoutMs = 180000, fetchImpl = fetch, promptText, itemPrompts = {}, itemCriteria = {} } = {}) {
     this.#options = { baseUrl, token, portalKey, fetchImpl };
     this.itemPrompts = Object.fromEntries(Object.entries(itemPrompts).sort(([a], [b]) => a.localeCompare(b)));
+    this.itemCriteria = Object.fromEntries(Object.entries(itemCriteria).sort(([a], [b]) => a.localeCompare(b)));
     this.instructionsText = promptText === undefined ? instructions : promptText + instructions.slice(systemInstructions.length) + '\n\n' + configurablePromptContract;
     this.#client = new GatewayApiClient({ ...this.#options, timeoutMs });
     Object.assign(this, { baseUrl: this.#client.baseUrl, portalKey, toolKey, model, timeoutMs,
-      protocol: 'systemone', adapterVersion: CLEF_DECISION_ADAPTER_VERSION, instructionsHash: promptText === undefined && !Object.keys(this.itemPrompts).length ? instructionHash : createHash('sha256').update(JSON.stringify([CLEF_DECISION_ADAPTER_VERSION, this.instructionsText, CHUNK_SIZE, MAX_MESSAGES, 'present/absent/insufficient', 'message-fields:id,actor,text', interactionTypes, ...(Object.keys(this.itemPrompts).length ? [this.itemPrompts] : [])])).digest('hex') });
+      protocol: 'systemone', adapterVersion: CLEF_DECISION_ADAPTER_VERSION, instructionsHash: promptText === undefined && !Object.keys(this.itemPrompts).length && !Object.keys(this.itemCriteria).length ? instructionHash : createHash('sha256').update(JSON.stringify([CLEF_DECISION_ADAPTER_VERSION, this.instructionsText, CHUNK_SIZE, MAX_MESSAGES, 'present/absent/insufficient', 'message-fields:id,actor,text', interactionTypes, ...(Object.keys(this.itemPrompts).length ? [this.itemPrompts] : []), ...(Object.keys(this.itemCriteria).length ? [{ itemCriteria: this.itemCriteria }] : [])])).digest('hex') });
   }
   withRuntime(runtime) { return new ClefDecisionEvaluator({ ...this.#options, toolKey: this.toolKey, model: this.model, timeoutMs: this.timeoutMs, ...runtime }); }
   get configured() {
@@ -67,7 +68,7 @@ export class ClefDecisionEvaluator {
     if (!Array.isArray(conversation?.messages) || !conversation.messages.length) fail('EMPTY_CONVERSATION', 'La conversación no tiene mensajes evaluables.');
     if (conversation.messages.some(m => typeof m.id !== 'string' || !m.id || m.id === 'none' || m.id.length > 200 || typeof m.text !== 'string')
       || new Set(conversation.messages.map(m => m.id)).size !== conversation.messages.length) fail('UNSUPPORTED_INPUT', 'Los mensajes no tienen identificadores y contenido válidos para seleccionar evidencia.');
-    variables = variables.map(v => ({ ...v, additionalInstructions: this.itemPrompts[v.id] }));
+    variables = variables.map(v => ({ ...effectiveAiVariable(v, this.itemCriteria), additionalInstructions: this.itemCriteria[v.id] ? undefined : this.itemPrompts[v.id] }));
     const raw = Object.create(null), provenance = new Map(), failures = new Map(), requests = [], requestIds = [];
     const metadata = () => ({ protocol: this.protocol, adapterVersion: this.adapterVersion, instructionsHash: this.instructionsHash,
       requests: structuredClone(requests), requestIds: [...requestIds] });

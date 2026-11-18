@@ -77,7 +77,9 @@ function freezePrompts(registry, profiles, runtime, version) {
     const evaluator = registry.profiles.find(item => item.id === p.id).evaluator;
     const text = evaluator.effectiveInstructionsText || evaluator.instructionsText || runtime[p.id]?.promptText || evaluationInstructions;
     const itemPrompts = runtime[p.id]?.itemPrompts || {};
-    return [p.id, { text, itemPrompts, hash: fingerprint({ text, itemPrompts }), promptText: runtime[p.id]?.promptText || null }];
+    const criteria = runtime[p.id]?.itemCriteria;
+    const content = { text, itemPrompts, ...(criteria && Object.keys(criteria).length ? { itemCriteria: criteria } : {}) };
+    return [p.id, { ...content, hash: fingerprint(content), promptText: runtime[p.id]?.promptText || null }];
   }));
   return { version, profiles: snapshots, hash: fingerprint(snapshots) };
 }
@@ -371,6 +373,7 @@ export async function processTask(store, registry, job, task, conversation, cata
           validationErrors: itemErrors.map(({ variableId, rules }) => ({ variableId, rules })),
           promptText: task.context.modelPromptHash ? job.promptSnapshot.profiles[profile.id]?.promptText : undefined,
           itemPrompts: task.context.modelPromptHash ? job.promptSnapshot.profiles[profile.id]?.itemPrompts : undefined,
+          itemCriteria: task.context.modelPromptHash ? job.promptSnapshot.profiles[profile.id]?.itemCriteria : undefined,
         });
         if (!Array.isArray(response.results) || response.results.some(r => !pending.some(v => v.id === r.variableId)) || new Set(response.results.map(r => r.variableId)).size !== response.results.length) throw new AppError(502, 'Resultado estructurado incompleto o duplicado.', 'INVALID_AI_RESULT');
         // Audit only the output channel used by this attempt. Never retain raw

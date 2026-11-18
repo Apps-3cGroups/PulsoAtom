@@ -21,6 +21,25 @@ async function setup(t) {
 }
 const base = '/pulsoAtom/api';
 
+test('saved replacement criteria preview the actual independent text for each model', async t => {
+  const f = await setup(t);
+  const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  const item = current.checklist.find(v => v.method === 'IA');
+  current.automation.prompts.byItem[item.id] = { application: 'replace', mode: 'per-model',
+    byModel: { 'clef-local': 'Criterio efectivo Clef', 'gemma-local': 'Criterio efectivo Gemma' } };
+  const saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: current.settings.version, automation: current.automation }).expect(200)).body;
+  assert.equal(saved.automation.prompts.byItem[item.id].application, 'replace');
+  const preview = (await f.admin.post(`${base}/evaluations/settings/preview`).set('Origin', f.config.origin)
+    .send({ automation: saved.automation }).expect(200)).body;
+  for (const profile of preview.profiles) {
+    assert.equal(profile.itemCriteria[item.id], saved.automation.prompts.byItem[item.id].byModel[profile.id]);
+    assert.equal(profile.itemPrompts[item.id], undefined);
+  }
+  const history = (await f.admin.get(`${base}/evaluations/settings/history`).expect(200)).body;
+  assert.equal(history.items[0].configuration.prompts.byItem[item.id].application, 'replace');
+});
+
 test('configuration, verification, preview, save, pause and monitor avoid full historical reads', async t => {
   const f = await setup(t);
   const read = f.store.read.bind(f.store), transaction = f.store.transaction.bind(f.store);
@@ -113,9 +132,9 @@ test('prefilled item criteria persist and reach both model previews without trun
   const f = await setup(t);
   const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
   const item = current.checklist.find(v => v.method === 'IA');
-  const text = `Definición: ${'D'.repeat(5000)}\nCondición: ${'C'.repeat(5000)}`;
+  const text = `Definición: ${'D'.repeat(5000)}\nCondición: ${'C'.repeat(5000)}\nIndicaciones guardadas: ${'A'.repeat(12000)}`;
   const automation = structuredClone(current.automation);
-  automation.prompts.byItem[item.id] = { mode: 'shared', shared: text };
+  automation.prompts.byItem[item.id] = { application: 'replace', mode: 'shared', shared: text };
   const saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
     .send({ expectedVersion: current.settings.version, automation }).expect(200)).body;
   const persisted = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
@@ -123,8 +142,8 @@ test('prefilled item criteria persist and reach both model previews without trun
   assert.equal(persisted.automation.prompts.shared, current.automation.prompts.shared);
   const preview = (await f.admin.post(`${base}/evaluations/settings/preview`).set('Origin', f.config.origin)
     .send({ automation: saved.automation }).expect(200)).body;
-  assert.ok(preview.profiles.every(p => p.itemPrompts[item.id] === text));
-  automation.prompts.byItem[item.id].shared = 'X'.repeat(12001);
+  assert.ok(preview.profiles.every(p => p.itemCriteria[item.id] === text && p.itemPrompts[item.id] === undefined));
+  automation.prompts.byItem[item.id].shared = 'X'.repeat(24001);
   await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
     .send({ expectedVersion: saved.settings.version, automation }).expect(422);
   assert.equal((await f.store.read()).settings.version, saved.settings.version);

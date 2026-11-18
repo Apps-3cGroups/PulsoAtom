@@ -33,6 +33,25 @@ const evaluator = (json = envelope(), overrides = {}) => {
 };
 const code = expected => error => { assert.equal(error.code, expected); return true; };
 
+test('edited criteria replace the base definition and condition only for their own flag', async () => {
+  const { instance, calls } = evaluator();
+  const items = structuredClone(variables);
+  items[0].definition = 'OLD_DEFINITION_DO_NOT_SEND';
+  items[0].condition = 'OLD_CONDITION_DO_NOT_SEND';
+  const before = structuredClone(items);
+  await instance.withRuntime({ itemCriteria: { event: 'Nuevo criterio efectivo', unrelated: 'DO_NOT_SEND_UNRELATED' },
+    itemPrompts: { event: 'DO_NOT_SEND_OLD_ADDENDUM' } }).evaluate(conversation, items);
+  const body = JSON.parse(calls[0][1].body).body;
+  const input = JSON.parse(body.messages.at(-1).content);
+  assert.equal(input.variables[0].definicion, 'Nuevo criterio efectivo');
+  assert.equal(input.variables[0].condicion, '');
+  assert.equal(input.variables[0].instruccionesAdicionales, undefined);
+  assert.equal(input.variables[1].definicion, items[1].definition);
+  assert.doesNotMatch(JSON.stringify(body), /OLD_DEFINITION_DO_NOT_SEND|OLD_CONDITION_DO_NOT_SEND|DO_NOT_SEND_UNRELATED|DO_NOT_SEND_OLD_ADDENDUM/);
+  assert.match(body.messages[0].content, /Contrato de respuesta obligatorio/);
+  assert.deepEqual(items, before);
+});
+
 test('configured item instructions reach only their own checklist entry and keep the response contract', async () => {
   const { instance, calls } = evaluator();
   await instance.withRuntime({ promptText: 'Instrucciones generales editables.', itemPrompts: { event: 'Exige una confirmación explícita.', unused: 'No transmitir.' } }).evaluate(conversation, variables);

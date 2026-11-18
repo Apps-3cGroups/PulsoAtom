@@ -62,40 +62,62 @@ async function input(element, value) {
     element.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
   });
 }
-async function selectMode(text) {
-  await click(document.querySelector('.ant-drawer .ant-select-selector'));
-  const option = [...document.querySelectorAll('.ant-select-item-option')].find(e => e.textContent === text);
-  assert.ok(option);
-  for (const type of ['mousedown', 'mouseup', 'click']) await act(async () => option.dispatchEvent(new dom.window.MouseEvent(type, { bubbles: true })));
+async function selectMode(value) {
+  await click(document.querySelector(`input[type="radio"][value="${value}"]`));
 }
 
 test('opening a flag displays its catalog prompt without changing the draft; editing creates a shared prompt', async () => {
   const changes = await render();
-  assert.equal(document.querySelector('button[aria-label="Editar prompt de Métrica por código"]').disabled, true);
+  assert.equal(document.querySelector('button[aria-label="Editar prompt de Métrica por código"]'), null);
+  const codeRow = [...document.querySelectorAll('tr')].find(row => row.textContent.includes('Métrica por código'));
+  assert.match(codeRow.textContent, /Código.*No utiliza prompt.*Fórmula o regla de código/);
   await click(document.querySelector('button[aria-label="Editar prompt de Queja de prueba"]'));
-  const field = document.querySelector('textarea[aria-label="Prompt base del ítem"]');
+  const field = document.querySelector('textarea[aria-label="Prompt para Clef y Gemma"]');
   assert.ok(field.value.includes(flag.definition) && field.value.includes(flag.condition));
   assert.deepEqual(changes, []);
+  assert.equal(document.querySelectorAll('input[type="radio"]').length, 2);
+  assert.equal(document.querySelector('input[value="shared"]').checked, true);
   await input(field, `${field.value}\nCriterio personalizado.`);
   assert.equal(changes.at(-1).flag.mode, 'shared');
+  assert.equal(changes.at(-1).flag.application, 'replace');
   assert.match(changes.at(-1).flag.shared, /Criterio personalizado/);
-  await input(document.querySelector('textarea[aria-label="Prompt compartido del ítem"]'), '');
-  assert.equal(document.querySelector('textarea[aria-label="Prompt compartido del ítem"]').value, '');
+  await input(document.querySelector('textarea[aria-label="Prompt para Clef y Gemma"]'), '');
+  assert.equal(document.querySelector('textarea[aria-label="Prompt para Clef y Gemma"]').value, '');
 });
 
 test('choosing model-specific prompts fills both fields and preserves their separate edits across mode changes', async () => {
   const changes = await render({ flag: { mode: 'inherit', shared: '', byModel: { 'clef-local': '', 'gemma-local': '' } } });
   await click(document.querySelector('button[aria-label="Editar prompt de Queja de prueba"]'));
-  await selectMode('Por modelo');
-  const clef = document.querySelector('textarea[aria-label="Prompt del ítem para Clef"]');
-  const gemma = document.querySelector('textarea[aria-label="Prompt del ítem para Gemma"]');
+  await selectMode('per-model');
+  const clef = document.querySelector('textarea[aria-label="Prompt para Clef"]');
+  const gemma = document.querySelector('textarea[aria-label="Prompt para Gemma"]');
   assert.ok(clef.value.includes(flag.definition));
   assert.equal(clef.value, gemma.value);
   const originalGemma = gemma.value;
   await input(clef, 'Personalizado para Clef');
-  await selectMode('Del catálogo');
-  await selectMode('Por modelo');
-  assert.equal(document.querySelector('textarea[aria-label="Prompt del ítem para Clef"]').value, 'Personalizado para Clef');
-  assert.equal(document.querySelector('textarea[aria-label="Prompt del ítem para Gemma"]').value, originalGemma);
+  await selectMode('shared');
+  await selectMode('per-model');
+  assert.equal(document.querySelector('textarea[aria-label="Prompt para Clef"]').value, 'Personalizado para Clef');
+  assert.equal(document.querySelector('textarea[aria-label="Prompt para Gemma"]').value, originalGemma);
   assert.equal(changes.at(-1).flag.mode, 'per-model');
+});
+
+test('existing independent criteria reopen unchanged and restoring the catalog resets both models explicitly', async () => {
+  const changes = await render({ flag: { application: 'replace', mode: 'per-model', shared: '',
+    byModel: { 'clef-local': 'Criterio guardado Clef', 'gemma-local': 'Criterio guardado Gemma' } } });
+  await click(document.querySelector('button[aria-label="Editar prompt de Queja de prueba"]'));
+  assert.equal(document.querySelector('textarea[aria-label="Prompt para Clef"]').value, 'Criterio guardado Clef');
+  assert.equal(document.querySelector('textarea[aria-label="Prompt para Gemma"]').value, 'Criterio guardado Gemma');
+  assert.deepEqual(changes, []);
+  await click([...document.querySelectorAll('.ant-drawer button')].find(button => button.textContent === 'Restaurar texto del catálogo'));
+  assert.equal(changes.at(-1).flag.mode, 'inherit');
+  assert.equal(document.querySelectorAll('.ant-drawer textarea').length, 1);
+  assert.ok(document.querySelector('textarea').value.includes(flag.definition));
+  await selectMode('per-model');
+  for (const field of document.querySelectorAll('.ant-drawer textarea')) {
+    assert.ok(field.value.includes(flag.definition) && field.value.includes(flag.condition));
+    assert.ok(!field.value.includes('Criterio guardado'));
+  }
+  await click([...document.querySelectorAll('.ant-drawer button')].find(button => button.textContent === 'Volver a configuración'));
+  assert.equal(document.querySelector('.ant-drawer-open'), null);
 });

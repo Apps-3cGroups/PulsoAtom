@@ -31,9 +31,12 @@ export function evaluationValidationFeedback(variables, errors = []) {
     return rules.length ? [{ variableId: variable.id, rules }] : [];
   });
 }
-export function evaluationInput(conversation, variables, { validationErrors = [], itemPrompts = {} } = {}) {
+export function effectiveAiVariable(variable, itemCriteria = {}) {
+  return itemCriteria[variable.id] ? { ...variable, definition: itemCriteria[variable.id], condition: '' } : variable;
+}
+export function evaluationInput(conversation, variables, { validationErrors = [], itemPrompts = {}, itemCriteria = {} } = {}) {
   const feedback = evaluationValidationFeedback(variables, validationErrors);
-  return JSON.stringify({ estadoConversacion: conversation.completed === false ? 'abierta' : 'cerrada', variables: variables.map(v => ({ id: v.id, nombre: v.name, tipo: v.type, definicion: v.definition, condicion: v.condition, prioridad: v.mark, ...(itemPrompts[v.id] ? { instruccionesAdicionales: itemPrompts[v.id] } : {}) })), mensajes: conversation.messages.map(m => ({ id: m.id, actor: m.actor, texto: m.text })),
+  return JSON.stringify({ estadoConversacion: conversation.completed === false ? 'abierta' : 'cerrada', variables: variables.map(v => effectiveAiVariable(v, itemCriteria)).map(v => ({ id: v.id, nombre: v.name, tipo: v.type, definicion: v.definition, condicion: v.condition, prioridad: v.mark, ...(itemPrompts[v.id] && !itemCriteria[v.id] ? { instruccionesAdicionales: itemPrompts[v.id] } : {}) })), mensajes: conversation.messages.map(m => ({ id: m.id, actor: m.actor, texto: m.text })),
     ...(feedback.length ? { correccionesFormato: feedback } : {}) });
 }
 

@@ -16,9 +16,10 @@ export class GatewayEvaluator {
   #client;
   #options;
   constructor({ baseUrl, token, portalKey, toolKey, model, timeoutMs = 180000,
-    maxTokens = 16000, temperature = 0, responseFormat = 'json_schema', fetchImpl = fetch, promptText, itemPrompts = {} } = {}) {
+    maxTokens = 16000, temperature = 0, responseFormat = 'json_schema', fetchImpl = fetch, promptText, itemPrompts = {}, itemCriteria = {} } = {}) {
     this.#options = { baseUrl, token, portalKey, toolKey, model, timeoutMs, maxTokens, temperature, responseFormat, fetchImpl };
     this.itemPrompts = structuredClone(itemPrompts);
+    this.itemCriteria = structuredClone(itemCriteria);
     this.instructionsText = promptText === undefined ? evaluationInstructions : promptText + evaluationInstructions.slice(systemInstructions.length) + '\n\n' + configurablePromptContract;
     this.#client = new GatewayApiClient({ baseUrl, token, portalKey, timeoutMs, fetchImpl });
     Object.assign(this, { baseUrl: this.#client.baseUrl, portalKey, toolKey, model, timeoutMs, maxTokens, temperature, responseFormat });
@@ -101,7 +102,7 @@ export class GatewayEvaluator {
     if (this.responseFormat === 'json_object') {
       messages.push({ role: 'system', content: `Devuelve únicamente un objeto JSON que cumpla este esquema. No incluyas Markdown ni texto fuera del JSON: ${JSON.stringify(schema)}` });
     }
-    messages.push({ role: 'user', content: evaluationInput(conversation, variables, { ...options, itemPrompts: this.itemPrompts }) });
+    messages.push({ role: 'user', content: evaluationInput(conversation, variables, { ...options, itemPrompts: this.itemPrompts, itemCriteria: this.itemCriteria }) });
     const envelope = await this.#client.invoke({ toolKey: this.toolKey, method: 'POST', path: '/v1/chat/completions',
       body: { model: this.model, messages, temperature: this.temperature, max_tokens: this.maxTokens, stream: false,
         response_format: this.responseFormat === 'json_schema'

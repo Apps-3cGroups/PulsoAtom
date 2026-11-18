@@ -10,8 +10,9 @@ const countryCode = z.string().regex(/^[A-Z]{2}$/);
 const positive = max => z.number().int().min(1).max(max);
 const prompt = z.string().trim().min(1).max(30000);
 const itemPromptSchema = z.object({
-  mode: z.enum(['inherit', 'shared', 'per-model']), shared: z.string().trim().max(12000).default(''),
-  byModel: z.object({ 'clef-local': z.string().trim().max(12000).default(''), 'gemma-local': z.string().trim().max(12000).default('') }).strict().default({}),
+  application: z.enum(['append', 'replace']).optional(),
+  mode: z.enum(['inherit', 'shared', 'per-model']), shared: z.string().trim().max(24000).default(''),
+  byModel: z.object({ 'clef-local': z.string().trim().max(24000).default(''), 'gemma-local': z.string().trim().max(24000).default('') }).strict().default({}),
 }).strict().superRefine((value, context) => {
   if (value.mode === 'shared' && !value.shared) context.addIssue({ code: 'custom', path: ['shared'], message: 'Escribe el prompt compartido del ítem.' });
   if (value.mode === 'per-model') for (const id of AUTOMATION_MODELS) if (!value.byModel[id]) context.addIssue({ code: 'custom', path: ['byModel', id], message: 'Escribe el prompt de cada modelo para este ítem.' });
@@ -60,11 +61,17 @@ export function automationConfiguration(settings = {}, countries = [], registry)
 }
 
 export function runtimeConfiguration(configuration) {
-  return Object.fromEntries(AUTOMATION_MODELS.map(id => [id, {
-    promptText: configuration.prompts.mode === 'shared' ? configuration.prompts.shared : configuration.prompts.byModel[id],
-    timeoutMs: configuration.timeoutMs[id],
-    itemPrompts: Object.fromEntries(Object.entries(configuration.prompts.byItem || {}).filter(([, p]) => p.mode !== 'inherit').map(([key, p]) => [key, p.mode === 'shared' ? p.shared : p.byModel[id]])),
-  }]));
+  const items = Object.entries(configuration.prompts.byItem || {}).filter(([, p]) => p.mode !== 'inherit');
+  return Object.fromEntries(AUTOMATION_MODELS.map(id => {
+    const resolve = rows => Object.fromEntries(rows.map(([key, p]) => [key, p.mode === 'shared' ? p.shared : p.byModel[id]]));
+    const itemCriteria = resolve(items.filter(([, p]) => p.application === 'replace'));
+    return [id, {
+      promptText: configuration.prompts.mode === 'shared' ? configuration.prompts.shared : configuration.prompts.byModel[id],
+      timeoutMs: configuration.timeoutMs[id],
+      itemPrompts: resolve(items.filter(([, p]) => p.application !== 'replace')),
+      ...(Object.keys(itemCriteria).length ? { itemCriteria } : {}),
+    }];
+  }));
 }
 
 export function saveAutomationConfiguration(state, input, author, countries = [], registry, date = new Date()) {
