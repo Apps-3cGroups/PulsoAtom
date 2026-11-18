@@ -74,6 +74,26 @@ test('invalid prompts, quotas and duplicate model order cannot partially save', 
   assert.equal((await f.store.read()).settings.version, current.settings.version);
 });
 
+test('scheduled activation is validated, versioned and retained by pause and prompt restoration', async t => {
+  const f = await setup(t);
+  const current = (await f.admin.get(`${base}/evaluations/settings`).expect(200)).body;
+  const automation = { ...current.automation, startsAt: '2026-11-19T06:01:00.000Z' };
+  let saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: current.settings.version, automation }).expect(200)).body;
+  assert.equal((await f.admin.get(`${base}/evaluations/settings`).expect(200)).body.automation.startsAt, automation.startsAt);
+  assert.equal((await f.admin.get(`${base}/evaluations/automation`).expect(200)).body.startsAt, automation.startsAt);
+  saved = (await f.admin.post(`${base}/evaluations/automation/control`).set('Origin', f.config.origin)
+    .send({ expectedVersion: saved.settings.version, action: 'pause' }).expect(200)).body;
+  saved = (await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+    .send({ expectedVersion: saved.settings.version, restoreVersion: current.settings.version, restoreScope: 'prompts' }).expect(200)).body;
+  assert.equal(saved.automation.startsAt, automation.startsAt);
+  for (const startsAt of ['tomorrow', '2026-11-19T00:01:00', '2026-11-40T06:01:00Z']) {
+    await f.admin.patch(`${base}/evaluations/settings`).set('Origin', f.config.origin)
+      .send({ expectedVersion: saved.settings.version, automation: { ...saved.automation, startsAt } }).expect(422);
+  }
+  assert.equal((await f.store.read()).settings.version, saved.settings.version);
+});
+
 test('prompt preview never creates evaluations and restoration creates a new audited version', async t => {
   const f = await setup(t);
   const current = (await f.admin.get(`${base}/evaluations/settings`)).body;

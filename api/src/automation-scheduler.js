@@ -4,7 +4,7 @@ import { startEvaluationBatch, processTask, recoverEvaluationJobs } from './eval
 import { asRegistry } from './model-registry.js';
 import { sourceFingerprint } from './evaluation-context.js';
 import { activityOnDate, previousDate } from './daily-activity.js';
-import { countryCanRun, migrateDailyAssignments, recordAutomationAlert, runtimeConfiguration, saveAutomationConfiguration, adoptLegacyAutomationJobs, automationSourceVersion } from './automation-configuration.js';
+import { automationHasStarted, countryCanRun, migrateDailyAssignments, recordAutomationAlert, runtimeConfiguration, saveAutomationConfiguration, adoptLegacyAutomationJobs, automationSourceVersion } from './automation-configuration.js';
 import { selectAutomationCandidates } from './automation-source.js';
 
 const transient = code => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_INCOMPLETE', 'AI_RESOURCE_LIMIT', 'INVALID_AI_RESULT', 'DATABASE_TRANSIENT'].includes(code);
@@ -13,17 +13,18 @@ const readSource = (store, ids) => store.readWithConversations ? store.readWithC
 const finished = task => ['completed', 'failed', 'partial', 'deferred'].includes(task.status);
 const due = (task, date) => ['pending', 'interrupted'].includes(task.status)
   || task.status === 'retry_wait' && Date.parse(task.nextAttemptAt || 0) <= date.getTime();
-function prerequisitesFinished(state, job, task) {
+function prerequisitesFinished(state, job, task, date) {
   if (job.executionOrder === 'parallel') return true;
   const earlier = job.modelProfiles.slice(0, job.modelProfiles.findIndex(p => p.id === task.profile.id)).map(p => p.id);
   return !state.tasks.some(t => t.jobId === job.id && earlier.includes(t.profile.id) && !finished(t)
-    && countryCanRun(state.settings, job.conversationCountries[t.conversationId])
+    && countryCanRun(state.settings, job.conversationCountries[t.conversationId], date)
     && (job.executionOrder === 'model-first' || t.conversationId === task.conversationId));
 }
 const runnable = (state, job, task, date) => due(task, date)
+  && !(state.jobs.find(j => j.id === job.id) || job).automation?.cancelledAt
   && !['SOURCE_CHANGED', 'RECONFIGURE_MODELS'].includes(task.error?.code)
-  && countryCanRun(state.settings, job.conversationCountries[task.conversationId])
-  && prerequisitesFinished(state, job, task);
+  && countryCanRun(state.settings, job.conversationCountries[task.conversationId], date)
+  && prerequisitesFinished(state, job, task, date);
 export function automationClock(date, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date);
   const p = type => parts.find(part => part.type === type).value;
@@ -41,11 +42,43 @@ function updateAutomationProgress(state, job, date = new Date()) {
 }
 export function refreshAutomationJob(state, job, date = new Date()) {
   const tasks = updateAutomationProgress(state, job, date);
-  if (tasks.every(finished)) {
+  if (job.automation?.cancelledAt) {
+    job.status = 'cancelled';
+    job.finishedAt = job.automation.cancelledAt;
+  } else if (tasks.every(finished)) {
     job.status = job.failed ? (job.completed || job.partial ? 'partial' : 'failed') : 'completed';
     job.finishedAt = date.toISOString();
-  } else if (!tasks.some(t => !finished(t) && countryCanRun(state.settings, job.conversationCountries[t.conversationId]))) job.status = 'paused';
+  } else if (!tasks.some(t => !finished(t) && countryCanRun(state.settings, job.conversationCountries[t.conversationId], date))) job.status = 'paused';
   else job.status = tasks.some(t => runnable(state, job, t, date)) ? 'queued' : 'retry_wait';
+}
+
+// Cancellation keeps completed results and audit records, but permanently removes
+// unfinished tasks from automatic selection and manual resume of this run.
+export function cancelAutomationJob(state, job, { reason, author }, date = new Date()) {
+  if (!job?.automation) throw new AppError(404, 'No se encontró la corrida automática.', 'NOT_FOUND');
+  if (job.automation.cancelledAt) return job;
+  if (job.status === 'running' || state.tasks.some(t => t.jobId === job.id && t.status === 'running')) {
+    throw new AppError(409, 'Pausa la automatización y espera a que termine la solicitud en curso.', 'EVALUATION_RUNNING');
+  }
+  const pending = state.tasks.filter(t => t.jobId === job.id && !['completed', 'deferred'].includes(t.status));
+  if (!pending.length) return job;
+  const cancelledAt = date.toISOString();
+  for (const task of pending) {
+    task.previousStatus = task.status;
+    task.status = 'deferred';
+    task.cancelledAt = cancelledAt;
+    task.nextAttemptAt = null;
+  }
+  Object.assign(job.automation, { cancelledAt, cancellationReason: reason, cancelledBy: author });
+  job.cancelled = pending.length;
+  job.sourceRecheckIds = [];
+  job.sourceRecheckAfter = {};
+  const taskIds = new Set(pending.map(t => `task:${t.id}`));
+  for (const alert of state.settings.automationRuntime?.alerts || []) {
+    if (taskIds.has(alert.id) || alert.id === `job:${job.id}` || alert.id?.startsWith(`revision:${job.id}:`)) alert.resolvedAt = cancelledAt;
+  }
+  refreshAutomationJob(state, job, date);
+  return job;
 }
 
 // Each mutation is fenced by the persisted worker token. A stale worker cannot
@@ -73,7 +106,7 @@ export async function startAutomationWorker(store, evaluator, jobId, date = new 
     if (!job?.automation) return null;
     if (!state.tasks.some(t => t.jobId === jobId && runnable(state, job, t, date))) { refreshAutomationJob(state, job, date); return null; }
     const tasks = state.tasks.filter(t => t.jobId === jobId && due(t, date)
-      && !['SOURCE_CHANGED', 'RECONFIGURE_MODELS'].includes(t.error?.code) && countryCanRun(state.settings, job.conversationCountries[t.conversationId]));
+      && !['SOURCE_CHANGED', 'RECONFIGURE_MODELS'].includes(t.error?.code) && countryCanRun(state.settings, job.conversationCountries[t.conversationId], date));
     if (!tasks.length) { refreshAutomationJob(state, job, date); return null; }
     Object.assign(job, { status: 'running', workerToken: randomUUID(), updatedAt: date.toISOString(), lastServedAt: date.toISOString(), finishedAt: null });
     return { job: structuredClone(job), tasks: structuredClone(tasks) };
@@ -182,10 +215,10 @@ async function processAutomationQuantum(store, evaluator, { job, tasks }, date) 
 
 async function prepareChangedSelection(store, evaluator, state, date) {
   let inspected = 0;
-  for (const job of state.jobs.filter(j => j.automation && j.status !== 'running')) {
+  for (const job of state.jobs.filter(j => j.automation && !j.automation.cancelledAt && j.status !== 'running')) {
     const tasks = state.tasks.filter(t => t.jobId === job.id && ['SOURCE_CHANGED', 'RECONFIGURE_MODELS'].includes(t.error?.code) && t.status !== 'deferred');
     for (const id of new Set([...tasks.map(t => t.conversationId), ...(job.sourceRecheckIds || [])])) {
-      if (!countryCanRun(state.settings, job.conversationCountries[id]) || Date.parse(job.sourceRecheckAfter?.[id] || 0) > date.getTime()) continue;
+      if (!countryCanRun(state.settings, job.conversationCountries[id], date) || Date.parse(job.sourceRecheckAfter?.[id] || 0) > date.getTime()) continue;
       if (inspected++ >= state.settings.automation.blockSize) return false;
       try {
         const source = await readSource(store, [id]);
@@ -232,7 +265,7 @@ export async function runAutomationTick(store, evaluator, date = new Date()) {
   }
   const config = state.settings.automation;
   const detectionVersion = state.settings.version;
-  if (!config || !config.enabled || config.paused || state.settings.evaluationMaintenance) return null;
+  if (!config || !config.enabled || config.paused || state.settings.evaluationMaintenance || !automationHasStarted(state.settings, date)) return null;
   const clock = automationClock(date, config.timezone);
   const activityDate = previousDate(clock.date);
   const runtime = state.settings.automationRuntime || {};
@@ -257,7 +290,7 @@ export async function runAutomationTick(store, evaluator, date = new Date()) {
             const assignment = s.dailyAssignments.find(a => a.activityDate === activityDate && a.country === row.country && a.conversationId === row.id);
             if (!assignment || assignment.sourceVersion === automationSourceVersion(row)) continue;
             const job = s.jobs.find(j => j.id === assignment.jobId && j.automation);
-            if (job) job.sourceRecheckIds = [...new Set([...(job.sourceRecheckIds || []), row.id])];
+            if (job && !job.automation.cancelledAt) job.sourceRecheckIds = [...new Set([...(job.sourceRecheckIds || []), row.id])];
           }
           const current = s.settings.automationRuntime;
           current.activityDate = activityDate; current.lastSuccessfulDetectionAt = date.toISOString();

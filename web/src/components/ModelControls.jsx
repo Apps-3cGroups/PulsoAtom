@@ -11,7 +11,7 @@ import LocalModelConfiguration from './LocalModelConfiguration';
 import { executableProfiles, policySelection } from '../services/localModels';
 import { countryLabel } from '../services/presentationText';
 
-export const jobStatus = status => ({ queued: 'En cola', paused: 'Pausada', retry_wait: 'Esperando reintento', running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
+export const jobStatus = status => ({ cancelled: 'Cancelada', queued: 'En cola', paused: 'Pausada', retry_wait: 'Esperando reintento', running: 'En curso', pending: 'Pendiente', completed: 'Completada', partial: 'Parcial', failed: 'Fallida', interrupted: 'Interrumpida' }[status] || status);
 const keepReading = () => true;
 const executionReadError = error => error?.code === 'TIMEOUT' ? { message: 'La consulta tardó demasiado. Reintentar consulta el avance; no vuelve a ejecutar los modelos.' } : error;
 export function ModelControls({ onSaved, running, hideConfiguration = false }) {

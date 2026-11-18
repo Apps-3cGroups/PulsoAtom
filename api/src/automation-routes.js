@@ -27,11 +27,11 @@ export function automationMonitor(state, activityDate) {
     };
   });
   return { activityDate: date, enabled: configuration.enabled, paused: configuration.paused, configured: !!state.settings.automation,
-    timezone: configuration.timezone, lastDetectionAt: runtime.lastDetectionAt || null,
+    timezone: configuration.timezone, startsAt: configuration.startsAt || null, lastDetectionAt: runtime.lastDetectionAt || null,
     lastSuccessfulDetectionAt: day?.lastSuccessfulDetectionAt || (runtime.activityDate === date ? runtime.lastSuccessfulDetectionAt : null) || null, countries: rows,
     alerts: [...(runtime.alerts || [])].reverse(),
-    jobs: state.jobs.filter(j => j.automation && (j.automation.activityDate === date || !['completed', 'failed', 'partial'].includes(j.status)))
-      .map(j => ({ id: j.id, status: j.status, activityDate: j.automation.activityDate, executionOrder: j.executionOrder,
+    jobs: state.jobs.filter(j => j.automation && (j.automation.activityDate === date || !['completed', 'failed', 'partial', 'cancelled'].includes(j.status)))
+      .map(j => ({ id: j.id, status: j.status, cancelledAt: j.automation.cancelledAt || null, cancellationReason: j.automation.cancellationReason || null, activityDate: j.automation.activityDate, executionOrder: j.executionOrder,
         configurationVersion: j.automation.configurationVersion, caseCount: j.caseCount, completed: j.completed, total: j.total,
         createdAt: j.createdAt, updatedAt: j.updatedAt, errors: j.errors, models: j.modelProfiles, nextAttemptAt: state.tasks.filter(t => t.jobId === j.id && t.status === 'retry_wait').map(t => t.nextAttemptAt).sort()[0] || null, promptVersion: j.promptSnapshot?.version || 'Anterior', promptHashes: Object.fromEntries(Object.entries(j.promptSnapshot?.profiles || {}).map(([id, p]) => [id, p.hash])) })) };
 }

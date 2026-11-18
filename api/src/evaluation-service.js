@@ -497,6 +497,7 @@ export async function resumeEvaluationBatch(store, evaluator, jobId, { conversat
       const j = s.jobs.find(item => item.id === jobId);
       if (s.settings.evaluationMaintenance) throw new AppError(409, 'Finaliza el mantenimiento antes de reanudar.', 'EVALUATION_MAINTENANCE');
       if (j.status === 'running') throw new AppError(409, 'La ejecución está en curso.', 'EVALUATION_RUNNING');
+      if (j.automation.cancelledAt) throw new AppError(409, 'La corrida fue cancelada y sus pendientes no se volverán a ejecutar.', 'AUTOMATION_CANCELLED');
       const pending = s.tasks.filter(t => t.jobId === jobId && !['completed', 'deferred'].includes(t.status));
       if (!pending.length) throw new AppError(409, 'La ejecución ya está completa.', 'ALREADY_COMPLETED');
       const currentRegistry = asRegistry(evaluator).forState(s).withRuntime(j.runtimeConfiguration);
