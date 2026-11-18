@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AppError } from './errors.js';
+import { AppError, databaseError } from './errors.js';
 import { startEvaluationBatch, processTask, recoverEvaluationJobs } from './evaluation-service.js';
 import { asRegistry } from './model-registry.js';
 import { sourceFingerprint } from './evaluation-context.js';
@@ -7,7 +7,7 @@ import { activityOnDate, previousDate } from './daily-activity.js';
 import { countryCanRun, migrateDailyAssignments, recordAutomationAlert, runtimeConfiguration, saveAutomationConfiguration, adoptLegacyAutomationJobs, automationSourceVersion } from './automation-configuration.js';
 import { selectAutomationCandidates } from './automation-source.js';
 
-const transient = code => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_INCOMPLETE', 'AI_RESOURCE_LIMIT'].includes(code);
+const transient = code => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_INCOMPLETE', 'AI_RESOURCE_LIMIT', 'INVALID_AI_RESULT', 'DATABASE_TRANSIENT'].includes(code);
 const readState = store => store.readAutomationState ? store.readAutomationState() : store.read();
 const readSource = (store, ids) => store.readWithConversations ? store.readWithConversations({ fresh: true, conversationIds: ids }) : store.read();
 const finished = task => ['completed', 'failed', 'partial', 'deferred'].includes(task.status);
@@ -30,13 +30,17 @@ export function automationClock(date, timezone) {
   return { date: `${p('year')}-${p('month')}-${p('day')}`, time: `${p('hour')}:${p('minute')}` };
 }
 
-export function refreshAutomationJob(state, job, date = new Date()) {
+function updateAutomationProgress(state, job, date = new Date()) {
   const tasks = state.tasks.filter(t => t.jobId === job.id && t.status !== 'deferred');
   job.completed = tasks.filter(t => t.status === 'completed').length;
   job.partial = tasks.filter(t => t.status === 'partial').length;
   job.failed = tasks.filter(t => ['failed', 'partial'].includes(t.status)).length;
   job.errors = tasks.filter(t => t.error).map(t => ({ conversationId: t.conversationId, profileId: t.profile.id, ...t.error }));
   job.updatedAt = date.toISOString();
+  return tasks;
+}
+export function refreshAutomationJob(state, job, date = new Date()) {
+  const tasks = updateAutomationProgress(state, job, date);
   if (tasks.every(finished)) {
     job.status = job.failed ? (job.completed || job.partial ? 'partial' : 'failed') : 'completed';
     job.finishedAt = date.toISOString();
@@ -50,15 +54,19 @@ function fencedStore(store, job) {
   return {
     read: () => store.read(),
     ...(store.readWithConversations ? { readWithConversations: options => store.readWithConversations(options) } : {}),
-    transaction: fn => store.transaction(state => {
+    transaction: fn => store.transaction(async state => {
       const current = state.jobs.find(j => j.id === job.id);
       if (current?.status !== 'running' || current.workerToken !== job.workerToken) throw new AppError(409, 'La ejecución fue recuperada por otro trabajador.', 'WORKER_REPLACED');
-      return fn(state);
+      const result = await fn(state);
+      // Publish counters with each task while retaining this worker's lease.
+      if (current.status === 'running') updateAutomationProgress(state, current);
+      return result;
     }),
   };
 }
 
 export async function startAutomationWorker(store, evaluator, jobId, date = new Date()) {
+  store = store.evaluationWorker ? store.evaluationWorker(jobId) : store;
   const claimed = await store.transaction(state => {
     if (state.jobs.some(j => j.status === 'running')) return null;
     const job = state.jobs.find(j => j.id === jobId);
@@ -115,7 +123,9 @@ async function processAutomationQuantum(store, evaluator, { job, tasks }, date) 
         await processTask(fenced, registry, job, task, source.conversations.find(c => c.id === task.conversationId), catalog);
       } catch (caught) {
         if (caught.code === 'WORKER_REPLACED') throw caught;
-        error = { code: caught instanceof AppError ? caught.code : 'EVALUATION_FAILED', message: caught instanceof AppError ? caught.message : 'No se pudo completar la evaluación.' };
+        const normalized = databaseError(caught);
+        error = { code: normalized instanceof AppError ? normalized.code : 'EVALUATION_FAILED', message: normalized instanceof AppError ? normalized.message : 'No se pudo completar la evaluación.',
+          ...(normalized.code === 'DATABASE_TRANSIENT' ? { databaseCode: normalized.details?.databaseCode } : {}) };
       }
       await fenced.transaction(s => {
         const current = s.tasks.find(t => t.id === task.id);
@@ -150,7 +160,7 @@ async function processAutomationQuantum(store, evaluator, { job, tasks }, date) 
         }
       });
     }
-    await fenced.transaction(s => refreshAutomationJob(s, s.jobs.find(j => j.id === job.id), date));
+    await fenced.transaction(s => refreshAutomationJob(s, s.jobs.find(j => j.id === job.id), new Date(Math.max(date.getTime(), Date.now()))));
     return (await readState(store)).jobs.find(j => j.id === job.id);
   } catch (error) {
     if (error.code !== 'WORKER_REPLACED') await fenced.transaction(s => {
@@ -228,9 +238,10 @@ export async function runAutomationTick(store, evaluator, date = new Date()) {
   const runtime = state.settings.automationRuntime || {};
   if (clock.time >= config.time && (!runtime.lastDetectionAt || date.getTime() - Date.parse(runtime.lastDetectionAt) >= config.pollSeconds * 1000)) {
     // Claim a detection interval under the same lock used to reserve quota.
-    const claimed = await store.transaction(s => {
-      const current = s.settings.automationRuntime ||= {};
-      if (s.settings.version !== state.settings.version || current.lastDetectionAt && date.getTime() - Date.parse(current.lastDetectionAt) < config.pollSeconds * 1000) return false;
+    const settingsTransaction = store.settingsTransaction ? fn => store.settingsTransaction(fn) : fn => store.transaction(s => fn(s.settings));
+    const claimed = await settingsTransaction(settings => {
+      const current = settings.automationRuntime ||= {};
+      if (settings.version !== state.settings.version || current.lastDetectionAt && date.getTime() - Date.parse(current.lastDetectionAt) < config.pollSeconds * 1000) return false;
       current.lastDetectionAt = date.toISOString(); return true;
     });
     if (claimed) {
@@ -239,7 +250,8 @@ export async function runAutomationTick(store, evaluator, date = new Date()) {
         source = store.readAutomationSource ? await store.readAutomationSource({ date: activityDate, timezone: config.timezone })
           : { ...await readSource(store), loads: [] };
         if (!store.readAutomationSource) source.conversations = source.conversations.filter(c => activityOnDate(c, activityDate, config.timezone) && c.messages?.some(m => m.text));
-        await store.transaction(s => {
+        const detectionTransaction = store.automationDetectionTransaction ? fn => store.automationDetectionTransaction(fn) : fn => store.transaction(fn);
+        await detectionTransaction(s => {
           migrateDailyAssignments(s);
           for (const row of source.conversations) {
             const assignment = s.dailyAssignments.find(a => a.activityDate === activityDate && a.country === row.country && a.conversationId === row.id);
@@ -280,7 +292,7 @@ export async function runAutomationTick(store, evaluator, date = new Date()) {
           automation: { activityDate, runDate: clock.date, configurationVersion: detectionVersion, configuration: structuredClone(config) },
         });
       } catch (error) {
-        if (!['DAILY_ALREADY_STARTED', 'SCHEDULE_CHANGED'].includes(error.code)) await store.transaction(s => recordAutomationAlert(s.settings, {
+        if (!['DAILY_ALREADY_STARTED', 'SCHEDULE_CHANGED'].includes(error.code)) await settingsTransaction(settings => recordAutomationAlert(settings, {
           id: 'source-unavailable', type: 'detection_error', message: error instanceof AppError ? error.message : 'No se pudo consultar la carga. Se volverá a intentar.', activityDate }, date));
       }
     }
