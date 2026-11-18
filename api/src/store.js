@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import mysql from 'mysql2/promise';
 import { createState } from './data/seed.js';
-import { missingDatabase } from './errors.js';
+import { missingDatabase, databaseError } from './errors.js';
 import { copySourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { migrateCatalogV5 } from './catalog-v5.js';
 import { enableNavigationSummaryCache } from './navigation-cache.js';
@@ -168,14 +168,49 @@ export class MysqlStore {
     return rows[0] && decode(rows[0].payload);
   }
   async authenticationTransaction(fn) { return this.transaction(fn, ['users', 'sessions']); }
+  async loadAutomationQueue(connection) {
+    const state = await this.load(connection, ['jobs', 'dailyAssignments', 'catalog', 'catalogVersions', 'modelPolicies']);
+    // Scheduling needs identity, dependencies and retry state, never model answers.
+    const fields = ['id', 'jobId', 'conversationId', 'status', 'nextAttemptAt', 'error', 'round'];
+    const projection = fields.map(field => `'${field}', JSON_EXTRACT(payload, '$.${field}')`).join(', ');
+    const [rows] = await connection.query(`SELECT JSON_OBJECT(${projection},
+      'profile', JSON_OBJECT('id', JSON_EXTRACT(payload, '$.profile.id')),
+      'context', JSON_OBJECT('sourceHash', JSON_EXTRACT(payload, '$.context.sourceHash'))) AS payload
+      FROM evaluation_tasks ORDER BY sequence_id`);
+    state.tasks = rows.map(row => decode(row.payload));
+    return state;
+  }
+  async automationDetectionTransaction(fn) {
+    return this.transaction(fn, ['jobs', 'dailyAssignments']);
+  }
+  async loadEvaluationWorker(connection, jobId) {
+    const state = await this.load(connection, ['jobs', 'catalog', 'catalogVersions', 'modelPolicies']);
+    for (const key of ['tasks', 'attempts', 'evaluations']) {
+      const [rows] = await connection.execute(`SELECT payload FROM ${tables[key]}
+        WHERE JSON_UNQUOTE(JSON_EXTRACT(payload, '$.jobId')) = ? ORDER BY sequence_id`, [jobId]);
+      state[key] = rows.map(row => decode(row.payload));
+    }
+    const ids = state.jobs.find(job => job.id === jobId)?.conversationIds || [];
+    for (const batch of rowBatches(ids.map(id => [id]))) {
+      const [refs] = await connection.execute(`SELECT payload FROM operational_refs WHERE id IN (${batch.map(() => '?').join(',')})`, batch.flat());
+      state.operationalRefs.push(...refs.map(row => decode(row.payload)));
+    }
+    const anchors = [...new Set(state.operationalRefs.map(ref => ref.evaluationId))].filter(id => !state.evaluations.some(e => e.id === id));
+    for (const batch of rowBatches(anchors.map(id => [id]))) {
+      const [rows] = await connection.execute(`SELECT payload FROM evaluations WHERE id IN (${batch.map(() => '?').join(',')})`, batch.flat());
+      state.evaluations.push(...rows.map(row => decode(row.payload)));
+    }
+    return state;
+  }
+  evaluationWorker(jobId) {
+    const load = connection => this.loadEvaluationWorker(connection, jobId);
+    return {
+      read: () => this.readSnapshot(load),
+      transaction: fn => this.transaction(fn, ['jobs', 'tasks', 'attempts', 'evaluations', 'operationalRefs'], load),
+    };
+  }
   async readAutomationState() {
-    const connection = await this.pool.getConnection();
-    try {
-      await connection.beginTransaction();
-      const state = await this.load(connection, ['jobs', 'tasks', 'dailyAssignments', 'catalog', 'catalogVersions']);
-      await connection.commit(); return state;
-    } catch (error) { await connection.rollback(); throw error; }
-    finally { connection.release(); }
+    return this.readSnapshot(connection => this.loadAutomationQueue(connection));
   }
   async readSchedulerState() {
     const [jobs, settings, policies] = await Promise.all([
@@ -282,7 +317,7 @@ export class MysqlStore {
       await connection.beginTransaction();
       const state = await load(connection);
       await connection.commit(); return state;
-    } catch (error) { await connection.rollback(); throw error; }
+    } catch (error) { await connection.rollback(); throw databaseError(error); }
     finally { connection.release(); }
   }
   async transaction(fn, keys = Object.keys(tables), load = connection => this.load(connection, keys)) {
@@ -309,7 +344,7 @@ export class MysqlStore {
       }
       for (const key of ['settings', 'metadata']) if (JSON.stringify(previous[key]) !== JSON.stringify(draft[key])) await connection.execute('INSERT INTO portal_settings (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload)', [key, JSON.stringify(draft[key])]);
       await connection.commit(); return result;
-    } catch (error) { await connection.rollback(); throw error; }
+    } catch (error) { await connection.rollback(); throw databaseError(error); }
     finally { connection.release(); }
   }
   async close() { await this.pool.end(); }
@@ -324,6 +359,15 @@ export class AtomHistoryStore {
   async readUserByEmail(email) { return this.base.readUserByEmail ? this.base.readUserByEmail(email) : (await this.base.read()).users.find(u => u.email.toLowerCase() === email.toLowerCase()); }
   async authenticationTransaction(fn) { return this.base.authenticationTransaction ? this.base.authenticationTransaction(fn) : this.base.transaction(fn); }
   async readAutomationState() { return this.base.readAutomationState ? this.base.readAutomationState() : this.base.read(); }
+  async automationDetectionTransaction(fn) { return this.base.automationDetectionTransaction ? this.base.automationDetectionTransaction(fn) : this.base.transaction(fn); }
+  evaluationWorker(jobId) {
+    if (!this.base.evaluationWorker) return this;
+    const worker = this.base.evaluationWorker(jobId);
+    return { ...worker, readWithConversations: async ({ fresh = false, conversationIds } = {}) => {
+      const [state, source] = await Promise.all([worker.read(), this.reader.read({ fresh, ...(conversationIds !== undefined ? { conversationIds } : {}) })]);
+      return this.attach(state, source);
+    } };
+  }
   async readEvaluationConfiguration() { return this.base.readEvaluationConfiguration ? this.base.readEvaluationConfiguration() : this.base.read(); }
   async evaluationConfigurationTransaction(fn) { return this.base.evaluationConfigurationTransaction ? this.base.evaluationConfigurationTransaction(fn) : this.base.transaction(fn); }
   async readAutomationMonitorState() { return this.base.readAutomationMonitorState ? this.base.readAutomationMonitorState() : this.readAutomationState(); }

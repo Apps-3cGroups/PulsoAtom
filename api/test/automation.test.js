@@ -91,6 +91,42 @@ test('parallel mode overlaps both models, with one in-flight request per model',
   assert.equal(f.calls.length, 6);
 });
 
+test('completed counters are visible during a block without releasing the worker lease', async () => {
+  const hold = gate(), started = gate(); let count = 0;
+  const f = fixture(async () => { if (++count === 2) { started.resolve(); await hold.promise; } });
+  await f.store.transaction(s => { s.settings.automation.executionOrder = 'model-first'; });
+  const execution = await runAutomationTick(f.store, f.registry, f.date);
+  await started.promise;
+  const state = await f.store.read();
+  assert.equal(state.jobs[0].completed, 1);
+  assert.equal(state.jobs[0].status, 'running');
+  assert.equal(state.jobs[0].workerToken, execution.job.workerToken);
+  hold.resolve(); await execution.completion;
+});
+
+test('a transient database read failure retries the same selection and preserves completed model results', async () => {
+  const f = fixture();
+  const read = f.store.readWithConversations.bind(f.store); let fail = true;
+  f.store.readWithConversations = async options => {
+    if (fail && options?.conversationIds?.length === 1) { fail = false; throw Object.assign(new Error('sensitive query'), { code: 'ER_LOCK_WAIT_TIMEOUT' }); }
+    return read(options);
+  };
+  await f.tick();
+  const before = await f.store.read();
+  const task = before.tasks.find(t => t.status === 'retry_wait');
+  assert.ok(task);
+  assert.equal(task.error.code, 'DATABASE_TRANSIENT');
+  assert.equal(task.error.databaseCode, 'ER_LOCK_WAIT_TIMEOUT');
+  const completedIds = before.evaluations.map(e => e.id);
+  await f.tick(31000);
+  const after = await f.store.read();
+  assert.equal(after.tasks.find(t => t.id === task.id).status, 'completed');
+  assert.equal(after.jobs[0].status, 'completed');
+  assert.ok(completedIds.every(id => after.evaluations.some(e => e.id === id)));
+  assert.equal(after.dailyAssignments.length, before.dailyAssignments.length);
+  assert.equal(f.calls.length, 6);
+});
+
 test('model-first barrier spans technical blocks and conversation-first preserves each model order', async () => {
   for (const mode of ['model-first', 'conversation-first']) {
     const f = fixture();

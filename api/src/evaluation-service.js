@@ -14,7 +14,7 @@ import { activityOnDate, validateDailyActivityRequest, sameDailyCohort, withinDa
 import { assignedHandoffVersion, dailyHandoffFor } from './daily-equivalence.js';
 import { assertThursdayRequest, withoutThursdayDuplicates } from './thursday-handoff.js';
 
-const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE'].includes(error.code);
+const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE', 'DATABASE_TRANSIENT'].includes(error.code);
 const running = new Map();
 const now = () => new Date().toISOString();
 const safeError = error => ({ code: error instanceof AppError ? error.code : 'EVALUATION_FAILED', message: error instanceof AppError ? error.message : 'No se pudo completar esta evaluación.' });
