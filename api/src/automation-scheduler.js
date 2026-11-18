@@ -7,7 +7,7 @@ import { activityOnDate, previousDate } from './daily-activity.js';
 import { countryCanRun, migrateDailyAssignments, recordAutomationAlert, runtimeConfiguration, saveAutomationConfiguration, adoptLegacyAutomationJobs, automationSourceVersion } from './automation-configuration.js';
 import { selectAutomationCandidates } from './automation-source.js';
 
-const transient = code => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_INCOMPLETE', 'AI_RESOURCE_LIMIT', 'DATABASE_TRANSIENT'].includes(code);
+const transient = code => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'AI_INCOMPLETE', 'AI_RESOURCE_LIMIT', 'INVALID_AI_RESULT', 'DATABASE_TRANSIENT'].includes(code);
 const readState = store => store.readAutomationState ? store.readAutomationState() : store.read();
 const readSource = (store, ids) => store.readWithConversations ? store.readWithConversations({ fresh: true, conversationIds: ids }) : store.read();
 const finished = task => ['completed', 'failed', 'partial', 'deferred'].includes(task.status);

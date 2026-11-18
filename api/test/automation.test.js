@@ -27,8 +27,9 @@ function fixture(handler) {
   const calls = [];
   const evaluator = (id, runtime) => ({ configured: true, withRuntime: runtime => evaluator(id, runtime), instructionsText: runtime?.promptText,
     async evaluate(conversation, variables) {
-      const call = { id, conversationId: conversation.id, prompt: runtime?.promptText, itemPrompts: runtime?.itemPrompts, text: conversation.messages[0].text }; calls.push(call);
-      if (handler) await handler(call, state);
+      const call = { id, conversationId: conversation.id, prompt: runtime?.promptText, itemPrompts: runtime?.itemPrompts, text: conversation.messages[0].text, variableIds: variables.map(v => v.id) }; calls.push(call);
+      const response = handler && await handler(call, state);
+      if (response) return response;
       return { model: registry.profiles.find(p => p.id === id).model, results: variables.map(v => ({ variableId: v.id, type: v.type, method: v.method, status: 'evaluado', value: 1, reason: 'Evidencia sintética.', evidence: [{ messageId: conversation.messages[0].id, quote: conversation.messages[0].text }] })) };
     } });
   const registry = new ModelRegistry(modelIds.map(id => ({ id, label: id, model: id, provider: 'demo', enabled: true, evaluator: evaluator(id) })));
@@ -125,6 +126,32 @@ test('a transient database read failure retries the same selection and preserves
   assert.ok(completedIds.every(id => after.evaluations.some(e => e.id === id)));
   assert.equal(after.dailyAssignments.length, before.dailyAssignments.length);
   assert.equal(f.calls.length, 6);
+});
+
+test('automatic format retries request only missing flags and retain valid model answers', async () => {
+  let first = true;
+  const f = fixture(call => {
+    if (call.id === 'gemma-local' && first) {
+      first = false;
+      return { model: call.id, results: [{ variableId: call.variableIds[0], type: 'Flag', method: 'IA', status: 'evaluado', value: 0, evidence: [] }] };
+    }
+  });
+  await f.store.transaction(s => { s.settings.automation.countries.forEach(c => { c.enabled = c.code === 'HN'; c.dailyLimit = 1; }); });
+  await f.tick();
+  const before = await f.store.read();
+  const task = before.tasks.find(t => t.profile.id === 'gemma-local');
+  assert.equal(task.status, 'retry_wait');
+  assert.equal(task.error.code, 'INVALID_AI_RESULT');
+  const retained = task.profileStates['gemma-local'].results[0];
+  await f.tick(31000);
+  const after = await f.store.read();
+  assert.equal(after.jobs[0].status, 'completed');
+  const calls = f.calls.filter(c => c.id === 'gemma-local');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].variableIds.length, 1);
+  assert.ok(!calls[1].variableIds.includes(retained.variableId));
+  const current = after.tasks.find(t => t.id === task.id);
+  assert.deepEqual(after.evaluations.find(e => e.id === current.evaluationId).results.find(r => r.variableId === retained.variableId), retained);
 });
 
 test('model-first barrier spans technical blocks and conversation-first preserves each model order', async () => {
