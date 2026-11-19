@@ -112,6 +112,8 @@ Para autorizar al primer administrador en otra instalación, ejecuta `cd api && 
 
 `dbAtom.tblConversaciones` enlaza su documento vigente con `tblDocumentosConversacion`; los eventos se leen de `tblEventosConversacion`. Los asesores y canales vienen de `tblAsesores` y `tblCanales`. Los códigos de país se resuelven en `dbSomos3c_2.tblCatalogoPaises`, sin duplicar ese catálogo en Pulso. El histórico muestra solo documentos con estado `LISTO` y mantiene todas las conversaciones sin evaluación como pendientes. Las conversaciones abiertas pueden evaluarse provisionalmente; nuevos mensajes o el cierre las dejan pendientes de actualización. Una importación idéntica no genera una evaluación nueva.
 
+Si un mensaje no incluye rol ni ID de asesor, Pulso contrasta su `DeOrigen` con el catálogo completo de asesores, incluso si la conversación fue reasignada. La coincidencia del nombre tolera espacios, mayúsculas y acentos; conserva la prioridad de clientes, bots y eventos técnicos identificados. Un nombre sin referencia sigue como emisor desconocido. El cambio se aplica al leer las conversaciones, sin modificar la extracción ni reescribir evaluaciones anteriores; una clasificación distinta invalida la huella del resultado previo para señalar que requiere actualización.
+
 El acceso de origen es de lectura. Las evaluaciones, versiones y revisiones se escribirán en las tablas propias de Pulso. La base propia no guarda transcripciones de Atom. Las credenciales del origen no se envían al navegador. Consulta [el diseño de la base de datos](docs/BASE_DATOS.md) para ver las tablas y la separación de conexiones.
 
 ### Servicios TD: S3 y SMTP

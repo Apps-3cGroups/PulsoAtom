@@ -12,11 +12,13 @@ function fixture(count = 2) {
   const events = rows.map(row => ({ IdDocumento: row.IdDocumentoVigente, IdEvento: `message-${row.IdConversacion}`,
     Texto: 'Consulta sintética.', RolEmisor: 'CLIENTE', TipoOrigen: 'text', FechaHoraUtc: new Date('2026-11-06T12:00:00Z') }));
   const calls = [];
+  const agents = [{ Nombre: 'Asesora anterior' }];
   const reader = Object.create(AtomReader.prototype);
   Object.assign(reader, { cache: null, pending: null, timezone: 'America/Tegucigalpa',
     tables: { conversations: '`conversations`', documents: '`documents`', agents: '`agents`', channels: '`channels`', countries: '`countries`', events: '`events`' },
     pool: { async query(sql, parameters) {
       calls.push({ sql, parameters });
+      if (sql.startsWith('SELECT Nombre')) return [agents];
       if (sql.startsWith('SELECT IdDocumento')) return [events.filter(row => parameters.includes(String(row.IdDocumento)))];
       const selected = rows.filter(row => parameters === undefined || parameters.includes(String(row.IdConversacion)));
       if (sql.startsWith('SELECT DISTINCT')) return [selected.length ? [{ code: 57, iso2: 'HN', name: 'Honduras' }] : []];
@@ -32,7 +34,7 @@ test('lectura por IDs limita país, conversaciones y eventos mediante parámetro
   assert.deepEqual(scoped.conversations.map(c => c.id), ['2']);
   assert.equal(scoped.conversations[0].sourceDocumentId, '1001');
   assert.deepEqual(scoped.conversations[0].messages.map(m => m.id), ['message-2']);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   for (const call of calls.slice(0, 2)) {
     assert.match(call.sql, /WHERE c\.IdConversacion IN \(\?\)/);
     assert.deepEqual(call.parameters, ['2']);
@@ -40,7 +42,7 @@ test('lectura por IDs limita país, conversaciones y eventos mediante parámetro
   assert.deepEqual(calls[2].parameters, ['1001']);
   const full = await reader.read({ fresh: true });
   assert.equal(sourceFingerprint(scoped.conversations[0]), sourceFingerprint(full.conversations.find(c => c.id === '2')));
-  assert.ok(calls.slice(3, 5).every(call => !call.sql.includes('WHERE c.IdConversacion') && call.parameters === undefined));
+  assert.ok(calls.slice(4, 6).every(call => !call.sql.includes('WHERE c.IdConversacion') && call.parameters === undefined));
   const missing = await reader.read({ conversationIds: ['not-present', "2' OR 1=1 --"] });
   assert.deepEqual(missing.conversations, []);
   assert.ok(calls.slice(-2).every(call => !call.sql.includes("2' OR") && call.parameters.includes("2' OR 1=1 --")));
@@ -62,8 +64,21 @@ test('selecciones grandes se dividen en consultas acotadas sin duplicar ni perde
   assert.equal(new Set(selected.conversations.map(c => c.id)).size, 601);
   assert.deepEqual(selected.conversations.slice(0, 2).map(c => c.id), ['601', '600']);
   assert.equal(selected.countries.length, 1);
-  assert.equal(calls.length, 9);
-  assert.ok(calls.every(call => call.parameters.length <= 300 && (call.sql.match(/\?/g) || []).length === call.parameters.length));
+  assert.equal(calls.length, 10);
+  assert.equal(calls.filter(call => call.sql.startsWith('SELECT Nombre')).length, 1);
+  assert.ok(calls.filter(call => call.parameters).every(call => call.parameters.length <= 300 && (call.sql.match(/\?/g) || []).length === call.parameters.length));
+});
+
+test('la lectura completa y por IDs reconocen asesores anteriores y mantienen el asesor actual', async () => {
+  const { reader, rows, events } = fixture();
+  for (const row of rows) Object.assign(row, { IdAsesorActual: 9, AsesorNombre: 'Asesor actual' });
+  for (const event of events) Object.assign(event, { RolEmisor: null, DeOrigen: '  ASESORA   ANTERIOR ', IdAsesor: null, Direccion: null });
+  const full = await reader.read({ fresh: true });
+  const scoped = await reader.read({ fresh: true, conversationIds: ['2'] });
+  assert.ok(full.conversations.every(c => c.messages[0].actor === 'humano'));
+  assert.equal(scoped.conversations[0].messages[0].actor, 'humano');
+  assert.equal(scoped.conversations[0].agent.name, 'Asesor actual');
+  assert.equal(sourceFingerprint(scoped.conversations[0]), sourceFingerprint(full.conversations.find(c => c.id === '2')));
 });
 
 test('lecturas scoped detectan cambios y no esperan ni contaminan la caché global pendiente', async () => {
