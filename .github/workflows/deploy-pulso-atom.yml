@@ -5,6 +5,19 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      automation_start:
+        description: 'Optional UTC activation (YYYY-MM-DDTHH:mm:ss.000Z); requires globally paused automation'
+        required: false
+        type: string
+      automation_cancel_before:
+        description: 'Cancel unfinished automatic activity strictly before YYYY-MM-DD; retain completed results'
+        required: false
+        type: string
+      automation_expected_version:
+        description: 'Required saved configuration version when scheduling activation'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -32,6 +45,9 @@ jobs:
       REPO_URL: https://github.com/Apps-3cGroups/PulsoAtom.git
       PM2_API_APP: pulso-atom-api
       PM2_WEB_APP: pulso-atom-web
+      AUTOMATION_START: ${{ inputs.automation_start }}
+      AUTOMATION_CANCEL_BEFORE: ${{ inputs.automation_cancel_before }}
+      AUTOMATION_EXPECTED_VERSION: ${{ inputs.automation_expected_version }}
 
     steps:
       - name: Validate required secrets
@@ -69,6 +85,14 @@ jobs:
 
           if ([string]::IsNullOrWhiteSpace($env:GH_DEPLOY_TOKEN)) {
             throw 'Missing required secret GH_DEPLOY_TOKEN.'
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($env:AUTOMATION_START)) {
+            if ($env:AUTOMATION_START -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$' -or
+                $env:AUTOMATION_CANCEL_BEFORE -notmatch '^\d{4}-\d{2}-\d{2}$' -or
+                $env:AUTOMATION_EXPECTED_VERSION -notmatch '^[1-9]\d*$') { throw 'Invalid automation schedule inputs.' }
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:AUTOMATION_CANCEL_BEFORE) -or -not [string]::IsNullOrWhiteSpace($env:AUTOMATION_EXPECTED_VERSION)) {
+            throw 'All three automation inputs are required together.'
           }
 
           function Invoke-Checked {
@@ -257,6 +281,11 @@ jobs:
           printf '\n'
           curl --fail --silent --show-error --retry 6 --retry-delay 2 --retry-connrefused --max-time 15 -o /dev/null -w 'WEB HTTP %{http_code}\n' http://127.0.0.1:3000/pulsoAtom/
 
+          if [ -n "__AUTOMATION_START__" ]; then
+            echo "Applying the explicitly requested automation start and cancelling older pending work"
+            node "$API/scripts/schedule-automation-start.js" --starts-at=__AUTOMATION_START__ --cancel-before=__AUTOMATION_CANCEL_BEFORE__ --expected-version=__AUTOMATION_EXPECTED_VERSION__
+          fi
+
           echo "Final git status"
           git status --short --branch
 
@@ -273,7 +302,10 @@ jobs:
               Replace('__REPO_URL__', $env:REPO_URL).
               Replace('__PM2_API_APP__', $env:PM2_API_APP).
               Replace('__PM2_WEB_APP__', $env:PM2_WEB_APP).
-              Replace('__TARGET_SHA__', $env:GITHUB_SHA)
+              Replace('__TARGET_SHA__', $env:GITHUB_SHA).
+              Replace('__AUTOMATION_START__', [string]$env:AUTOMATION_START).
+              Replace('__AUTOMATION_CANCEL_BEFORE__', [string]$env:AUTOMATION_CANCEL_BEFORE).
+              Replace('__AUTOMATION_EXPECTED_VERSION__', [string]$env:AUTOMATION_EXPECTED_VERSION)
             $remoteScript = $remoteScript -replace "`r`n", "`n" -replace "`r", "`n"
             [System.IO.File]::WriteAllText($scriptPath, $remoteScript, [System.Text.UTF8Encoding]::new($false))
 
