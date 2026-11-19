@@ -34,10 +34,12 @@ const localDate = (value, timezone) => {
 };
 const mediaType = type => ({ file: 'archivo', call: 'llamada', geopoint: 'ubicación' })[type] || null;
 const normalizeIdentity = value => String(value || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es');
+const normalizeAgentName = value => normalizeIdentity(value).replace(/\s+/gu, ' ');
+export const atomAgentNameIndex = agents => new Set(agents.map(agent => normalizeAgentName(agent.Nombre)).filter(Boolean));
 
 // Sender metadata, never the wording of a greeting, determines participation.
 // Atom uses ATOM for bot messages and SISTEMA/ATOM for automatic follow-ups.
-export function atomMessageActor(event, row = {}) {
+export function atomMessageActor(event, row = {}, agentNames) {
   const role = normalizeIdentity(event.RolEmisor);
   const origin = normalizeIdentity(event.DeOrigen);
   const direction = normalizeIdentity(event.Direccion);
@@ -48,10 +50,14 @@ export function atomMessageActor(event, row = {}) {
   if (origin && origin === normalizeIdentity(row.AsesorNombre)) return 'humano';
   if (['atom', 'bot', 'sistema', 'system', 'api', 'agent_builder', 'flow builder'].includes(origin)
     || /(?:^|[ _-])cortex(?:$|[ _-])/.test(origin) || /^flujo\b/.test(origin)) return 'bot';
+  // A reassignment changes the conversation's current advisor, not the author
+  // of earlier messages. Exports can retain only DeOrigen for those authors.
+  if (origin && normalizeAgentName(origin) !== normalizeAgentName(row.ClienteNombre)
+    && agentNames?.has(normalizeAgentName(origin))) return 'humano';
   return 'desconocido';
 }
 
-export function mapAtomConversation(row, events, country, timezone) {
+export function mapAtomConversation(row, events, country, timezone, agentNames) {
   const startedAt = iso(row.FechaInicioUtc || row.FechaUltimaActividadUtc);
   const lastActivityAt = optionalIso(row.FechaUltimaActividadUtc);
   const messages = [];
@@ -62,7 +68,7 @@ export function mapAtomConversation(row, events, country, timezone) {
     if (!['text', 'quickReply', 'interactive', 'template', 'file', 'call', 'geopoint'].includes(event.TipoOrigen)) continue;
     const text = String(event.Texto || '').trim() || (type ? `[${type}]` : '');
     if (!text) continue;
-    messages.push({ id: String(event.IdEvento), actor: atomMessageActor(event, row), text, timestamp: iso(event.FechaHoraUtc) });
+    messages.push({ id: String(event.IdEvento), actor: atomMessageActor(event, row, agentNames), text, timestamp: iso(event.FechaHoraUtc) });
   }
   // Navigation and date filters use the same activity basis as evaluation
   // selection. Preserve the original start and message timestamps: changing a
@@ -128,10 +134,14 @@ export class AtomReader {
       const [eventRows] = await this.pool.query(`SELECT IdDocumento, IdEvento, FechaHoraUtc, Texto, TipoOrigen, RolEmisor, DeOrigen, Direccion, IdAsesor FROM ${e} WHERE IdDocumento IN (${batch.map(() => '?').join(',')}) ORDER BY FechaHoraUtc, NumeroFila`, batch);
       for (const row of eventRows) byDocument.get(String(row.IdDocumento))?.push(row);
     }
+    // One catalog read per fetch, shared by all batches; keep former advisors
+    // eligible so historical messages remain identifiable after reassignment.
+    const [agents] = rows.length ? await this.pool.query(`SELECT Nombre FROM ${a}`) : [[]];
+    const agentNames = atomAgentNameIndex(agents);
     const conversations = rows.map(row => {
       const country = byCountry.get(Number(row.CodigoPais));
       if (!country?.code) throw new Error(`Falta el país ${row.CodigoPais} en el catálogo configurado de Atom.`);
-      return mapAtomConversation(row, byDocument.get(String(row.IdDocumentoVigente)) || [], country, this.timezone);
+      return mapAtomConversation(row, byDocument.get(String(row.IdDocumentoVigente)) || [], country, this.timezone, agentNames);
     });
     return { conversations, countries, loadedAt: new Date().toISOString() };
   }
