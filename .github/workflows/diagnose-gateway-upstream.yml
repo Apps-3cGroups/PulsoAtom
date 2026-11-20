@@ -1,0 +1,78 @@
+name: Diagnose Gateway upstream connectivity
+on:
+  push:
+    branches: [codex/utc-502-recovery-20261120]
+    paths:
+      - .github/workflows/diagnose-gateway-upstream.yml
+      - api/scripts/diagnose-gateway-upstream.py
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pulso-gateway-upstream-diagnostics
+  cancel-in-progress: false
+jobs:
+  diagnose:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read-only Gateway and Tailscale diagnostics
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        env:
+          TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          $runId = "$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          if ($runId -notmatch '^\d+-\d+$') { throw 'Invalid run identifier' }
+          $workDir = Join-Path $env:RUNNER_TEMP "pulso-model-diagnostics-$runId"
+          New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+          $keyPath = Join-Path $workDir 'ssh-key'
+          $knownHosts = Join-Path $workDir 'known_hosts'
+          $modulePath = Join-Path $workDir 'diagnostic.py'
+          $shellPath = Join-Path $workDir 'diagnostic.sh'
+          $remoteModule = "/tmp/pulso-model-diagnostics-$runId.py"
+          $remoteShell = "/tmp/pulso-model-diagnostics-$runId.sh"
+          $target = 'ubuntu@10.252.1.248'
+          $sshOptions = @('-i',$keyPath,'-o','IdentitiesOnly=yes','-o','BatchMode=yes','-o','ConnectTimeout=15','-o','StrictHostKeyChecking=accept-new','-o',"UserKnownHostsFile=$knownHosts")
+          function Checked([string]$program, [string[]]$arguments) {
+            & $program @arguments
+            if ($LASTEXITCODE -ne 0) { throw "$program failed with exit code $LASTEXITCODE" }
+          }
+          try {
+            $key = $env:TD_APPS_SSH_KEY
+            if ([string]::IsNullOrWhiteSpace($key)) { throw 'Missing deployment SSH key' }
+            if (($key -notmatch "`n") -and ($key -match '\\n')) { $key = $key -replace '\\n', "`n" }
+            $key = ($key -replace "`r`n", "`n").TrimEnd() + "`n"
+            if ($key -notmatch '-----BEGIN .+ PRIVATE KEY-----') { throw 'Invalid SSH key format' }
+            [System.IO.File]::WriteAllText($keyPath,$key,[System.Text.Encoding]::ASCII)
+            $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            Checked 'icacls' @($keyPath,'/inheritance:r')
+            Checked 'icacls' @($keyPath,'/grant:r',"${identity}:R")
+            $module = (Get-Content 'api/scripts/diagnose-gateway-upstream.py' -Raw) -replace "`r`n", "`n"
+            [System.IO.File]::WriteAllText($modulePath,$module,[System.Text.UTF8Encoding]::new($false))
+            $script = @'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          /opt/agent-platform/venvs/gateway/bin/python '__MODULE__'
+          '@
+            $script = (($script -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`n").Replace('__MODULE__',$remoteModule)
+            [System.IO.File]::WriteAllText($shellPath,$script,[System.Text.UTF8Encoding]::new($false))
+            Checked 'scp' ($sshOptions + @($modulePath,"${target}:$remoteModule"))
+            Checked 'scp' ($sshOptions + @($shellPath,"${target}:$remoteShell"))
+            Checked 'ssh' ($sshOptions + @($target,"chmod 644 '$remoteModule' '$remoteShell'; sudo -n bash '$remoteShell'"))
+          }
+          finally {
+            if (Test-Path -LiteralPath $keyPath) {
+              & ssh @sshOptions $target "rm -f -- '$remoteModule' '$remoteShell'"
+              $global:LASTEXITCODE = 0
+              $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+              & icacls $keyPath /inheritance:r | Out-Null
+              & icacls $keyPath /grant:r "${identity}:F" | Out-Null
+              Remove-Item -LiteralPath $keyPath -Force
+            }
+            Remove-Item -LiteralPath $workDir -Recurse -Force
+          }
