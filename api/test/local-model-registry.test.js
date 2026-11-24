@@ -67,8 +67,23 @@ test('Clef Flash output and decision instructions are versioned without changing
       outputSchemaVersion: 'clef-flash-schema-1' }]) };
   assert.throws(() => models.resolve('clef-local', beforeClarification), { code: 'MODEL_CHANGED' });
   assert.equal(gemma.configurationHash, registry().list()[1].configurationHash);
-  assert.ok(!Object.hasOwn(gemma, 'outputSchemaVersion'));
+  assert.equal(gemma.outputSchemaVersion, 'gemma-schema-1');
   assert.ok(!Object.hasOwn(gemma, 'decisionInstructionsVersion'));
+});
+
+test('Gemma initial output contract has a new identity even with frozen prompts and rejects previous profiles', () => {
+  const runtime = { 'gemma-local': { promptText: 'Instrucción histórica sintética.', itemPrompts: {}, timeoutMs: 180000 } };
+  for (const models of [registry(), registry().withRuntime(runtime)]) {
+    const current = models.resolve('gemma-local');
+    const historical = { ...current, evaluator: { ...current.evaluator } };
+    delete historical.evaluator.outputSchemaVersion;
+    const oldSnapshot = models.snapshot(historical), newSnapshot = models.snapshot(current);
+    assert.equal(newSnapshot.outputSchemaVersion, 'gemma-schema-1');
+    assert.notEqual(oldSnapshot.configurationHash, newSnapshot.configurationHash);
+    assert.throws(() => models.resolve('gemma-local', oldSnapshot), { code: 'MODEL_CHANGED' });
+    assert.equal(models.resolve('gemma-local', newSnapshot), current);
+  }
+  assert.equal(registry({ AGENT_SHARED_TOKEN: 'rotated-synthetic-secret' }).list()[1].configurationHash, registry().list()[1].configurationHash);
 });
 
 test('existing OpenAI/Gemini configuration hashes stay compatible', () => {
@@ -142,7 +157,7 @@ test('native decisions are explicit and do not change Gemma or legacy chat ident
   assert.notEqual(clef.configurationHash, chat[0].configurationHash);
   assert.equal(native.list()[1].configurationHash, chat[1].configurationHash);
   assert.equal(native.list()[1].configurationHash, digest(['gateway', 'gemma-synthetic', 'http://gateway.example:9000', 180000,
-    { toolKey: 'gemma', portalKey: 'pulso-test', responseFormat: 'json_schema', maxTokens: 16000, temperature: 0 }]));
+    { toolKey: 'gemma', portalKey: 'pulso-test', responseFormat: 'json_schema', maxTokens: 16000, temperature: 0, outputSchemaVersion: 'gemma-schema-1' }]));
   assert.equal(registry({ CLEF_PROTOCOL: 'chat' }).list()[0].configurationHash, chat[0].configurationHash);
   assert.equal(native.resolve('clef-local').evaluator.protocol, 'systemone');
   assert.equal(asRegistry(native.resolve('clef-local').evaluator).list()[0].provider, 'gateway');

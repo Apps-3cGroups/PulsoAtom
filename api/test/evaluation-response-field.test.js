@@ -98,3 +98,21 @@ test('only the recognized decision instructions version from the configured Clef
     assert.ok(!JSON.stringify(state).includes('PRIVATE_INSTRUCTIONS'));
   }
 });
+
+test('Gemma schema provenance only records the known version matching the configured evaluator', async () => {
+  for (const outputSchemaVersion of ['gemma-schema-1', undefined, null, 'PRIVATE_SCHEMA', { text: 'PRIVATE_SCHEMA' }, 'clef-flash-schema-1']) {
+    const { state, store, registry } = fixture(() => ({}));
+    state.settings.aiPolicy.primaryId = 'gemma-local';
+    const gemma = registry.profiles.find(p => p.id === 'gemma-local');
+    gemma.model = 'gemma-test';
+    gemma.evaluator.outputSchemaVersion = 'gemma-schema-1';
+    gemma.evaluator.evaluate = async (conversation, variables) => ({ model: gemma.model, outputSchemaVersion,
+      results: results(conversation, variables) });
+    assert.equal((await runEvaluationBatch(store, registry, { max: 1 })).status, 'completed');
+    const expected = outputSchemaVersion === 'gemma-schema-1' ? outputSchemaVersion : undefined;
+    assert.equal(state.attempts[0].outputSchemaVersion, expected);
+    assert.equal(state.evaluations[0].outputSchemaVersion, expected);
+    assert.equal(state.tasks[0].profileStates['gemma-local'].outputSchemaVersion, expected);
+    assert.ok(!JSON.stringify(state).includes('PRIVATE_SCHEMA'));
+  }
+});

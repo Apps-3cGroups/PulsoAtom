@@ -1,0 +1,116 @@
+name: Run Pulso review selection
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: 'Private reviewRequest identifier already installed in Pulso'
+        required: true
+        type: string
+      action:
+        description: 'Check, probe both models, start the durable run, or inspect status'
+        required: true
+        type: choice
+        options: [check, pilot, start, status]
+permissions:
+  contents: read
+concurrency:
+  group: pulso-review-selection-${{ inputs.request_id }}
+  cancel-in-progress: false
+jobs:
+  review:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+    steps:
+      - name: Execute the bounded review operation
+        env:
+          TD_APPS_SSH_KEY: ${{ secrets.TD_APPS_SSH_KEY }}
+          REVIEW_REQUEST_ID: ${{ inputs.request_id }}
+          REVIEW_ACTION: ${{ inputs.action }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          if ($env:REVIEW_REQUEST_ID -notmatch '^[a-z0-9][a-z0-9-]{2,79}$') { throw 'Invalid request identifier.' }
+          if ($env:REVIEW_ACTION -notin @('check', 'pilot', 'start', 'status')) { throw 'Invalid review operation.' }
+          if ($env:GITHUB_SHA -notmatch '^[a-f0-9]{40}$') { throw 'Invalid deployed revision.' }
+          if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) { throw 'Missing SSH key.' }
+          foreach ($tool in @('ssh', 'scp', 'icacls')) {
+            if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required command missing: $tool" }
+          }
+          function Invoke-Checked {
+            param([string]$FilePath, [string[]]$Arguments)
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "$FilePath failed with exit code $LASTEXITCODE" }
+          }
+          $work = Join-Path $env:RUNNER_TEMP "pulso-review-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          New-Item -ItemType Directory -Path $work -Force | Out-Null
+          $keyPath = Join-Path $work 'ssh-key.pem'
+          $scriptPath = Join-Path $work 'review.sh'
+          $knownHosts = Join-Path $work 'known_hosts'
+          $remoteScript = "/tmp/pulso-review-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT).sh"
+          $target = 'ubuntu@10.252.1.214'
+          $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          $sshOptions = @('-i', $keyPath, '-p', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts")
+          try {
+            $key = $env:TD_APPS_SSH_KEY
+            if (($key -notmatch "`n") -and ($key -match '\\n')) { $key = $key -replace '\\n', "`n" }
+            $key = ($key -replace "`r`n", "`n").TrimEnd() + "`n"
+            if ($key -notmatch '-----BEGIN .+ PRIVATE KEY-----' -or $key -notmatch '-----END .+ PRIVATE KEY-----') { throw 'Invalid SSH key format.' }
+            [System.IO.File]::WriteAllText($keyPath, $key, [System.Text.Encoding]::ASCII)
+            Invoke-Checked 'icacls' @($keyPath, '/inheritance:r')
+            Invoke-Checked 'icacls' @($keyPath, '/grant:r', "${identity}:R")
+            $script = @'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          umask 077
+          cd /var/www/nodeapps/PulsoAtom
+          [ "$(id -un)" = td ] || { echo 'Unexpected execution account.' >&2; exit 1; }
+          [ "$(git rev-parse HEAD)" = '__TARGET_SHA__' ] || { echo 'Deploy the exact main revision before running this operation.' >&2; exit 1; }
+          cd api
+          request='__REQUEST_ID__'
+          action='__ACTION__'
+          case "$action" in
+            check) node scripts/run-review-selection.js --request-id "$request" --check ;;
+            pilot) node scripts/probe-review-models.js --request-id "$request" --run ;;
+            start)
+              node scripts/run-review-selection.js --request-id "$request" --check
+              run_dir=".data/review-runs/$request"
+              mkdir -p "$run_dir"
+              chmod 700 "$run_dir"
+              if [ -f "$run_dir/launcher.pid" ] && kill -0 "$(cat "$run_dir/launcher.pid")" 2>/dev/null; then
+                echo '{"status":"already-running"}'
+                exit 0
+              fi
+              nohup node scripts/run-review-selection.js --request-id "$request" --run --publish-on-complete > "$run_dir/worker.log" 2>&1 < /dev/null &
+              worker_pid=$!
+              printf '%s\n' "$worker_pid" > "$run_dir/launcher.pid"
+              sleep 2
+              if ! kill -0 "$worker_pid" 2>/dev/null; then
+                echo 'The review worker exited during startup. Inspect its private status.' >&2
+                exit 1
+              fi
+              echo '{"status":"started"}'
+              ;;
+            status) node scripts/run-review-selection.js --request-id "$request" --status ;;
+          esac
+          '@
+            $script = ($script -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
+            $script = $script.Replace('__TARGET_SHA__', $env:GITHUB_SHA).Replace('__REQUEST_ID__', $env:REVIEW_REQUEST_ID).Replace('__ACTION__', $env:REVIEW_ACTION)
+            [System.IO.File]::WriteAllText($scriptPath, $script, [System.Text.UTF8Encoding]::new($false))
+            Invoke-Checked 'scp' @('-i', $keyPath, '-P', '22', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=accept-new', '-o', "UserKnownHostsFile=$knownHosts", $scriptPath, "${target}:$remoteScript")
+            $command = "sudo -n chown td:td '$remoteScript' && sudo -n chmod 700 '$remoteScript' && sudo -n -u td -H bash '$remoteScript'; status=`$?; sudo -n rm -f '$remoteScript'; exit `$status"
+            Invoke-Checked 'ssh' ($sshOptions + @($target, $command))
+          }
+          finally {
+            if (Test-Path -LiteralPath $keyPath) {
+              & ssh @sshOptions $target "sudo -n rm -f '$remoteScript'" 2>$null
+              Invoke-Checked 'icacls' @($keyPath, '/grant:r', "${identity}:F")
+              Remove-Item -LiteralPath $keyPath -Force
+            }
+            if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+            if (Test-Path -LiteralPath $work) { throw 'Temporary SSH material remains.' }
+            $global:LASTEXITCODE = 0
+          }

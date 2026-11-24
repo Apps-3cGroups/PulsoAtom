@@ -13,6 +13,8 @@ import { startEvaluationHeartbeat } from './evaluation-heartbeat.js';
 import { activityOnDate, validateDailyActivityRequest, sameDailyCohort, withinDailyLimit, dailyAssignedCountries, hasNewDailyQuotaEntries } from './daily-activity.js';
 import { assignedHandoffVersion, dailyHandoffFor } from './daily-equivalence.js';
 import { assertThursdayRequest, withoutThursdayDuplicates } from './thursday-handoff.js';
+import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION } from './services/clefFlashSchema.js';
+import { GEMMA_OUTPUT_SCHEMA_VERSION } from './services/gemmaSchema.js';
 
 const retryable = error => ['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE', 'DATABASE_TRANSIENT'].includes(error.code);
 const running = new Map();
@@ -376,7 +378,9 @@ export async function processTask(store, registry, job, task, conversation, cata
         // Audit only the output channel used by this attempt. Never retain raw
         // model output or mix channel metadata into equivalence/protocol hashes.
         const responseField = ['content', 'reasoning_content'].includes(response.responseField) ? response.responseField : null;
-        const outputSchemaVersion = profile.model === 'clef-flash' && response.outputSchemaVersion === 'clef-flash-schema-1'
+        const expectedSchemaVersion = profile.model === 'clef-flash' ? CLEF_FLASH_OUTPUT_SCHEMA_VERSION
+          : profile.model.startsWith('gemma-') ? GEMMA_OUTPUT_SCHEMA_VERSION : null;
+        const outputSchemaVersion = expectedSchemaVersion && response.outputSchemaVersion === expectedSchemaVersion
           && response.outputSchemaVersion === profile.evaluator.outputSchemaVersion ? response.outputSchemaVersion : null;
         const decisionInstructionsVersion = profile.model === 'clef-flash' && response.decisionInstructionsVersion === 'clef-flash-decisions-1'
           && response.decisionInstructionsVersion === profile.evaluator.decisionInstructionsVersion ? response.decisionInstructionsVersion : null;
@@ -395,6 +399,7 @@ export async function processTask(store, registry, job, task, conversation, cata
           ...(runtimeIdentities.length ? { runtimeIdentities } : {}),
           ...(contextBatches.length ? { contextBatches } : {}),
           ...(formatRepairs.length ? { formatRepairs } : {}),
+          ...(outputSchemaVersion ? { outputSchemaVersion } : {}),
           ...(decisionInstructionsVersion ? { decisionInstructionsVersion } : {}) };
         itemErrors = pending.filter(v => !retained.has(v.id)).map(v => {
           const failure = response.validationErrors?.find(e => e.variableId === v.id);
@@ -455,6 +460,7 @@ export async function processTask(store, registry, job, task, conversation, cata
     ...(answer.runtimeIdentities?.length ? { runtimeIdentities: answer.runtimeIdentities } : {}),
     ...(answer.contextBatches?.length ? { contextBatches: answer.contextBatches } : {}),
     ...(answer.formatRepairs?.length ? { formatRepairs: answer.formatRepairs } : {}),
+    ...(answer.outputSchemaVersion ? { outputSchemaVersion: answer.outputSchemaVersion } : {}),
     ...(answer.decisionInstructionsVersion ? { decisionInstructionsVersion: answer.decisionInstructionsVersion } : {}),
     ...(answer.protocol ? { protocol: answer.protocol, adapterVersion: answer.adapterVersion, instructionsHash: answer.instructionsHash,
       requestIds: answer.requestIds, requests: answer.requests } : {}),
