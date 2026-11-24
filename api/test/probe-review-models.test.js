@@ -7,7 +7,8 @@ import { createState } from '../src/data/seed.js';
 import { digest, sourceFingerprint } from '../src/evaluation-context.js';
 import { freshReviewSelectionHash } from '../src/fresh-review-run.js';
 import { ModelRegistry } from '../src/model-registry.js';
-import { parseProbeArguments, readProbeRequest, selectProbeCases, readProbeSources, prepareProbe, runProbe, privateProbeOutput } from '../scripts/probe-review-models.js';
+import { parseProbeArguments, readProbeRequest, selectProbeCases, readProbeSources, prepareProbe, runProbe, privateProbeOutput,
+  probeErrorDiagnostic, sanitizedProbeReport, readPrivateProbeReport, sanitizedUpstreamError, probeGemmaRejection } from '../scripts/probe-review-models.js';
 
 const countries = ['HN', 'PA', 'CR', 'SV', 'MX', 'NI'];
 const ids = ['clef-local', 'gemma-local'];
@@ -68,9 +69,81 @@ function fixture() {
 test('arguments default to read-only check and reject ambiguous modes and traversal', () => {
   assert.deepEqual(parseProbeArguments(['--request-id', 'fresh-review214-20261125']), { requestId: 'fresh-review214-20261125', mode: 'check' });
   assert.equal(parseProbeArguments(['--run', '--request-id', 'example']).mode, 'run');
+  assert.equal(parseProbeArguments(['--request-id', 'example', '--report-only']).mode, 'report-only');
+  assert.equal(parseProbeArguments(['--request-id', 'example', '--probe-rejection']).mode, 'probe-rejection');
   for (const args of [[], ['--request-id', '../outside'], ['--request-id', 'x', '--check', '--run'], ['--request-id', 'x', '--unexpected']]) {
     assert.throws(() => parseProbeArguments(args), { code: 'INVALID_ARGUMENTS' });
   }
+});
+
+function rejectionFixture() {
+  const state = fixture().state;
+  state.catalog.forEach(variable => { variable.active = true; });
+  state.settings.localModelConfiguration = { profiles: [
+    { id: 'gemma-local', model: 'gemma-4-26b-a4b-it-mlx', toolKey: 'gemma', enabled: true, responseFormat: 'json_schema', protocol: 'chat' },
+  ] };
+  const env = { GATEWAY_BASE_URL: 'https://gateway.private.invalid', AGENT_SHARED_TOKEN: 'secret-canary-abc', GATEWAY_PORTAL_KEY: 'portal-pulso' };
+  return { state, env };
+}
+
+test('synthetic rejection diagnostic preserves actual runtime and captures only safe error fields in one request', async () => {
+  const f = rejectionFixture(), before = structuredClone(f.state), calls = [];
+  const result = await probeGemmaRejection({ ...f, fetchImpl: async (url, options) => {
+    const request = JSON.parse(options.body); calls.push(request);
+    assert.equal(request.path, '/v1/chat/completions'); assert.equal(request.body.model, 'gemma-4-26b-a4b-it-mlx');
+    assert.equal(request.timeout_ms, 120000);
+    assert.match(request.body.messages[0].content, /Instrucción configurada/);
+    assert.match(request.body.messages.at(-1).content, /ProductoPrueba/);
+    assert.doesNotMatch(JSON.stringify(request.body.messages), /PRIVATE_CUSTOMER_TEXT/);
+    assert.equal(request.body.response_format.type, 'json_schema');
+    assert.match(JSON.stringify(request.body.response_format.json_schema.schema), /anyOf/);
+    return Response.json({ ok: false, tool_key: 'gemma', method: 'POST', path: '/v1/chat/completions', request_uuid: 'synthetic-request',
+      upstream_status_code: 400, response: { error: { type: 'invalid_request', code: 'invalid_value', param: 'response_format',
+        message: 'Failed to convert JSON schema: unsupported anyOf. PRIVATE_CUSTOMER_TEXT secret-canary-abc https://internal.private/path' },
+      prompt: privateText, rawResponse: privateText } });
+  } });
+  assert.equal(calls.length, 1); assert.equal(result.networkCalls, 1); assert.equal(result.blockedAdditionalRequests, 0);
+  assert.equal(result.requestedVariables.length, 8); assert.equal(result.includesDescriptor, true);
+  assert.equal(result.transport.httpStatus, 200); assert.equal(result.transport.upstreamStatus, 400);
+  assert.equal(result.error.code, 'AI_CONFIGURATION'); assert.equal(result.error.upstreamStatus, 400);
+  assert.equal(result.transport.error.classification, 'schema-or-grammar-rejection');
+  assert.ok(result.transport.error.schemaKeywords.includes('anyOf')); assert.match(result.transport.error.message, /unsupported anyOf/);
+  assert.equal(result.completed, false); assert.equal(result.atomRead, false); assert.equal(result.databaseChanged, false);
+  assert.deepEqual(f.state, before);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|secret-canary|gateway\.private|internal\.private|ProductoPrueba|rawResponse|promptText/);
+});
+
+test('synthetic diagnostic limits recursive adapter retries to one network request and redacts arbitrary error content', async () => {
+  const f = rejectionFixture(); let calls = 0;
+  const result = await probeGemmaRejection({ ...f, fetchImpl: async () => {
+    calls++;
+    return Response.json({ ok: false, tool_key: 'gemma', method: 'POST', path: '/v1/chat/completions', request_uuid: 'synthetic-request',
+      upstream_status_code: 400, response: { error: { code: 'context_length_exceeded', message: 'Context length exceeded' } } });
+  } });
+  assert.equal(calls, 1); assert.equal(result.networkCalls, 1); assert.ok(result.blockedAdditionalRequests >= 1);
+  assert.deepEqual(result.blockedAdditionalOperations, ['POST /v1/chat/completions']);
+  assert.equal(result.transport.upstreamStatus, 400);
+  const diagnostic = sanitizedUpstreamError({ message: 'PRIVATE_NAME https://10.0.0.1/path secret-canary-abc JSON schema anyOf',
+    type: privateText, code: privateText, param: privateText }, ['secret-canary-abc']);
+  assert.equal(diagnostic.type, null); assert.equal(diagnostic.code, null); assert.equal(diagnostic.param, null);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /PRIVATE_|secret-canary|10\.0\.0\.1|https/);
+  assert.match(diagnostic.message, /JSON schema anyOf/);
+  const grammar = sanitizedUpstreamError({ message: 'minLength 1 maxLength 10000 min_repeat 0 max_repeat 3 DFA complexity 10001' });
+  assert.match(grammar.message, /minLength 1 maxLength 10000 min_repeat 0 max_repeat 3 DFA complexity \[redacted\]/);
+  assert.ok(grammar.schemaKeywords.includes('minLength')); assert.ok(grammar.schemaKeywords.includes('DFA'));
+});
+
+test('synthetic diagnostic distinguishes numbered model verification from a schema rejection without sending discovery', async () => {
+  const f = rejectionFixture(); let calls = 0;
+  const result = await probeGemmaRejection({ ...f, fetchImpl: async () => {
+    calls++;
+    return Response.json({ ok: true, tool_key: 'gemma', method: 'POST', path: '/v1/chat/completions', request_uuid: 'synthetic-request',
+      upstream_status_code: 200, response: { model: 'gemma-4-26b-a4b-it-mlx:2', choices: [] } });
+  } });
+  assert.equal(calls, 1); assert.equal(result.transport.returnedModel, 'gemma-4-26b-a4b-it-mlx:2');
+  assert.equal(result.transport.upstreamStatus, 200); assert.equal(result.transport.error, null);
+  assert.deepEqual(result.blockedAdditionalOperations, ['GET /api/v1/models']);
+  assert.equal(result.completed, false);
 });
 
 test('request loading uses only read-only SQL and never loads jobs or earlier results', async () => {
@@ -187,5 +260,44 @@ test('private artifacts are owner-only, checkpointed atomically and protected fr
     assert.equal(JSON.parse(await readFile(path.join(directory, artifacts[0]), 'utf8')).state, 'finished');
     await output.close(); output = null;
     assert.ok(!(await readdir(directory)).includes('pilot.lock'));
+  } finally { await output?.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('diagnostic extracts saved HTTP status only from exact technical templates and redacts arbitrary messages', () => {
+  const known = probeErrorDiagnostic({ code: 'AI_CONFIGURATION', message: 'El Gateway rechazó la solicitud al modelo local (HTTP 400).' });
+  assert.equal(known.upstreamStatus, 400); assert.equal(known.upstreamStatusSource, 'known-saved-message');
+  assert.equal(known.messageRedacted, false);
+  const unknown = probeErrorDiagnostic({ code: 'AI_CONFIGURATION', message: `HTTP 400 ${privateText} token=secret`, body: privateText });
+  assert.equal(unknown.upstreamStatus, null); assert.equal(unknown.messageRedacted, true);
+  assert.doesNotMatch(JSON.stringify(unknown), /PRIVATE_|secret|token=/);
+  const conflict = probeErrorDiagnostic({ code: 'AI_CONFIGURATION', details: { upstreamStatus: 422 }, message: known.message });
+  assert.equal(conflict.upstreamStatus, null); assert.equal(conflict.upstreamStatusSource, 'conflicting-saved-fields');
+});
+
+test('report-only reads the private artifact without re-evaluating and emits no conversation identifiers or text', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'pulso-report-only-'));
+  let output;
+  try {
+    output = await privateProbeOutput('test-report', root);
+    const artifact = { schemaVersion: 1, privateDiagnostic: true,
+      summary: { requestId: 'test-report', passed: false, completed: 6, checkedAt: '2026-11-24T23:00:00.000Z',
+        byModel: [{ profileId: 'gemma-local', model: 'gemma-4-26b-a4b-it-mlx', total: 6, completed: 0, partial: 6, failed: 0 }] },
+      sources: [{ conversationId: 'PRIVATE_CONVERSATION_ID', country: 'SV' }],
+      tasks: [{ id: 'PRIVATE_TASK_ID', conversationId: 'PRIVATE_CONVERSATION_ID', status: 'partial', profile: { id: 'gemma-local' },
+        error: { code: 'AI_CONFIGURATION', message: 'El Gateway rechazó la solicitud al modelo local (HTTP 400).' } }],
+      attempts: [{ taskId: 'PRIVATE_TASK_ID', profileId: 'gemma-local', requestedModel: 'gemma-4-26b-a4b-it-mlx', status: 'failed', durationMs: 300,
+        variableIds: ['cliente_molesto'], validVariableIds: [], validationErrors: [{ variableId: 'cliente_molesto', rules: ['invalid_reason', privateText], message: privateText }],
+        error: { code: 'AI_CONFIGURATION', message: `RAW_BODY ${privateText}` }, rawResponse: privateText }],
+      evaluations: [{ results: [{ reason: privateText, quote: privateText }] }],
+    };
+    await output.checkpoint(artifact);
+    const report = await readPrivateProbeReport('test-report', root);
+    assert.equal(report.phase, 'report-only'); assert.equal(report.inferenceExecuted, false); assert.equal(report.databaseChanged, false);
+    assert.equal(report.tasks[0].country, 'SV'); assert.equal(report.tasks[0].error.upstreamStatus, 400);
+    assert.equal(report.attempts[0].error.messageRedacted, true);
+    assert.deepEqual(report.attempts[0].validationErrors, [{ variableId: 'cliente_molesto', rules: ['invalid_reason'] }]);
+    assert.doesNotMatch(JSON.stringify(report), /PRIVATE_|RAW_BODY|rawResponse|conversationId|taskId|quote/);
+    assert.throws(() => sanitizedProbeReport(artifact, 'different-request'), { code: 'PILOT_REPORT_INVALID' });
+    await assert.rejects(readPrivateProbeReport('missing', root), { code: 'PILOT_REPORT_NOT_FOUND' });
   } finally { await output?.close(); await rm(root, { recursive: true, force: true }); }
 });
