@@ -4,6 +4,7 @@ import { GatewayApiClient } from '../src/services/gatewayApiClient.js';
 import { GatewayEvaluator } from '../src/gateway-evaluator.js';
 import { evaluationInput, evaluationInstructions, evaluationSchema } from '../src/evaluator.js';
 import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from '../src/services/clefFlashSchema.js';
+import { GEMMA_OUTPUT_SCHEMA_VERSION, gemmaEvaluationSchema } from '../src/services/gemmaSchema.js';
 import { CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION, clefFlashDecisionInstructions } from '../src/services/clefFlashInstructions.js';
 
 const base = { baseUrl: 'http://gateway.test:9000', token: 'synthetic-secret-token', portalKey: 'pulsoAtom', toolKey: 'gemma', model: 'synthetic-gemma', timeoutMs: 180000 };
@@ -327,11 +328,12 @@ test('a later context batch failure retains validated earlier answers', async ()
   assert.equal(answer.contextBatches.length, 1);
 });
 
-test('Gemma format retries constrain valid combinations without rewriting decisions or profile identity', async () => {
+test('Gemma format retries keep the versioned contract without rewriting decisions', async () => {
   const response = payload(); response.model = 'gemma-4-26b-a4b-it-mlx';
   const { instance, calls } = evaluator(envelope(response), { model: response.model });
   const answer = await instance.evaluate(conversation, variables, { validationErrors: [{ variableId: 'event', rules: ['inconsistent_status_value'] }] });
-  assert.equal(instance.outputSchemaVersion, undefined);
+  assert.equal(instance.outputSchemaVersion, GEMMA_OUTPUT_SCHEMA_VERSION);
+  assert.equal(answer.outputSchemaVersion, GEMMA_OUTPUT_SCHEMA_VERSION);
   assert.equal(answer.formatRepair, 'status-value-evidence-1');
   assert.deepEqual(JSON.parse(calls[0][1].body).body.response_format.json_schema.schema, clefFlashEvaluationSchema(variables, conversation));
   assert.equal(answer.results.find(r => r.variableId === 'event').value, 1);
@@ -341,6 +343,37 @@ test('Gemma format retries constrain valid combinations without rewriting decisi
     { validationErrors: [{ variableId: 'event', rules: ['inconsistent_status_value'] }] });
   assert.ok(!invalid.results.some(r => r.variableId === 'event'));
   assert.ok(invalid.validationErrors.some(e => e.rules.includes('inconsistent_status_value')));
+});
+
+test('Gemma uses coherent status/value/evidence alternatives on the first request in both configured formats', async () => {
+  const model = 'gemma-4-26b-a4b-it-mlx';
+  const products = { id: 'productos_solicitados', type: 'Descriptor', method: 'IA' };
+  const checklist = [...variables, products];
+  for (const responseFormat of ['json_schema', 'json_object']) {
+    const raw = valid();
+    raw.results.event = { status: 'evaluado', value: 0, reason: 'No se observa el evento.', evidence_message_ids: ['m2'] };
+    raw.results.productos_solicitados = { status: 'no_evaluado', value: [], reason: 'No se identifica un producto.', evidence_message_ids: [] };
+    const response = { ...payload(raw), model };
+    const { instance, calls } = evaluator(envelope(response), { model, responseFormat });
+    const answer = await instance.evaluate(conversation, checklist);
+    assert.equal(calls.length, 1, 'This is the first request, without retry feedback');
+    const body = JSON.parse(calls[0][1].body).body;
+    const schema = gemmaEvaluationSchema(checklist, conversation);
+    if (responseFormat === 'json_schema') {
+      assert.deepEqual(body.response_format, { type: 'json_schema', json_schema: { name: 'pulso_evaluation', strict: true, schema } });
+    } else {
+      assert.deepEqual(body.response_format, { type: 'json_object' });
+      assert.ok(body.messages[1].content.endsWith(JSON.stringify(schema)));
+    }
+    assert.equal(body.messages[0].content, evaluationInstructions, 'Business decision instructions remain unchanged');
+    assert.equal(answer.outputSchemaVersion, GEMMA_OUTPUT_SCHEMA_VERSION);
+    assert.equal(answer.formatRepair, undefined);
+    assert.equal(answer.decisionInstructionsVersion, undefined);
+    assert.deepEqual(answer.results.map(r => r.variableId), ['tipo_interaccion']);
+    assert.deepEqual(answer.validationErrors.map(e => [e.variableId, e.rules]), [
+      ['event', ['unexpected_evidence']], ['productos_solicitados', ['inconsistent_status_value']],
+    ]);
+  }
 });
 
 test('a timeout in a bounded Gemma group preserves earlier answers without recursive timeout retries', async () => {

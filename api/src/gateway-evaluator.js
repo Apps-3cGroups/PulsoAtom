@@ -3,6 +3,7 @@ import { evaluationInput, evaluationInstructions, systemInstructions, configurab
 import { GatewayApiClient } from './services/gatewayApiClient.js';
 import { verifyNumberedModelInstance } from './services/gatewayModelIdentity.js';
 import { CLEF_FLASH_OUTPUT_SCHEMA_VERSION, clefFlashEvaluationSchema } from './services/clefFlashSchema.js';
+import { GEMMA_OUTPUT_SCHEMA_VERSION, gemmaEvaluationSchema } from './services/gemmaSchema.js';
 import { CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION, clefFlashDecisionInstructions } from './services/clefFlashInstructions.js';
 
 const safeUsage = value => {
@@ -25,6 +26,8 @@ export class GatewayEvaluator {
     if (model === 'clef-flash') {
       this.outputSchemaVersion = CLEF_FLASH_OUTPUT_SCHEMA_VERSION;
       this.decisionInstructionsVersion = CLEF_FLASH_DECISION_INSTRUCTIONS_VERSION;
+    } else if (typeof model === 'string' && model.startsWith('gemma-')) {
+      this.outputSchemaVersion = GEMMA_OUTPUT_SCHEMA_VERSION;
     }
   }
   get effectiveInstructionsText() { return this.model === 'clef-flash' ? `${this.instructionsText}\n\n${clefFlashDecisionInstructions}` : this.instructionsText; }
@@ -92,9 +95,11 @@ export class GatewayEvaluator {
     if (!conversation.messages.length) throw new AppError(422, 'La conversación no tiene mensajes evaluables.', 'EMPTY_CONVERSATION');
     const formatRepair = this.model.startsWith('gemma-') && options?.validationErrors?.some(e => e.rules?.length)
       ? 'status-value-evidence-1' : null;
-    // Retry grammar encodes the existing validator contract. It permits all
-    // valid decisions, including abstention, and never repairs values in code.
-    const schema = this.model === 'clef-flash' || formatRepair ? clefFlashEvaluationSchema(variables, conversation) : evaluationSchema(variables);
+    // Both local models receive the existing status/value/evidence contract
+    // from their first request. JSON object mode supplies it as instructions;
+    // JSON schema mode also constrains generation. Validation remains strict.
+    const schema = this.model === 'clef-flash' ? clefFlashEvaluationSchema(variables, conversation)
+      : this.model.startsWith('gemma-') ? gemmaEvaluationSchema(variables, conversation) : evaluationSchema(variables);
     const instructions = this.model === 'clef-flash'
       ? `${this.instructionsText}\n\n${clefFlashDecisionInstructions}` : this.instructionsText;
     const messages = [{ role: 'system', content: instructions }];

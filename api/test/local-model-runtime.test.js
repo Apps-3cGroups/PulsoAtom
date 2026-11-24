@@ -65,6 +65,11 @@ test('a batch uses both model IDs and tools saved in Pulso without model identif
   assert.deepEqual(calls.map(call => [call.toolKey, call.model]), [['clef-tool-saved', 'clef-model-saved'], ['gemma-tool-saved', 'gemma-model-saved']]);
   assert.ok(state.evaluations.every(e => e.provider === 'gateway' && !e.usedFallback));
   assert.deepEqual(state.evaluations.map(e => e.requestedModel), ['clef-model-saved', 'gemma-model-saved']);
+  const gemma = state.evaluations.find(e => e.profileId === 'gemma-local');
+  assert.equal(gemma.modelConfiguration.outputSchemaVersion, 'gemma-schema-1');
+  assert.equal(gemma.outputSchemaVersion, 'gemma-schema-1');
+  assert.ok(state.attempts.filter(a => a.profileId === 'gemma-local').every(a => a.outputSchemaVersion === 'gemma-schema-1'));
+  assert.equal(state.tasks.find(t => t.profile.id === 'gemma-local').profileStates['gemma-local'].outputSchemaVersion, 'gemma-schema-1');
 });
 
 test('scheduler skips pending/legacy policy without AI, then executes the saved local pair once per day', async () => {
@@ -80,9 +85,29 @@ test('scheduler skips pending/legacy policy without AI, then executes the saved 
   assert.equal(job.scope, 'daily');
   assert.equal((await waitForJob(state, job.id)).status, 'completed');
   assert.equal(calls.length, 2);
+  assert.ok(state.jobs[0].modelProfiles.some(p => p.id === 'gemma-local' && p.outputSchemaVersion === 'gemma-schema-1'));
   assert.equal(await runDailyTick(store, registry, now), null);
   assert.equal(state.jobs.length, 1);
   assert.equal(calls.length, 2);
+});
+
+test('a historical Gemma contract cannot resume partial results under the new schema identity', async () => {
+  const { state, store, registry, calls, control } = fixture();
+  control.failGemma = true;
+  const job = await runEvaluationBatch(store, registry, { max: 1 });
+  assert.equal(job.status, 'partial');
+  const bound = registry.forState(state).withRuntime(job.runtimeConfiguration);
+  const current = bound.resolve('gemma-local');
+  const historical = { ...current, evaluator: { ...current.evaluator } };
+  delete historical.evaluator.outputSchemaVersion;
+  const previous = bound.snapshot(historical);
+  state.tasks.find(t => t.profile.id === 'gemma-local').profile = previous;
+  state.jobs[0].modelProfiles = state.jobs[0].modelProfiles.map(p => p.id === 'gemma-local' ? previous : p);
+  const before = structuredClone(state), callCount = calls.length;
+  control.failGemma = false;
+  await assert.rejects(resumeEvaluationBatch(store, registry, job.id), { code: 'MODEL_CHANGED' });
+  assert.equal(calls.length, callCount);
+  assert.deepEqual(state, before);
 });
 
 test('a saved configuration edit between initial read and job transaction prevents stale model execution', async () => {

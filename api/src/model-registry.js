@@ -45,8 +45,8 @@ export class ModelRegistry {
     // are part of a gateway profile's identity. Credentials never enter snapshots.
     const settings = [p.provider, p.model, p.evaluator?.baseUrl, p.evaluator?.timeoutMs];
     if (p.provider === 'gateway') {
-      // Keep the original chat hash byte-for-byte: existing Gemma evaluations
-      // and paused jobs must not change identity when this adapter is installed.
+      // Adapter versions distinguish changed output contracts from historical
+      // profiles. Unversioned chat adapters retain their original hash.
       settings.push(p.evaluator.protocol === 'systemone'
         ? { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, protocol: 'systemone', adapterVersion: p.evaluator.adapterVersion, instructionsHash: p.evaluator.instructionsHash }
         : { toolKey: p.evaluator.toolKey, portalKey: p.evaluator.portalKey, responseFormat: p.evaluator.responseFormat,

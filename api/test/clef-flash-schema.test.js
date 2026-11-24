@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { clefFlashEvaluationSchema } from '../src/services/clefFlashSchema.js';
+import { gemmaEvaluationSchema } from '../src/services/gemmaSchema.js';
 import { validateEvaluation } from '../src/evaluator.js';
 
 const conversation = { completed: true, messages: [{ id: 'm1', actor: 'cliente', text: 'Consulta sintética.' }] };
@@ -40,7 +41,9 @@ function accepts(schema, value) {
 }
 function assertCase(variable, item, expected) {
   const raw = { results: { [variable.id]: item } };
-  assert.equal(accepts(clefFlashEvaluationSchema([variable], conversation), raw), expected, JSON.stringify(item));
+  for (const schema of [clefFlashEvaluationSchema, gemmaEvaluationSchema]) {
+    assert.equal(accepts(schema([variable], conversation), raw), expected, JSON.stringify(item));
+  }
   const validated = validateEvaluation(raw, [variable], conversation, { partial: true });
   assert.equal(validated.validationErrors.length === 0, expected, JSON.stringify(item));
 }
