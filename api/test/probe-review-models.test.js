@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createState } from '../src/data/seed.js';
 import { digest, sourceFingerprint } from '../src/evaluation-context.js';
+import { freshReviewSelectionHash } from '../src/fresh-review-run.js';
 import { ModelRegistry } from '../src/model-registry.js';
 import { parseProbeArguments, readProbeRequest, selectProbeCases, readProbeSources, prepareProbe, runProbe, privateProbeOutput } from '../scripts/probe-review-models.js';
 
@@ -37,7 +38,7 @@ function fixture() {
   const scope = { from: '2026-11-17', to: '2026-11-19', timezone: 'America/Tegucigalpa' };
   const manifest = { schemaVersion: 1, id: 'test-fresh-review', scope, cases, caseCount: cases.length,
     profiles: ids, expectedNewEvaluations: cases.length * 2, counts: Object.fromEntries(countries.map(country => [country, 3])),
-    reviewDeadline: '2026-11-25T10:00:00-06:00', selectionHash: digest({ scope, cases }),
+    reviewDeadline: '2026-11-25T10:00:00-06:00', selectionHash: freshReviewSelectionHash({ scope, cases }),
     preparatoryOnly: true, authorizedForExecution: false };
   const selected = new Set(selectProbeCases(manifest).map(item => item.conversationId));
   const source = { conversations: all.filter(conversation => selected.has(conversation.id)), countries: countries.map(code => ({ code })) };
@@ -115,7 +116,7 @@ test('missing countries, mutated sources, disabled or foreign models fail before
   const missing = structuredClone(f.manifest);
   missing.cases = missing.cases.filter(item => item.country !== 'NI'); missing.caseCount = missing.cases.length;
   missing.expectedNewEvaluations = missing.caseCount * 2; missing.counts.NI = 0;
-  missing.selectionHash = digest({ scope: missing.scope, cases: missing.cases });
+  missing.selectionHash = freshReviewSelectionHash(missing);
   assert.throws(() => selectProbeCases(missing), { code: 'PILOT_COUNTRIES_REQUIRED' });
   const changed = structuredClone(f.source); changed.conversations[0].messages[0].text = 'Different source';
   assert.throws(() => prepareProbe({ ...f, source: changed }), { code: 'SOURCE_CHANGED' });

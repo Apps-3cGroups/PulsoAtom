@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createState } from '../src/data/seed.js';
 import { ModelRegistry } from '../src/model-registry.js';
-import { digest, sourceFingerprint } from '../src/evaluation-context.js';
-import { validateFreshReviewManifest, assertFreshReviewSources, freshReviewChunks, freshReviewConfiguration,
+import { sourceFingerprint } from '../src/evaluation-context.js';
+import { freshReviewSelectionHash, validateFreshReviewManifest, assertFreshReviewSources, freshReviewChunks, freshReviewConfiguration,
   freshReviewOptions, createFreshReviewStore, executeFreshReview, completedFreshReviewSelection } from '../src/fresh-review-run.js';
 import { parseReviewArguments } from '../scripts/run-review-selection.js';
 
@@ -26,7 +26,7 @@ function fixture(count = 2) {
     cases: state.conversations.map(c => ({ conversationId: c.id, country: c.country, activityDate: c.activityDate, activityAt: c.activityAt,
       sourceDocumentId: c.sourceDocumentId, sourceDocumentHash: c.sourceDocumentHash, currentSourceHash: sourceFingerprint(c),
       sourceCompleted: c.completed, messageCount: c.messages.length })) };
-  manifest.selectionHash = digest({ scope: manifest.scope, cases: manifest.cases });
+  manifest.selectionHash = freshReviewSelectionHash(manifest);
   const calls = [];
   const registry = new ModelRegistry(manifest.profiles.map(id => ({ id, label: id, provider: 'gateway', enabled: true,
     model: id === 'clef-local' ? 'clef-flash' : 'gemma-4-26b-a4b-it-mlx',
@@ -73,7 +73,7 @@ test('fresh manifest validates integrity, authorization and forbids prior evalua
     draft => { draft.cases[0].country = 'MX'; },
     draft => { draft.caseCount += 1; },
     draft => { draft.profiles.reverse(); },
-    draft => { draft.cases[0].evaluationId = 'saved-old'; draft.selectionHash = digest({ scope: draft.scope, cases: draft.cases }); },
+    draft => { draft.cases[0].evaluationId = 'saved-old'; draft.selectionHash = freshReviewSelectionHash(draft); },
   ]) { const changed = structuredClone(manifest); change(changed); assert.throws(() => validateFreshReviewManifest(changed), { code: 'INVALID_REVIEW_REQUEST' }); }
 });
 
@@ -188,4 +188,19 @@ test('changing the verified configuration prevents starting an inference', async
   f.manifest.expectedHashes = { modelProfiles: { 'clef-local': 'f'.repeat(64), 'gemma-local': 'f'.repeat(64) } };
   await assert.rejects(executeFreshReview(f), { code: 'REVIEW_CONFIGURATION_CHANGED' });
   assert.equal(f.calls.length, 0); assert.equal(f.state.jobs.length, 0);
+});
+
+
+test('manifest integrity survives MySQL JSON object-key normalization but detects array or value changes', () => {
+  const { manifest } = fixture();
+  const reverseKeys = value => Array.isArray(value) ? value.map(reverseKeys) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).reverse().map(key => [key, reverseKeys(value[key])])) : value;
+  const normalized = JSON.parse(JSON.stringify(reverseKeys(manifest)));
+  assert.equal(freshReviewSelectionHash(normalized), manifest.selectionHash);
+  assert.equal(validateFreshReviewManifest(normalized), normalized);
+  assert.deepEqual(freshReviewChunks(normalized), freshReviewChunks(manifest));
+  normalized.cases.reverse();
+  assert.throws(() => validateFreshReviewManifest(normalized), { code: 'INVALID_REVIEW_REQUEST' });
+  normalized.cases.reverse(); normalized.cases[0].currentSourceHash = 'f'.repeat(64);
+  assert.throws(() => validateFreshReviewManifest(normalized), { code: 'INVALID_REVIEW_REQUEST' });
 });
