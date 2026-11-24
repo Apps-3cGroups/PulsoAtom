@@ -1,4 +1,5 @@
 import { mountAutomationRoutes } from './automation-routes.js';
+import { applyReviewSelection, publicReviewSelection } from './review-selection.js';
 import { sendNavigationJson } from './navigation-response.js';
 import { activeReason, publicOneOffRuns } from './one-off-evaluations.js';
 import express from 'express';
@@ -58,6 +59,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const app = express();
   const externalUserId = id => `${identity?.mode === 'person-email' ? 'somos3c-person' : 'somos3c'}:${id}`;
   const readHistory = (fresh = false) => store.readWithConversations ? store.readWithConversations({ fresh }) : store.read();
+  const readSelectedHistory = async id => store.readReviewSelection ? store.readReviewSelection(id) : applyReviewSelection(await readHistory(), id);
   const authenticationTransaction = fn => store.authenticationTransaction ? store.authenticationTransaction(fn) : store.transaction(fn);
   const readSettings = async () => store.readSettings ? store.readSettings() : (await store.read()).settings || {};
   const settingsTransaction = fn => store.settingsTransaction ? store.settingsTransaction(fn) : store.transaction(state => fn(state.settings ||= {}));
@@ -218,7 +220,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
       catalog: currentCatalog(state).map(v => ({ id: v.id, name: v.name, family: v.family, phase: v.phase, mark: v.mark, type: v.type, active: v.active, version: v.version, availability: catalogAvailability(v) })),
       dateRange: { min: dates.at(0) || null, max: dates.at(-1) || null },
       activityDateRange: { min: activityDates.at(0) || null, max: activityDates.at(-1) || null },
-      integrations: status(state),
+      integrations: status(state), reviewSelection: publicReviewSelection(state),
     });
   });
   app.get(`${prefix}/catalog`, async (req, res) => {
@@ -311,34 +313,35 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   app.get(`${prefix}/summary`, async (req, res) => {
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
-    const state = store.readForNavigation ? await store.readForNavigation(query) : await readHistory();
+    const state = query.reviewSelection ? await readSelectedHistory(query.reviewSelection)
+      : store.readForNavigation ? await store.readForNavigation(query) : await readHistory();
     const conversations = filteredConversations(state, query);
     const visibleIds = new Set(conversations.map(c => c.id));
     await expose(state, req.user.id, state.conversations.filter(c => visibleIds.has(c.id)), query.modelProfileId);
     const priority = conversations.filter(c => c.p1 || c.p2).sort(priorityOrder);
-    await sendNavigationJson(req, res, { metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata });
+    await sendNavigationJson(req, res, { metrics: summarize(conversations), conversations, priority: priority.slice(0, 3), priorityTotal: priority.length, metadata: state.metadata, reviewSelection: query.reviewSelection ? publicReviewSelection(state) : null });
   });
   const list = (search = false) => async (req, res) => {
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
-    const state = await readHistory();
+    const state = query.reviewSelection ? await readSelectedHistory(query.reviewSelection) : await readHistory();
     const items = filteredConversations(state, query, search);
     await expose(state, req.user.id, state.conversations.filter(c => items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize).some(v => v.id === c.id)), query.modelProfileId);
-    res.json({ items: items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize), total: items.length, page: query.page, pageSize: query.pageSize });
+    res.json({ items: items.slice((query.page - 1) * query.pageSize, query.page * query.pageSize), total: items.length, page: query.page, pageSize: query.pageSize, reviewSelection: query.reviewSelection ? publicReviewSelection(state) : null });
   };
   app.get(`${prefix}/conversations`, list());
   app.get(`${prefix}/search`, list(true));
   app.get(`${prefix}/conversations/:id`, async (req, res) => {
-    const state = await readHistory();
-    const conversation = state.conversations.find(c => c.id === req.params.id);
-    if (!conversation) throw new AppError(404, 'No se encontró esta conversación.', 'NOT_FOUND');
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
+    const state = query.reviewSelection ? await readSelectedHistory(query.reviewSelection) : await readHistory();
+    const conversation = state.conversations.find(c => c.id === req.params.id);
+    if (!conversation) throw new AppError(404, 'No se encontró esta conversación.', 'NOT_FOUND');
     await expose(state, req.user.id, [conversation], query.modelProfileId);
     const detail = conversationView(state, conversation, viewContext(state, query.modelProfileId), true);
     // Read-only daily figures are separate from the original saved evaluation.
     detail.dailyMetrics = conversationDailyMetrics(conversation, { timezone: config.timezone });
-    res.json({ conversation: detail });
+    res.json({ conversation: detail, reviewSelection: query.reviewSelection ? publicReviewSelection(state) : null });
   });
   app.post(`${prefix}/conversations/:id/reviews`, async (req, res) => {
     const input = reviewSchema.parse(req.body);

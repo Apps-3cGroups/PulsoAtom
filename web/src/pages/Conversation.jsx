@@ -1,11 +1,13 @@
 import { conversationClock } from '../services/conversationTime';
 import { countryLabel } from '../services/presentationText';
 import { conversationReturn } from '../services/conversationNavigation';
+import { reviewSelectionId, selectedReview, reviewSelectionSourceNote } from '../services/reviewSelection';
+import { queryString } from '../services/api';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Drawer, Tag, Timeline, Tooltip } from 'antd';
 import { ArrowLeftOutlined, BarChartOutlined, HistoryOutlined, ReadOutlined } from '@ant-design/icons';
-import { useApi } from '../hooks';
+import { useApi, usePortal } from '../hooks';
 import ConversationMetrics from '../components/ConversationMetrics';
 import ConversationModelReviews from '../components/ConversationModelReviews';
 import ConversationTranscript from '../components/ConversationTranscript';
@@ -18,11 +20,14 @@ import { buildMessageFlags } from '../services/messageFlags';
 import '../conversation.css';
 
 export default function Conversation() {
+  const { bootstrap } = usePortal();
   const { id } = useParams();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  const selection = selectedReview(params, bootstrap.reviewSelection);
   const returnTarget = conversationReturn(params);
-  const requestPath = id ? `/conversations/${encodeURIComponent(id)}` : null;
+  const selectionQuery = queryString({ reviewSelection: reviewSelectionId(params) });
+  const requestPath = id ? `/conversations/${encodeURIComponent(id)}${selectionQuery ? `?${selectionQuery}` : ''}` : null;
   const request = useApi(requestPath);
   const [filters, setFilters] = useState({ onlyMarked: false, variableId: null, classification: 'all' });
   const [highlight, setHighlight] = useState({ id: params.get('message'), revision: 0 });
@@ -82,6 +87,7 @@ export default function Conversation() {
       <Button icon={<HistoryOutlined />} onClick={() => setInspector('history')}>Revisiones ({c.reviews.length})</Button>
     </div>} />
     {!!c.topics.length && <div className="conversation-meta"><div className="topic-tags">{c.topics.map(topic => <Tag className="neutral-tag" key={topic}>{topic}</Tag>)}</div></div>}
+    {selection?.timeCorrectionCount > 0 && <Alert className="detail-alert" showIcon type="info" message="Resultados originales de la selección" description={reviewSelectionSourceNote(selection)} />}
     {!c.evaluated && <Alert className="detail-alert" showIcon type="info" message="Esta conversación todavía no está evaluada" description="Puedes leer todos los mensajes. Los flags aparecerán cuando se complete su evaluación." />}
     {c.evaluated && ['partial', 'review_pending'].includes(status) && <Alert className="detail-alert" showIcon type="warning" message={status === 'review_pending' ? 'Falta una revisión de modelo' : 'Conversación evaluada con incidencias'} description={status === 'review_pending' ? 'Las respuestas guardadas están en Modelos. Los flags automáticos requieren coincidencia de ambos modelos.' : 'Los resultados válidos están guardados. Algunas variables tienen errores técnicos; no se interpretan como eventos ausentes.'} action={<Button size="small" onClick={() => showChecklist(true)}>Ver detalle</Button>} />}
     {c.evaluation?.sourceChanged && <Alert className="detail-alert" showIcon type="warning" message="La conversación cambió desde la evaluación" description="Las marcas anteriores se conservan en el checklist. No se asocian a los mensajes actualizados hasta evaluar de nuevo." />}

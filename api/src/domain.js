@@ -128,6 +128,7 @@ export function conversationView(state, conversation, context = viewContext(stat
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(s => !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s), 'Fecha inválida');
 export const listQuerySchema = z.object({
   modelProfileId: z.string().max(160).optional(),
+  reviewSelection: z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   from: dateOnly.optional(), to: dateOnly.optional(), country: z.string().max(10).optional(),
   countries: z.string().max(200).regex(/^[A-Z]{2}(,[A-Z]{2})*$/).transform(value => [...new Set(value.split(','))]).optional(),
   dateBasis: z.enum(['started', 'activity']).default('activity'),
@@ -138,15 +139,15 @@ export const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(15),
 }).refine(q => !q.from || !q.to || q.from <= q.to, 'La fecha inicial no puede ser posterior a la final.');
 const normalize = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const displayDateOf = (conversation, basis) => basis === 'started' ? conversation.startedDate || conversation.date : conversation.activityDate || conversation.date;
-const displayTimeOf = (conversation, basis) => basis === 'started' ? conversation.startedAt : conversation.activityAt || conversation.lastActivityAt || conversation.startedAt;
+const displayDateOf = (conversation, basis) => conversation.reviewSelectionDate || (basis === 'started' ? conversation.startedDate || conversation.date : conversation.activityDate || conversation.date);
+const displayTimeOf = (conversation, basis) => conversation.reviewSelectionAt || (basis === 'started' ? conversation.startedAt : conversation.activityAt || conversation.lastActivityAt || conversation.startedAt);
 export function filteredConversations(state, query, textSearch = false) {
   const context = viewContext(state, query.modelProfileId);
   return state.conversations.filter(c => (!query.from || displayDateOf(c, query.dateBasis) >= query.from) && (!query.to || displayDateOf(c, query.dateBasis) <= query.to) && (query.countries ? query.countries.includes(c.country) : !query.country || c.country === query.country) && (!query.agent || c.agent.id === query.agent)).map(c => {
     const view = conversationView(state, c, context);
     view.displayDate = displayDateOf(c, query.dateBasis);
     view.displayAt = displayTimeOf(c, query.dateBasis);
-    view.dateBasis = query.dateBasis || 'activity';
+    view.dateBasis = c.reviewSelectionDate ? 'activity' : query.dateBasis || 'activity';
     if (query.q) {
       const needle = normalize(query.q);
       const haystack = normalize([view.id, view.client.name, view.client.code, view.client.phoneLast4, view.agent.name, ...view.topics, ...view.marks.map(m => m.name)].join(' '));

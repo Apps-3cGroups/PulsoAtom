@@ -16,9 +16,9 @@ export function cleanOverviewParams(params) {
   ['country', 'variable', 'pending', 'classification', 'agreement'].forEach(key => next.delete(key));
   return next;
 }
-export function filterSummaryConversations(conversations, visible) {
+export function filterSummaryConversations(conversations, visible, { includePending = false } = {}) {
   if (!visible.length) return [];
-  const eligible = conversations.filter(c => !['not_evaluated', 'review_pending'].includes(evaluationStatus(c)));
+  const eligible = includePending ? conversations : conversations.filter(c => !['not_evaluated', 'review_pending'].includes(evaluationStatus(c)));
   if (figureKinds.every(kind => visible.includes(kind))) return eligible;
   return eligible.filter(c => compactMarks([c], { visible, classification: 'all' }).kinds.length > 0);
 }

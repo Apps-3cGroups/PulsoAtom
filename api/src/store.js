@@ -6,6 +6,7 @@ import { missingDatabase, databaseError } from './errors.js';
 import { copySourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { migrateCatalogV5 } from './catalog-v5.js';
 import { enableNavigationSummaryCache } from './navigation-cache.js';
+import { requireReviewSelection, applyReviewSelection } from './review-selection.js';
 
 export class DemoStore {
   constructor(filename) { this.filename = filename; this.queue = Promise.resolve(); }
@@ -383,7 +384,19 @@ export class AtomHistoryStore {
     const [state, source] = await Promise.all([this.base.readNavigation([]), this.reader.readOverview({}, { metadataOnly: true })]);
     return this.attach(state, source);
   }
+  async readReviewSelection(id) {
+    const metadata = this.base.readNavigation ? await this.base.readNavigation([]) : await this.base.read();
+    const selection = requireReviewSelection(metadata, id);
+    const conversationIds = selection.cases.map(item => item.conversationId);
+    const [state, source] = await Promise.all([
+      this.base.readNavigation ? this.base.readNavigation(conversationIds) : Promise.resolve(metadata),
+      this.reader.read({ conversationIds }),
+    ]);
+    // Keep the selected metadata and its members from the same initial read.
+    return applyReviewSelection(this.attach({ ...state, reviewSelection: selection }, source), id);
+  }
   async readForNavigation(query, { activeOnly = false, now = new Date() } = {}) {
+    if (query.reviewSelection) return this.readReviewSelection(query.reviewSelection);
     if (!this.base.readNavigation || !this.reader.readOverview) return this.readWithConversations();
     const scheduling = activeOnly ? await this.readSchedulerState() : null;
     const source = await this.reader.readOverview(query, { activeOnly, settings: scheduling?.settings, now });
