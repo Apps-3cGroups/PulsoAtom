@@ -10,7 +10,7 @@ on:
         description: 'Check, probe both models, start the durable run, or inspect status'
         required: true
         type: choice
-        options: [check, pilot, start, status]
+        options: [check, pilot, diagnose, reject, start, status]
 permissions:
   contents: read
 concurrency:
@@ -34,7 +34,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
           if ($env:REVIEW_REQUEST_ID -notmatch '^[a-z0-9][a-z0-9-]{2,79}$') { throw 'Invalid request identifier.' }
-          if ($env:REVIEW_ACTION -notin @('check', 'pilot', 'start', 'status')) { throw 'Invalid review operation.' }
+          if ($env:REVIEW_ACTION -notin @('check', 'pilot', 'diagnose', 'reject', 'start', 'status')) { throw 'Invalid review operation.' }
           if ($env:GITHUB_SHA -notmatch '^[a-f0-9]{40}$') { throw 'Invalid deployed revision.' }
           if ([string]::IsNullOrWhiteSpace($env:TD_APPS_SSH_KEY)) { throw 'Missing SSH key.' }
           foreach ($tool in @('ssh', 'scp', 'icacls')) {
@@ -75,6 +75,11 @@ jobs:
           case "$action" in
             check) node scripts/run-review-selection.js --request-id "$request" --check ;;
             pilot) node scripts/probe-review-models.js --request-id "$request" --run ;;
+            diagnose) node scripts/probe-review-models.js --request-id "$request" --report-only ;;
+            reject)
+              node scripts/probe-review-models.js --request-id "$request" --report-only
+              node scripts/probe-review-models.js --request-id "$request" --probe-rejection
+              ;;
             start)
               node scripts/run-review-selection.js --request-id "$request" --check
               run_dir=".data/review-runs/$request"

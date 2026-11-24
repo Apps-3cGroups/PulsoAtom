@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, chmod, open, writeFile, rename, unlink } from 'node:fs/promises';
+import { mkdir, chmod, open, writeFile, rename, unlink, readFile, readdir, lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createState } from '../src/data/seed.js';
 import { AppError } from '../src/errors.js';
 import { digest } from '../src/evaluation-context.js';
-import { evaluationValidationFeedback } from '../src/evaluator.js';
+import { evaluationValidationFeedback, supportsAiVariable } from '../src/evaluator.js';
+import { runtimeConfiguration } from '../src/automation-configuration.js';
+import { registryFromEnv } from '../src/model-registry.js';
+import { gemmaContractConversation } from '../src/gemma-contract-check.js';
 import { startEvaluationBatch } from '../src/evaluation-service.js';
 import { validateFreshReviewManifest, assertFreshReviewSources, freshReviewConfiguration } from '../src/fresh-review-run.js';
 
@@ -19,7 +22,8 @@ const safeCodes = new Set(['INVALID_ARGUMENTS', 'INVALID_REVIEW_REQUEST', 'REVIE
   'INVALID_AI_RESULT', 'AI_INCOMPLETE', 'MODEL_CHANGED', 'MODEL_IDENTITY_UNVERIFIED', 'AI_SAFETY_REFUSAL',
   'UNSUPPORTED_VARIABLE', 'EMPTY_CONVERSATION', 'UNSUPPORTED_INPUT', 'INPUT_CAPACITY_EXCEEDED',
   'INVALID_GATEWAY_CATALOG', 'MODEL_UNAVAILABLE', 'AI_CONTEXT_LIMIT', 'AI_RESOURCE_LIMIT',
-  'PILOT_COUNTRIES_REQUIRED', 'PILOT_ALREADY_RUNNING', 'PILOT_RESULTS_INVALID', 'PILOT_CONFIGURATION_CHANGED']);
+  'PILOT_COUNTRIES_REQUIRED', 'PILOT_ALREADY_RUNNING', 'PILOT_RESULTS_INVALID', 'PILOT_CONFIGURATION_CHANGED',
+  'PILOT_REPORT_NOT_FOUND', 'PILOT_REPORT_INVALID']);
 const publicCode = error => safeCodes.has(error?.code) ? error.code : 'PILOT_FAILED';
 const query = async (connection, sql, values = []) => (await connection.query({ sql, values, timeout: 15000 }))[0];
 
@@ -28,7 +32,7 @@ export function parseProbeArguments(args) {
   let requestId, mode = 'check', explicitMode = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--request-id' && requestId === undefined) requestId = args[++i];
-    else if (['--check', '--run'].includes(args[i]) && !explicitMode) { mode = args[i].slice(2); explicitMode = true; }
+    else if (['--check', '--run', '--report-only', '--probe-rejection'].includes(args[i]) && !explicitMode) { mode = args[i].slice(2); explicitMode = true; }
     else fail('INVALID_ARGUMENTS');
   }
   if (!slug.test(requestId || '')) fail('INVALID_ARGUMENTS');
@@ -221,6 +225,208 @@ export async function privateProbeOutput(requestId, rootDirectory = fileURLToPat
   };
 }
 
+const knownErrorMessages = new Set([
+  'Falta configurar el modelo local y su herramienta en el Gateway.',
+  'Falta configurar la conexión y la identidad de Pulso en el Gateway.',
+  'La operación solicitada al Gateway no está admitida por Pulso.',
+  'El modelo está deshabilitado o pendiente de configuración.',
+  'La configuración del modelo cambió. Crea una nueva ejecución.',
+  'El Gateway devolvió una respuesta inválida.',
+  'No se pudo contactar el Gateway dentro del tiempo permitido.',
+  'La conversación supera el contexto admitido por el modelo. Queda pendiente de revisión.',
+  'El modelo no tiene memoria suficiente para esta solicitud. Se requiere reducir el checklist o revisar su capacidad.',
+  'El servicio local respondió con un modelo distinto al solicitado. Revisa su configuración.',
+  'El modelo local devolvió una respuesta inválida.',
+  'El servicio local no informó qué modelo produjo la respuesta.',
+  'El modelo local no devolvió una única evaluación.',
+  'El modelo no puede evaluar este contenido.',
+  'El modelo local no completó la evaluación.',
+  'El modelo local devolvió una llamada de herramienta en lugar de una evaluación.',
+  'El modelo local no devolvió una evaluación estructurada.',
+  'El modelo local no devolvió el JSON requerido.',
+  'El modelo local no devolvió el objeto de evaluación requerido.',
+  'No se pudo completar una etapa del adaptador.',
+  'Resultado estructurado incompleto o duplicado.',
+  'Hay variables pendientes de respuesta válida.',
+]);
+export function probeErrorDiagnostic(error) {
+  if (!error) return null;
+  const match = typeof error.message === 'string'
+    && /^El Gateway rechazó la solicitud al modelo local \(HTTP ([1-5]\d{2})\)\.$/.exec(error.message);
+  const explicit = error.details?.upstreamStatus ?? error.upstreamStatus;
+  const savedStatus = Number.isInteger(explicit) && explicit >= 100 && explicit <= 599 ? explicit : null;
+  const messageStatus = match ? Number(match[1]) : null;
+  const statusConflict = savedStatus !== null && messageStatus !== null && savedStatus !== messageStatus;
+  const count = typeof error.message === 'string' && /^(\d{1,4}) variables requieren reintento por formato inválido\.$/.exec(error.message);
+  const message = match ? `El Gateway rechazó la solicitud al modelo local (HTTP ${messageStatus}).`
+    : knownErrorMessages.has(error.message) ? error.message
+      : count ? `${Number(count[1])} variables requieren reintento por formato inválido.` : 'Mensaje omitido: no corresponde a una plantilla técnica conocida.';
+  return { code: publicCode(error), upstreamStatus: statusConflict ? null : savedStatus ?? messageStatus,
+    upstreamStatusSource: statusConflict ? 'conflicting-saved-fields' : savedStatus !== null ? 'saved-field' : messageStatus !== null ? 'known-saved-message' : 'not-saved',
+    message, messageRedacted: !match && !knownErrorMessages.has(error.message) && !count };
+}
+
+export function sanitizedProbeReport(artifact, requestId) {
+  if (!artifact || artifact.schemaVersion !== 1 || artifact.privateDiagnostic !== true
+    || artifact.summary?.requestId !== requestId || !Array.isArray(artifact.attempts) || !Array.isArray(artifact.tasks)
+    || !Array.isArray(artifact.sources)) fail('PILOT_REPORT_INVALID');
+  const profile = value => ['clef-local', 'gemma-local'].includes(value) ? value : null;
+  const model = value => ['clef-flash', 'gemma-4-26b-a4b-it-mlx'].includes(value) ? value : null;
+  const status = value => ['pending', 'running', 'completed', 'partial', 'failed', 'interrupted'].includes(value) ? value : null;
+  const variableId = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,159}$/.test(value);
+  const listIds = values => Array.isArray(values) ? [...new Set(values.filter(variableId))] : [];
+  const countryByConversation = new Map(artifact.sources.filter(item => countries.includes(item.country)).map(item => [item.conversationId, item.country]));
+  const tasks = new Map(artifact.tasks.map(task => [task.id, task]));
+  const timestamp = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ? value : null;
+  const number = value => Number.isFinite(value) && value >= 0 ? value : null;
+  return { phase: 'report-only', requestId, databaseChanged: false, inferenceExecuted: false,
+    artifactHash: digest(artifact), recordedAt: timestamp(artifact.summary.checkedAt),
+    recordedPassed: artifact.summary.passed === true, recordedCompleted: number(artifact.summary.completed),
+    models: (Array.isArray(artifact.summary.byModel) ? artifact.summary.byModel : []).map(item => ({
+      profileId: profile(item.profileId), model: model(item.model), total: number(item.total),
+      completed: number(item.completed), partial: number(item.partial), failed: number(item.failed) })),
+    tasks: artifact.tasks.map(task => ({ country: countryByConversation.get(task.conversationId) || null,
+      profileId: profile(task.profile?.id), status: status(task.status), error: probeErrorDiagnostic(task.error) })),
+    attempts: artifact.attempts.map(attempt => ({
+      country: countryByConversation.get(tasks.get(attempt.taskId)?.conversationId) || null,
+      profileId: profile(attempt.profileId), requestedModel: model(attempt.requestedModel), actualModel: model(attempt.actualModel),
+      status: status(attempt.status), startedAt: timestamp(attempt.startedAt), finishedAt: timestamp(attempt.finishedAt),
+      durationMs: number(attempt.durationMs), variableIds: listIds(attempt.variableIds), validVariableIds: listIds(attempt.validVariableIds),
+      validationErrors: evaluationValidationFeedback(listIds(attempt.variableIds).map(id => ({ id })), attempt.validationErrors),
+      error: probeErrorDiagnostic(attempt.error),
+    })),
+    limitation: 'Only persisted structured errors are available. Raw Gateway/upstream responses were not saved and are never printed.',
+  };
+}
+
+export async function readPrivateProbeReport(requestId, rootDirectory = fileURLToPath(new URL('../.data/review-runs/', import.meta.url))) {
+  if (!slug.test(requestId || '')) fail('INVALID_ARGUMENTS');
+  const directory = path.join(rootDirectory, requestId);
+  let entries;
+  try { entries = await readdir(directory, { withFileTypes: true }); }
+  catch (error) { if (error.code === 'ENOENT') fail('PILOT_REPORT_NOT_FOUND'); throw error; }
+  const names = entries.filter(entry => entry.isFile() && /^pilot-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9-]{36}\.json$/.test(entry.name))
+    .map(entry => entry.name).sort().reverse();
+  if (!names.length) fail('PILOT_REPORT_NOT_FOUND');
+  const filename = path.join(directory, names[0]), info = await lstat(filename);
+  if (!info.isFile() || info.size > 50 * 1024 * 1024) fail('PILOT_REPORT_INVALID');
+  let artifact;
+  try { artifact = JSON.parse(await readFile(filename, 'utf8')); }
+  catch { fail('PILOT_REPORT_INVALID'); }
+  return sanitizedProbeReport(artifact, requestId);
+}
+
+const schemaKeywords = ['anyOf', 'oneOf', 'allOf', 'const', 'enum', 'type', 'properties', 'additionalProperties',
+  'required', '$ref', '$defs', 'items', 'minItems', 'maxItems', 'minLength', 'maxLength', 'min_repeat', 'max_repeat',
+  'repeat', 'quantifier', 'size', 'DFA', 'FSM', 'complexity', 'nullable', 'format', 'pattern', 'strict', 'json_schema', 'response_format'];
+const technicalWords = new Set(('failed failure error invalid unsupported unrecognized unknown unexpected schema schemas json gbnf grammar grammars '
+  + 'convert conversion compile compilation parse parsing build building generate generation predicting prediction '
+  + 'not supported support allowed allow implemented implement does do is are was were be being a an the to of for in on with without at '
+  + 'and or but only must should cannot can could unable expected found got value values property properties keyword keywords '
+  + 'object objects array arrays string strings integer number boolean null true false union unions literal literals '
+  + 'constraint constraints constrained decoding model mlx outlines lm studio xgrammar tokenizer response request format '
+  + 'schemaerror validationerror valueerror runtimeerror typeerror nested root field fields required missing valid '
+  + 'max_tokens context length exceeded limit tokens memory insufficient loaded load available unavailable configuration reasoning '
+  + 'response_format json_schema anyof oneof allof const enum type additionalproperties ref defs items minitems maxitems minlength maxlength '
+  + 'min_repeat max_repeat repeat quantifier size dfa fsm complexity minimum maximum greater less than nullable pattern strict').split(' '));
+
+// Only fixed technical vocabulary survives. Even an upstream error that echoes
+// credentials, URLs, prompts or a traceback cannot put that content in stdout.
+export function sanitizedUpstreamError(value, redactions = []) {
+  const object = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  let message = typeof value === 'string' ? value : typeof object.message === 'string' ? object.message : '';
+  message = message.slice(0, 12000);
+  for (const secret of redactions.filter(v => typeof v === 'string' && v.length)) message = message.split(secret).join('[redacted]');
+  message = message.replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted]').replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, '[redacted]');
+  const found = schemaKeywords.filter(keyword => message.includes(keyword));
+  const tokens = message.match(/[A-Za-z_$][A-Za-z0-9_$-]*|\d+|[{}[\]():,.;=<>]/g) || [];
+  const safeMessage = tokens.map(token => /^[{}[\]():,.;=<>]$/.test(token) ? token
+    : technicalWords.has(token.toLowerCase()) || (/^\d{1,5}$/.test(token) && Number(token) <= 10000) ? token : '[redacted]').join(' ').replace(/(?:\[redacted\]\s*){2,}/g, '[redacted] ').slice(0, 1600);
+  const field = (input, allowed) => typeof input === 'string' && allowed.includes(input)
+    && !redactions.some(secret => secret && input.includes(secret)) ? input : null;
+  return { message: safeMessage || 'Upstream error message unavailable.', messageRedacted: true,
+    schemaKeywords: found,
+    classification: /(?:schema|grammar|gbnf|outlines|xgrammar|\bDFA\b|\bFSM\b|quantifier)/i.test(message) ? 'schema-or-grammar-rejection'
+      : /reasoning/i.test(message) ? 'reasoning-configuration-rejection'
+        : /context|tokens/i.test(message) ? 'context-or-token-rejection'
+          : /memory/i.test(message) ? 'memory-rejection' : 'unclassified-rejection',
+    type: field(object.type, ['invalid_request', 'invalid_request_error', 'server_error', 'validation_error', 'schema_error']),
+    code: field(object.code, ['invalid_value', 'invalid_request', 'unsupported_value', 'invalid_json_schema', 'unsupported_schema',
+      'model_not_found', 'model_not_loaded', 'context_length_exceeded', 'out_of_memory', 'insufficient_memory']),
+    param: field(object.param, ['reasoning', 'model', 'response_format', 'response_format.json_schema', 'response_format.json_schema.schema', 'max_tokens']),
+  };
+}
+
+export async function probeGemmaRejection({ state, env = process.env, fetchImpl = fetch }) {
+  const before = digest(state), redactions = [env.AGENT_SHARED_TOKEN, env.GATEWAY_BASE_URL, env.GATEWAY_PORTAL_KEY].filter(Boolean);
+  const active = state.catalog.filter(variable => variable.active && !variable.retired && supportsAiVariable(variable));
+  const variables = active.slice(0, 8);
+  const descriptor = active.find(variable => variable.type === 'Descriptor');
+  if (descriptor && !variables.some(variable => variable.type === 'Descriptor')) variables[variables.length - 1] = descriptor;
+  if (!variables.length || variables.some(variable => !/^[a-z][a-z0-9_]{0,159}$/.test(variable.id))) fail('UNSUPPORTED_VARIABLE');
+  let networkCalls = 0, blockedAdditionalRequests = 0, transport = null, requestSchema = null;
+  const blockedAdditionalOperations = [];
+  const observedFetch = async (url, options) => {
+    let request;
+    try { request = JSON.parse(options.body); } catch { fail('AI_CONFIGURATION'); }
+    if (networkCalls >= 1) {
+      blockedAdditionalRequests++;
+      const operation = `${request.method} ${request.path}`;
+      blockedAdditionalOperations.push(['GET /v1/models', 'GET /api/v1/models', 'POST /v1/chat/completions'].includes(operation) ? operation : 'other');
+      throw new Error('SYNTHETIC_ONE_REQUEST_LIMIT');
+    }
+    if (options.method !== 'POST' || request.method !== 'POST' || request.path !== '/v1/chat/completions'
+      || request.body?.model !== 'gemma-4-26b-a4b-it-mlx') fail('AI_CONFIGURATION');
+    networkCalls++;
+    const schema = request.body.response_format?.json_schema?.schema;
+    const serialized = schema ? JSON.stringify(schema) : '';
+    requestSchema = { responseFormat: request.body.response_format?.type === 'json_schema' ? 'json_schema' : 'json_object',
+      schemaHash: schema ? digest(schema) : null, keywords: schemaKeywords.filter(keyword => serialized.includes(`"${keyword}"`)) };
+    const response = await fetchImpl(url, options);
+    transport = { httpStatus: response.status, upstreamStatus: null, returnedModel: null, error: null };
+    try {
+      const clone = response.clone(), reader = clone.body.getReader();
+      let size = 0, text = '', truncated = false;
+      const decoder = new TextDecoder();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 128 * 1024) { truncated = true; void reader.cancel(); break; }
+        text += decoder.decode(value, { stream: true });
+      }
+      if (!truncated) {
+        const body = JSON.parse(text + decoder.decode());
+        if (Number.isInteger(body?.upstream_status_code) && body.upstream_status_code >= 100 && body.upstream_status_code <= 599) transport.upstreamStatus = body.upstream_status_code;
+        if (typeof body?.response?.model === 'string' && /^gemma-4-26b-a4b-it-mlx(?::\d+)?$/.test(body.response.model)) transport.returnedModel = body.response.model;
+        if (!response.ok || body?.ok === false || transport.upstreamStatus >= 400) {
+          transport.error = sanitizedUpstreamError(body?.response?.error ?? body?.error
+            ?? (typeof body?.response === 'string' || typeof body?.response?.message === 'string' ? body.response : undefined), redactions);
+        }
+      } else transport.bodyInspection = 'size-limit';
+    } catch { transport.bodyInspection = 'unavailable'; }
+    return response;
+  };
+  const runtime = state.settings.automation ? runtimeConfiguration(state.settings.automation) : null;
+  const registry = registryFromEnv({ demo: false, env, fetchImpl: observedFetch }).forState(state).withRuntime(runtime);
+  const profile = registry.resolve('gemma-local');
+  if (profile.provider !== 'gateway' || profile.demo || profile.model !== 'gemma-4-26b-a4b-it-mlx') fail('AI_CONFIGURATION');
+  const started = Date.now();
+  let error = null, result = null;
+  try { result = await profile.evaluator.evaluate(structuredClone(gemmaContractConversation), variables); }
+  catch (caught) { error = probeErrorDiagnostic(caught); }
+  const feedback = evaluationValidationFeedback(variables, result?.validationErrors);
+  return { phase: 'probe-rejection', checkedAt: new Date().toISOString(), synthetic: true, databaseChanged: false,
+    source: 'fixed-synthetic-conversation', atomRead: false, published: false, configurationUnchanged: before === digest(state),
+    model: 'gemma-4-26b-a4b-it-mlx', profileId: 'gemma-local', configurationHash: registry.snapshot(profile).configurationHash,
+    runtimeHash: digest(runtime), responseFormat: profile.evaluator.responseFormat, outputSchemaVersion: profile.evaluator.outputSchemaVersion,
+    requestedVariables: variables.map(variable => variable.id), includesDescriptor: variables.some(variable => variable.type === 'Descriptor'),
+    durationMs: Date.now() - started, networkCalls, blockedAdditionalRequests, blockedAdditionalOperations, requestSchema, transport,
+    validResults: Array.isArray(result?.results) ? result.results.length : 0, validationErrors: feedback,
+    completed: !error && result?.model === profile.model && result.results?.length === variables.length && !feedback.length,
+    error };
+}
+
 async function captureAtom(options, timezone, manifest) {
   const { AtomReader } = await import('../src/atom.js');
   const reader = new AtomReader(options, timezone), pool = reader.pool;
@@ -244,19 +450,28 @@ async function captureAtom(options, timezone, manifest) {
 async function main(args) {
   const input = parseProbeArguments(args);
   if (input.help) {
-    console.log('Uso: node scripts/probe-review-models.js --request-id <slug> [--check|--run]\n--check sólo lee y valida. --run evalúa seis casos reales con ambos modelos en memoria; guarda diagnóstico privado y no escribe en las bases.');
+    console.log('Uso: node scripts/probe-review-models.js --request-id <slug> [--check|--run|--report-only|--probe-rejection]\n--check sólo lee y valida. --run evalúa seis casos reales con ambos modelos en memoria. --report-only lee el último diagnóstico privado sin consultar bases ni ejecutar modelos. --probe-rejection hace una única petición sintética a Gemma sin consultar Atom.');
+    return;
+  }
+  if (input.mode === 'report-only') {
+    console.log(JSON.stringify(await readPrivateProbeReport(input.requestId)));
     return;
   }
   const { config, databaseConfig, atomDatabaseConfig } = await import('../src/config.js');
-  const { registryFromEnv } = await import('../src/model-registry.js');
   const { default: mysql } = await import('mysql2/promise');
   const db = databaseConfig(), atom = atomDatabaseConfig();
-  if (config.demo || !db || !atom) fail('REAL_MODE_REQUIRED');
+  if (config.demo || !db || (input.mode !== 'probe-rejection' && !atom)) fail('REAL_MODE_REQUIRED');
   const { connectionLimit, ...connectionOptions } = db;
   const connection = await mysql.createConnection(connectionOptions);
   let saved;
   try { saved = await readProbeRequest(connection, input.requestId); }
   finally { await connection.end(); }
+  if (input.mode === 'probe-rejection') {
+    const result = await probeGemmaRejection({ state: saved.state });
+    console.log(JSON.stringify({ requestId: input.requestId, ...result }));
+    process.exitCode = result.completed ? 0 : 1;
+    return;
+  }
   const source = await captureAtom(atom, config.timezone, saved.manifest);
   const registry = registryFromEnv({ demo: false });
   const { plan } = prepareProbe({ ...saved, source, registry });
