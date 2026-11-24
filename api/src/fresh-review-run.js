@@ -13,6 +13,9 @@ const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(va
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const same = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+// MySQL JSON normalizes object-key order. Integrity follows semantic content
+// while preserving array order (membership, model order and batch order).
+export const freshReviewSelectionHash = value => digest(canonical({ scope: value.scope, cases: value.cases }));
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const retryable = new Set(['AI_UNAVAILABLE', 'AI_TRANSIENT', 'INVALID_AI_RESULT', 'AI_INCOMPLETE', 'DATABASE_TRANSIENT', 'WORKER_INTERRUPTED', 'EVALUATION_FAILED']);
 
@@ -24,7 +27,7 @@ export function validateFreshReviewManifest(manifest, { authorize = false } = {}
     || manifest.cases.length < 1 || manifest.cases.length > 500 || manifest.caseCount !== manifest.cases.length
     || manifest.expectedNewEvaluations !== manifest.caseCount * 2
     || new Set(manifest.cases.map(item => item.conversationId)).size !== manifest.cases.length
-    || digest({ scope: manifest.scope, cases: manifest.cases }) !== manifest.selectionHash) {
+    || freshReviewSelectionHash(manifest) !== manifest.selectionHash) {
     fail('INVALID_REVIEW_REQUEST', 'La solicitud de evaluación nueva está incompleta o cambió.');
   }
   const counts = Object.fromEntries(countries.map(code => [code, 0]));
@@ -252,7 +255,7 @@ export function completedFreshReviewSelection(state, manifest, progress) {
     caseCount: cases.length, evaluationCount: cases.length * 2, counts: manifest.counts, cases,
     sourceChangedCount: 0, timeCorrectionCount: 0, freshRun: { id: manifest.id, requestedAt: progress.createdAt, completedAt: progress.finishedAt,
       jobIds: progress.chunks.map(chunk => chunk.jobId), sourceSelectionHash: manifest.selectionHash } };
-  selection.selectionHash = digest({ scope: selection.scope, cases });
+  selection.selectionHash = freshReviewSelectionHash(selection);
   applyReviewSelection({ ...state, reviewSelection: selection }, selection.id);
   return selection;
 }
