@@ -98,14 +98,30 @@ async function click(element) {
   assert.ok(element, 'Expected actionable element');
   await act(async () => element.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })));
 }
-async function inputDate(element, value) {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set.call(element, value);
-    element.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    element.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-  });
-}
 const latestRequest = () => requests.at(-1);
+
+test('changed-source results are visibly historical and excluded from the flag-rate denominator', async () => {
+  const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
+  ordinaryRows = [
+    { ...rows[2], sourceChanged: false, displayDate: period.from, bothModelsComplete: true, p1: 1 },
+    { ...rows[3], sourceChanged: true, displayDate: period.from, bothModelsComplete: true, suppressedFlags: 3 },
+    { ...rows[4], sourceChanged: true, displayDate: period.to, bothModelsComplete: true, p1: 1, positive: 1 },
+  ];
+  await render();
+  assert.equal(document.querySelectorAll('.conversation-cell').length, 3);
+  assert.equal(document.querySelectorAll('.source-changed-cell').length, 2);
+  assert.equal(document.querySelectorAll('.source-changed-symbol').length, 2);
+  assert.match(document.querySelector('.source-changed-cell').getAttribute('aria-label'), /históricos/);
+  assert.match(document.querySelector('.summary-source-note').textContent, /2 resultados históricos/);
+  assert.match(document.querySelector('.summary-source-note').textContent, /no indica ausencia de problemas/);
+  assert.match(document.querySelector('.summary-total-flags').textContent, /100%/);
+  assert.match(document.querySelector('.summary-total-flags').textContent, /Sobre 1 evaluación con datos sin cambios/);
+  assert.match(document.querySelector('.summary-total-positive').textContent, /0%/);
+  await act(async () => router.navigate('/?from=2026-11-19&to=2026-11-19&completion=both&reviewSelection=all'));
+  assert.equal(document.querySelectorAll('.conversation-cell').length, 1);
+  assert.match(document.querySelector('.summary-total-flags').textContent, /—/);
+  assert.match(document.querySelector('.summary-total-positive').textContent, /—/);
+});
 
 test('default entry queries the configured meeting period with complete pairs from its first request and retains detail/history return links', async () => {
   const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
@@ -128,9 +144,14 @@ test('default entry queries the configured meeting period with complete pairs fr
   }
   assert.equal(document.querySelectorAll('.conversation-cell').length, 1);
   assert.equal(document.querySelector('input[type="checkbox"]').checked, true);
-  assert.equal(document.querySelector('[aria-label="Resumen desde"]').value, period.from);
-  assert.equal(document.querySelector('[aria-label="Resumen hasta"]').value, period.to);
-  assert.match(button(period.label).className, /ant-btn-primary/);
+  assert.match(document.querySelector('.summary-range').textContent, /17 nov 2026 — 19 nov 2026/);
+  assert.equal(document.querySelector('[aria-label="Resumen desde"]'), null);
+  assert.equal(document.querySelector('[aria-label="Resumen hasta"]'), null);
+  assert.equal(document.querySelector('[aria-label="Período personalizado"]'), null);
+  assert.equal(document.querySelector('[aria-label="Períodos para la reunión"]'), null);
+  assert.equal(button('Aplicar fechas'), undefined);
+  for (const removed of meetingPeriodSnapshot.periods) assert.equal(button(removed.label), undefined);
+  for (const label of ['Ayer', '3 días', '30 días']) assert.ok(button(label));
   assert.doesNotMatch(document.querySelector('.summary-stat-card').textContent, /de 94/);
   const summaryUrl = `${router.state.location.pathname}${router.state.location.search}`;
   await click(document.querySelector('.conversation-cell'));
@@ -147,15 +168,19 @@ test('default entry queries the configured meeting period with complete pairs fr
   assert.equal(`${router.state.location.pathname}${router.state.location.search}`, historyUrl);
 });
 
-test('both meeting presets and all 94 saved members remain accessible from the new default', async () => {
+test('original quick periods and all 94 saved members remain accessible from the new default', async () => {
   await render();
-  for (const period of meetingPeriodSnapshot.periods) {
-    await click(button(period.label));
+  for (const [label, days] of [['Ayer', '1'], ['3 días', '3'], ['30 días', '30']]) {
+    await click(button(label));
     const params = new URLSearchParams(router.state.location.search);
-    assert.equal(params.get('meetingPeriod'), period.id);
-    assert.equal(params.get('from'), period.from);
-    assert.equal(params.get('to'), period.to);
+    assert.equal(params.get('days'), days);
+    assert.equal(params.has('meetingPeriod'), false);
+    assert.equal(params.has('from'), false);
+    assert.equal(params.has('to'), false);
+    assert.equal(params.get('reviewSelection'), 'all');
     assert.equal(params.get('completion'), 'both');
+    assert.equal(latestRequest().searchParams.get('completion'), 'both');
+    assert.equal(latestRequest().searchParams.get('to'), '2026-11-24');
   }
   await click(button('Volver a la selección'));
   assert.equal(new URLSearchParams(router.state.location.search).get('reviewSelection'), reviewSelection.id);
@@ -188,36 +213,30 @@ test('explicit filters avoid default selection and filtered selection keeps its 
   assert.equal(document.querySelectorAll('.conversation-cell').length, 47);
 });
 
-test('custom dates apply on demand, retain adjustable filters and never adopt the saved sample', async () => {
-  await render('/?reviewSelection=review94&countries=HN&figures=critical');
-  const count = requests.length;
-  await inputDate(document.querySelector('[aria-label="Resumen desde"]'), '2026-11-10');
-  await inputDate(document.querySelector('[aria-label="Resumen hasta"]'), '2026-11-12');
-  assert.equal(requests.length, count, 'draft edits do not query incomplete ranges');
-  await click(button('Aplicar fechas'));
+test('explicit custom date URLs retain filters and a readable range without date inputs', async () => {
+  await render('/?reviewSelection=all&from=2026-11-10&to=2026-11-12&countries=HN&figures=critical');
   const params = new URLSearchParams(router.state.location.search);
   assert.equal(params.get('reviewSelection'), 'all');
   assert.equal(params.get('from'), '2026-11-10'); assert.equal(params.get('to'), '2026-11-12');
   assert.equal(params.get('countries'), 'HN'); assert.equal(params.get('figures'), 'critical');
   assert.equal(latestRequest().searchParams.has('reviewSelection'), false);
+  assert.match(document.querySelector('.summary-range').textContent, /10 nov 2026 — 12 nov 2026/);
+  assert.equal(document.querySelector('input[type="date"]'), null);
 });
 
-test('meeting presets restore all countries and figures; changing coverage clears the preset highlight', async () => {
-  meetingPeriodSnapshot.asOf = '2026-11-25';
-  meetingPeriodSnapshot.periods = [{ id: 'meeting-volume', label: '10–12 nov · mayor volumen', from: '2026-11-10', to: '2026-11-12', countries: ['HN', 'PA'] }];
+test('an existing meeting URL keeps its range and changing coverage clears only its meeting marker', async () => {
   ordinaryRows = [{ ...rows[2], displayDate: '2026-11-10', bothModelsComplete: true }, { ...rows[3], displayDate: '2026-11-12', bothModelsComplete: true }];
-  await render('/?reviewSelection=review94&countries=HN&country=HN&figures=critical');
-  await click(button('10–12 nov · mayor volumen'));
+  await render('/?reviewSelection=all&from=2026-11-10&to=2026-11-12&completion=both&meetingPeriod=meeting-volume');
   const params = new URLSearchParams(router.state.location.search);
   assert.equal(params.get('reviewSelection'), 'all'); assert.equal(params.get('completion'), 'both');
   for (const name of ['country', 'countries', 'figures']) assert.equal(params.has(name), false);
   assert.equal(document.querySelectorAll('.conversation-cell').length, 2);
-  assert.match(button('10–12 nov · mayor volumen').className, /ant-btn-primary/);
-  assert.match(document.querySelector('.summary-meeting-periods').textContent, /Los totales se actualizan al consultar/);
   await click(document.querySelector('input[type="checkbox"]'));
   assert.equal(new URLSearchParams(router.state.location.search).has('meetingPeriod'), false);
   assert.equal(new URLSearchParams(router.state.location.search).has('completion'), false);
-  assert.doesNotMatch(button('10–12 nov · mayor volumen').className, /ant-btn-primary/);
+  assert.equal(latestRequest().searchParams.get('from'), '2026-11-10');
+  assert.equal(latestRequest().searchParams.get('to'), '2026-11-12');
+  assert.equal(latestRequest().searchParams.has('completion'), false);
 });
 
 test('clearing the last explicit exception filter does not reactivate the default selection', async () => {
@@ -280,7 +299,7 @@ test('explicit dates show every eligible result outside94, preserve completion i
   assert.equal(latestRequest().searchParams.get('to'), '2026-11-12');
   assert.equal(latestRequest().searchParams.get('completion'), 'both');
   assert.equal(document.querySelectorAll('.conversation-cell').length, 2);
-  assert.equal(document.querySelector('input[aria-label="Resumen desde"]').value, '2026-11-10');
+  assert.match(document.querySelector('.summary-range').textContent, /10 nov 2026 — 12 nov 2026/);
   assert.doesNotMatch(document.querySelector('.summary-stat-card').textContent, /de 94/);
   bootstrap.reviewSelection = { ...reviewSelection, id: 'review214', count: 214 };
   await act(async () => router.navigate(url));

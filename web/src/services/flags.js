@@ -20,20 +20,30 @@ export const metricValue = variable => variable?.result?.status === 'evaluado' &
 export const evaluationStatus = conversation => conversation.evaluationStatus || (!conversation.evaluated ? 'not_evaluated'
   : conversation.evaluationErrors > 0 ? 'partial' : conversation.consensusPendingFlags > 0 ? 'review_pending'
     : conversation.evaluationIncomplete ? 'partial' : 'evaluated');
+// Source freshness is separate from whether the saved executions finished.
+export const hasChangedEvaluation = (conversation = {}) => !!(conversation.evaluated || conversation.evaluation)
+  && !!(conversation.sourceChanged || conversation.evaluation?.sourceChanged);
 export const needsModelReview = conversation => conversation.evaluationStatus ? conversation.evaluationStatus === 'review_pending' : (conversation.consensusPendingFlags || 0) > 0;
 export const evaluationNeedsAttention = conversation => evaluationStatus(conversation) !== 'evaluated';
 export const evaluationPending = conversation => conversation.evaluationStatus ? ['not_evaluated', 'review_pending'].includes(conversation.evaluationStatus) : evaluationNeedsAttention(conversation);
-export const evaluationStatusLabel = conversation => ({ not_evaluated: 'Sin evaluar', review_pending: 'Falta una revisión de modelo', partial: 'Evaluada con incidencias', evaluated: 'Evaluada' }[evaluationStatus(conversation)]);
+export const evaluationStatusLabel = conversation => {
+  const status = evaluationStatus(conversation);
+  const label = { not_evaluated: 'Sin evaluar', review_pending: 'Falta una revisión de modelo', partial: 'Evaluada con incidencias', evaluated: 'Evaluada' }[status];
+  return hasChangedEvaluation(conversation) ? `Resultados históricos · datos actualizados${status === 'evaluated' ? '' : ` · ${label}`}` : label;
+};
 export function evaluationCoverage(conversations) {
   const counts = { not_evaluated: 0, review_pending: 0, partial: 0, evaluated: 0 };
   for (const conversation of conversations) counts[evaluationStatus(conversation)]++;
   return counts;
 }
-export const noVisibleFlagsLabel = conversation => needsModelReview(conversation) ? 'Doble revisión pendiente'
+export const noVisibleFlagsLabel = conversation => hasChangedEvaluation(conversation) ? 'Flags automáticos pendientes de validar'
+  : needsModelReview(conversation) ? 'Doble revisión pendiente'
   : conversation.suppressedFlags > 0 ? 'Sin flags con coincidencia' : 'Sin flags vigentes';
 
 // Retained individual results are not equivalent to a published operational flag.
 export function unmarkedResultLabel(variable) {
+  if (variable.result.comparison?.sourceChanged) return variable.result.comparison.agreement === 'agree-positive'
+    ? 'Coincidencia histórica · pendiente de validar' : 'Resultado histórico · pendiente de validar';
   if (variable.consensusSuppressed) {
     if (variable.result.codeRule || ['Código', 'Cálculo'].includes(variable.method)) return 'Calculado por código · fuera de los flags por coincidencia';
     if (variable.result.comparison?.agreement === 'disagree') return 'Los modelos discrepan · no se muestra como flag';

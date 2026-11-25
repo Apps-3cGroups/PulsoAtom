@@ -29,10 +29,34 @@ test('pending visibility distinguishes missing model reviews from saved partial 
   const shown = filterSummaryConversations(conversations, figureKinds);
   assert.deepEqual(shown.map(c => c.id), ['complete', 'partial']);
   assert.equal(summaryMetrics(shown).total, 2);
-  assert.equal(summaryMetrics(shown).withAlerts, 2);
+  assert.equal(summaryMetrics(shown).withAlerts, 1);
+  assert.equal(summaryMetrics(shown).currentResults, 1);
   assert.deepEqual(filterSummaryConversations(conversations, ['critical']).map(c => c.id), ['complete', 'partial']);
   assert.deepEqual(filterSummaryConversations(conversations, ['positive']), []);
   assert.deepEqual(filterSummaryConversations(conversations, []), []);
+});
+test('historical completed pairs stay visible without diluting or inflating current flag rates', () => {
+  const base = { evaluated: true, evaluationStatus: 'evaluated', bothModelsComplete: true, marks: [], p1: 0, p2: 0 };
+  const cases = [
+    { ...base, id: 'current-alert', p1: 1 },
+    { ...base, id: 'current-negative' },
+    { ...base, id: 'hidden-historical-flags', sourceChanged: true, suppressedFlags: 4 },
+    { ...base, id: 'historical-human-mark', sourceChanged: true, p2: 1, positive: 1, human: 1 },
+  ];
+  const shown = filterSummaryConversations(cases, figureKinds, { bothComplete: true });
+  assert.equal(shown.length, 4, 'saved pairs remain available for inspection');
+  const metrics = summaryMetrics(shown);
+  assert.equal(metrics.total, 4);
+  assert.equal(metrics.sourceChanged, 2);
+  assert.equal(metrics.currentResults, 2);
+  assert.equal(metrics.withAlerts, 1);
+  assert.equal(metrics.alertPercent, 50);
+  assert.equal(metrics.withPositives, 0);
+  assert.equal(metrics.human, 0);
+  const historical = summaryMetrics(shown.filter(row => row.sourceChanged));
+  assert.equal(historical.total, 2);
+  assert.equal(historical.currentResults, 0);
+  assert.equal(historical.alertPercent, null, 'historical rows cannot imply a zero-percent finding');
 });
 test('both-model coverage requires complete Clef and Gemma and keeps clean conversations and valid abstentions', () => {
   const base = { id: 'complete', evaluated: true, evaluationStatus: 'evaluated', marks: [], bothModelsComplete: true,

@@ -7,7 +7,7 @@ test('summary range omits connecting words and repeats no date for today', () =>
   assert.equal(summaryRangeLabel('2026-11-11', '2026-11-11'), '11 nov 2026');
 });
 
-test('flag and positive rates express a share of the visible conversation count', () => {
+test('flag and positive rates express a share of the supplied eligible population', () => {
   assert.equal(summaryPercentage(146, 435), '33.6%');
   assert.equal(summaryPercentage(11, 435), '2.5%');
   assert.equal(summaryPercentage(0, 435), '0%');

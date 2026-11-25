@@ -16,6 +16,12 @@
 .summary-stat-card:hover { border-color: var(--border-strong); }
 .summary-stat-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .summary-stat-tooltip { display: grid; gap: 4px; }
+.summary-stat-basis { color: var(--secondary); font-size: calc(11px * var(--font-scale, 1)); line-height: 1.3; }
+.summary-source-note { display: flex; flex: none; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid #e4d4af; border-radius: 6px; background: #fff9eb; color: #77571e; font-size: calc(12px * var(--font-scale, 1)); line-height: 1.4; }
+.summary-source-note > .anticon { flex: none; }
+.summary-page .conversation-cell.source-changed-cell { border: 1px dashed #ae843a; background: #fff5dc; }
+.summary-page .conversation-cell.source-changed-cell:hover { background: #ffedc0; }
+.summary-page .conversation-cell > .source-changed-symbol { color: #8a641f; font-size: 11px; }
 .summary-total-flags strong { color: #c53d31; }
 .summary-total-positive strong { color: #167b54; }
 .summary-range-actions, .summary-range { display: inline-flex; align-items: center; gap: 8px; }
@@ -33,13 +39,6 @@
 .summary-page .summary-controls .segmented-range button { font-size: calc(13px * var(--font-scale, 1)); padding: 4px 7px; white-space: nowrap; }
 .summary-page .summary-controls .country-multiselect { width: 180px; min-width: 180px; max-width: 180px; }
 .summary-page .summary-controls .ant-select { font-size: calc(13px * var(--font-scale, 1)); }
-.summary-custom-range { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; flex-basis: 100%; padding-block: 5px; }
-.summary-custom-range label { display: grid; gap: 3px; color: var(--muted); font-size: calc(12px * var(--font-scale, 1)); }
-.summary-custom-range input { width: 155px; }
-.summary-custom-range-note { color: var(--muted); font-size: calc(12px * var(--font-scale, 1)); align-self: center; }
-.summary-custom-range-note[role='alert'] { color: #b42318; }
-.summary-meeting-periods { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; padding-block: 4px; }
-.summary-meeting-periods > span { font-size: calc(12px * var(--font-scale, 1)); color: var(--muted); }
 @media (max-width: 1599px) {
   .summary-page .summary-controls .summary-period { margin-left: 0; }
 }

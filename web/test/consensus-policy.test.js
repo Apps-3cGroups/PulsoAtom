@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { noVisibleFlagsLabel, unmarkedResultLabel } from '../src/services/flags.js';
+import { noVisibleFlagsLabel, unmarkedResultLabel, hasChangedEvaluation, evaluationStatus, evaluationStatusLabel, evaluationCoverage } from '../src/services/flags.js';
 import { nextReviewAction, canReviewVariable } from '../src/services/reviewPolicy.js';
 import { buildActiveBoard } from '../src/services/activeBoard.js';
 
@@ -12,6 +12,34 @@ test('individual detections and incomplete comparison are not described as absen
   assert.equal(unmarkedResultLabel({ result: { value: 0 } }), 'Evento no detectado');
   assert.equal(noVisibleFlagsLabel({ suppressedFlags: 3 }), 'Sin flags con coincidencia');
   assert.equal(noVisibleFlagsLabel({ consensusPendingFlags: 3 }), 'Doble revisión pendiente');
+});
+
+test('updated source changes presentation without rewriting completed execution or coverage', () => {
+  for (const changed of [{ sourceChanged: true }, { evaluation: { sourceChanged: true } }]) {
+    const conversation = { evaluated: true, evaluationStatus: 'evaluated', bothModelsComplete: true, suppressedFlags: 2, ...changed };
+    assert.equal(hasChangedEvaluation(conversation), true);
+    assert.equal(evaluationStatus(conversation), 'evaluated');
+    assert.equal(evaluationStatusLabel(conversation), 'Resultados históricos · datos actualizados');
+    assert.equal(noVisibleFlagsLabel(conversation), 'Flags automáticos pendientes de validar');
+    assert.deepEqual(evaluationCoverage([conversation]), { not_evaluated: 0, review_pending: 0, partial: 0, evaluated: 1 });
+    assert.equal(conversation.bothModelsComplete, true);
+  }
+  assert.equal(hasChangedEvaluation({ evaluated: false, sourceChanged: true }), false);
+  assert.equal(evaluationStatusLabel({ evaluated: false, sourceChanged: true }), 'Sin evaluar');
+  assert.equal(evaluationStatusLabel({ evaluated: true, evaluationStatus: 'partial' }), 'Evaluada con incidencias');
+  for (const [status, label] of [['partial', 'Evaluada con incidencias'], ['review_pending', 'Falta una revisión de modelo']]) {
+    assert.equal(evaluationStatusLabel({ evaluated: true, sourceChanged: true, evaluationStatus: status }), `Resultados históricos · datos actualizados · ${label}`);
+  }
+});
+
+test('historical agreement is never described as lack of two-model agreement or a current absence', () => {
+  const base = { type: 'Flag', method: 'IA', consensusSuppressed: true, result: { status: 'evaluado', value: 1 } };
+  const historical = agreement => ({ ...base, result: { ...base.result, comparison: { sourceChanged: true, agreement } } });
+  assert.equal(unmarkedResultLabel(historical('agree-positive')), 'Coincidencia histórica · pendiente de validar');
+  for (const agreement of ['disagree', 'agree-negative', 'incomplete']) {
+    assert.equal(unmarkedResultLabel(historical(agreement)), 'Resultado histórico · pendiente de validar');
+  }
+  assert.match(unmarkedResultLabel({ ...base, result: { ...base.result, comparison: { agreement: 'disagree' } } }), /Los modelos discrepan/);
 });
 
 test('a person raises a suppressed individual detection with evidence instead of refuting a non-published flag', () => {

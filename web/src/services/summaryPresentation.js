@@ -13,7 +13,7 @@ export const summaryRangeLabel = (from, to) => from === to
 
 const percentageFormatter = new Intl.NumberFormat('es-HN', { maximumFractionDigits: 1 });
 
-// Both rates use the same visible population as the conversation count and map.
+// Callers provide the eligible population explicitly (e.g. current results).
 // A missing/empty population has no percentage; a small positive count is never 0%.
 export function summaryPercentage(count, total) {
   if (!Number.isFinite(count) || !Number.isFinite(total) || total <= 0 || count < 0 || count > total) return '—';

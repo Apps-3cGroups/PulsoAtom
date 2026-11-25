@@ -5,7 +5,7 @@ import { Drawer, Tooltip } from 'antd';
 import { RightOutlined } from '@ant-design/icons';
 import { Mark, dateText } from './common';
 import { compactDaySlots, groupCompactDay, compactMarks } from '../services/summaryMap';
-import { classificationOf, dualMarks, evaluationStatus, evaluationStatusLabel } from '../services/flags';
+import { classificationOf, dualMarks, evaluationStatus, evaluationStatusLabel, hasChangedEvaluation, noVisibleFlagsLabel } from '../services/flags';
 import { useAppearance } from '../appearance';
 import './CompactSummaryMap.css';
 
@@ -41,17 +41,21 @@ export default function CompactSummaryMap({ groups, days, visible, variable, cla
         {group.agents.map(agent => <div className="compact-agent-row" key={agent.id}><div className="compact-agent-name" title={agent.name}><i /><span>{agent.name}</span></div><div className="compact-agent-days">{days.map((day, index) => <div className={`compact-day ${index % 7 === 0 ? 'week-start' : ''}`} key={day}>{groupCompactDay(agent.byDay[day], layout.slots).map(conversations => {
           const { kinds, names } = compactMarks(conversations, filters);
           const pending = conversations.some(c => evaluationStatus(c) !== 'evaluated');
-          const agreed = conversations.some(c => dualMarks(c, variable).some(m => classification === 'all' || classificationOf(m) === classification));
+          const changed = conversations.filter(hasChangedEvaluation).length;
+          const agreed = conversations.some(c => !hasChangedEvaluation(c) && dualMarks(c, variable).some(m => classification === 'all' || classificationOf(m) === classification));
           const grouped = conversations.length > 1;
           const title = grouped ? `${conversations.length} conversaciones · ${agent.name}` : conversations[0].client.name;
-          return <Tooltip key={conversations[0].id} mouseEnterDelay={.2} title={<div className="conversation-tooltip"><b>{title}</b><span>{grouped ? `${dateText(day)} · Abrir grupo para ver cada conversación` : `${conversationClock(conversations[0]).dateTime(conversations[0].displayAt)} · ${conversationClock(conversations[0]).label}`}</span><span>{names.length ? names.join(' · ') : 'Sin flags visibles'}</span>{pending && <span>Contiene evaluaciones pendientes o parciales</span>}{agreed && <span>Hay flags detectados por ambos modelos</span>}</div>}><button className={`compact-conversation tone-${kinds[0] || 'neutral'} ${pending ? 'is-pending' : ''} ${kinds.length ? 'with-flags' : ''} ${grouped ? 'is-group' : ''} ${agreed ? 'is-dual' : ''}`} aria-label={`${grouped ? 'Abrir grupo de ' : 'Abrir '}${title}, ${day}${kinds.length ? `, ${kinds.map(k => labels[k]).join(', ')}` : ', sin flags visibles'}`} onClick={() => openGroup(conversations, agent, day)}>{kinds.map(kind => <span className={`compact-symbol compact-symbol-${kind}`} key={kind}><Mark kind={kind} small /><i /></span>)}</button></Tooltip>;
+          const changedLabel = changed ? grouped ? `${changed} de ${conversations.length} con datos actualizados · flags automáticos pendientes de validar`
+            : `${evaluationStatusLabel(conversations[0])} · ${noVisibleFlagsLabel(conversations[0])}` : '';
+          return <Tooltip key={conversations[0].id} mouseEnterDelay={.2} title={<div className="conversation-tooltip"><b>{title}</b><span>{grouped ? `${dateText(day)} · Abrir grupo para ver cada conversación` : `${conversationClock(conversations[0]).dateTime(conversations[0].displayAt)} · ${conversationClock(conversations[0]).label}`}</span>{changed > 0 && <strong className="compact-source-status">{changedLabel}</strong>}<span>{names.length ? `${changed === conversations.length ? 'Marcas históricas: ' : ''}${names.join(' · ')}` : changed ? 'No se interpretan como conversaciones sin flags.' : 'Sin flags visibles'}</span>{pending && <span>Contiene evaluaciones pendientes o parciales</span>}{agreed && <span>Hay flags vigentes detectados por ambos modelos</span>}</div>}><button className={`compact-conversation tone-${kinds[0] || 'neutral'} ${pending ? 'is-pending' : ''} ${kinds.length ? 'with-flags' : ''} ${grouped ? 'is-group' : ''} ${agreed ? 'is-dual' : ''} ${changed ? 'is-source-changed' : ''}`} aria-label={`${grouped ? 'Abrir grupo de ' : 'Abrir '}${title}, ${day}${changed ? `, ${changedLabel}` : kinds.length ? `, ${kinds.map(k => labels[k]).join(', ')}` : ', sin flags visibles'}`} onClick={() => openGroup(conversations, agent, day)}>{kinds.map(kind => <span className={`compact-symbol compact-symbol-${kind}`} key={kind}><Mark kind={kind} small /><i /></span>)}</button></Tooltip>;
         })}</div>)}</div></div>)}
       </section>)}
     </div>
     <Drawer className="compact-group-drawer" open={!!selection} onClose={() => setSelection(null)} width={480} title={selection ? `${selection.agent.name} · ${dateText(selection.day, { year: undefined })}` : ''}>
       {selection && <><p className="compact-group-note">{selection.conversations.length} conversaciones agrupadas en esta celda. Selecciona una para consultar todos sus mensajes y resultados.</p><div className="compact-group-list">{selection.conversations.map(c => {
         const { kinds, names } = compactMarks([c], filters);
-        return <button key={c.id} onClick={() => onOpen(c)}><div><strong>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</strong><span title={conversationClock(c).label}>{conversationClock(c).dateTime(c.displayAt)} <RightOutlined /></span></div><small>{evaluationStatusLabel(c)}</small><p><span>{kinds.map(kind => <Mark kind={kind} key={kind} small />)}</span>{names.length ? names.join(' · ') : 'Sin flags visibles'}</p></button>;
+        const changed = hasChangedEvaluation(c);
+        return <button key={c.id} className={changed ? 'has-source-change' : undefined} onClick={() => onOpen(c)}><div><strong>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</strong><span title={conversationClock(c).label}>{conversationClock(c).dateTime(c.displayAt)} <RightOutlined /></span></div><small>{evaluationStatusLabel(c)}</small><p><span>{kinds.map(kind => <Mark kind={kind} key={kind} small />)}</span>{changed ? `${noVisibleFlagsLabel(c)}${names.length ? ` · Marcas históricas: ${names.join(' · ')}` : ''}` : names.length ? names.join(' · ') : 'Sin flags visibles'}</p></button>;
       })}</div></>}
     </Drawer>
   </>;

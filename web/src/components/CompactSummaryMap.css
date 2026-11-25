@@ -57,6 +57,8 @@
 .compact-conversation.tone-human { background: #f5effc; border-color: #bca6d5; }
 .compact-conversation.tone-positive { background: #edf8f4; border-color: #a6cabb; }
 .compact-conversation.is-dual { box-shadow: inset 0 -2px #5272b3; }
+.compact-conversation.is-source-changed { border: 1px dashed #9b651b; background: repeating-linear-gradient(135deg, #fff8e9 0 3px, #f4dfb4 3px 5px); box-shadow: inset 0 0 0 1px #f7e3ba; }
+.compact-source-status { color: #80500d; }
 .compact-conversation:hover, .compact-conversation:focus-visible { outline: 2px solid #5267a3; outline-offset: 1px; z-index: 2; background: #edf2ff; }
 .compact-conversation.is-group::after { content: ''; position: absolute; bottom: 0; right: 0; width: 2px; height: 2px; background: #617d9f; }
 .compact-symbol { container: compact-symbol / size; min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; }
@@ -76,6 +78,8 @@
 .compact-group-list { display: grid; gap: 10px; }
 .compact-group-list > button { padding: 12px; text-align: left; border: 1px solid #d9e2ec; border-radius: 10px; background: #fff; color: #243449; }
 .compact-group-list > button:hover { border-color: #8c9fc8; background: #f2f5fc; }
+.compact-group-list > button.has-source-change { border: 1px dashed #b98434; background: #fffaf0; }
+.compact-group-list > button.has-source-change > small { color: #80500d; }
 .compact-group-list > button > div { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .compact-group-list > button > div > span, .compact-group-list small { font-size: calc(11px * var(--font-scale, 1)); color: #64778c; }
 .compact-group-list small { display: block; margin-top: 4px; }
