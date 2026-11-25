@@ -81,7 +81,13 @@ export function startDailyScheduler(store, evaluator) {
   const tick = async () => {
     if (busy) return;
     busy = true;
-    try { if (!await runOneOffTick(store, evaluator)) await runDailyTick(store, evaluator); } catch (error) {
+    try {
+      // A paused scheduler only checks settings, without loading or recovering
+      // evaluation queues. Existing workers retain their own pause guards.
+      const settings = await store.readSettings();
+      if (settings.evaluationMaintenance) return;
+      if (!await runOneOffTick(store, evaluator)) await runDailyTick(store, evaluator);
+    } catch (error) {
       if (!['DAILY_ALREADY_STARTED', 'EVALUATION_RUNNING', 'SCHEDULE_CHANGED'].includes(error.code)) {
         console.error('Error al iniciar evaluación diaria de Pulso:', error.code || error.name);
       }
