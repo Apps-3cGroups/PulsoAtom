@@ -13,6 +13,16 @@ export const isDualDetection = mark => {
   return mark.comparison?.agreement === 'agree-positive' && mark.comparison?.detections === 2 && mark.comparison?.votes === 2 && !mark.comparison?.codeOnly;
 };
 export const dualMarks = (conversation, variable) => (conversation.marks || []).filter(m => (!variable || m.id === variable) && isDualDetection(m));
+// Saved historical marks are display-only: they never become current votes or review targets.
+export const displayedMarks = (conversation = {}) => {
+  const current = conversation.marks || [];
+  if (!hasChangedEvaluation(conversation) || conversation.historicalFlagsAvailable !== true) return current;
+  const ids = new Set(current.map(mark => mark.id));
+  return [...current, ...(conversation.historicalMarks || []).filter(mark => mark.historical === true
+    && mark.historicalDualDetected === true && !ids.has(mark.id))];
+};
+export const historicalDualMarks = conversation => displayedMarks(conversation).filter(mark => mark.historical && mark.historicalDualDetected);
+export const displayedVariableKind = variable => variable.kind || (variable.historicalAutomaticFlagVisible ? variable.historicalKind : null);
 export const flagCount = (conversation, classification) => conversation[classification] ?? (classification === 'critical' ? conversation.p1 : classification === 'normal' ? conversation.p2 : undefined) ?? (conversation.marks || []).filter(m => m.effective && classificationOf(m) === classification).length;
 export const flagVariables = catalog => catalog.filter(v => ['Flag', 'Calculado'].includes(v.type));
 export const metricValue = variable => variable?.result?.status === 'evaluado' && typeof variable.result.value === 'number' && Number.isFinite(variable.result.value) ? variable.result.value : null;
@@ -36,14 +46,16 @@ export function evaluationCoverage(conversations) {
   for (const conversation of conversations) counts[evaluationStatus(conversation)]++;
   return counts;
 }
-export const noVisibleFlagsLabel = conversation => hasChangedEvaluation(conversation) ? 'Flags automáticos pendientes de validar'
+export const noVisibleFlagsLabel = conversation => hasChangedEvaluation(conversation) ? conversation.historicalFlagsAvailable === true
+  ? historicalDualMarks(conversation).length ? 'Flags de la evaluación guardada' : 'Sin flags con coincidencia en la evaluación guardada'
+  : 'Flags históricos no disponibles en esta respuesta'
   : needsModelReview(conversation) ? 'Doble revisión pendiente'
   : conversation.suppressedFlags > 0 ? 'Sin flags con coincidencia' : 'Sin flags vigentes';
 
 // Retained individual results are not equivalent to a published operational flag.
 export function unmarkedResultLabel(variable) {
   if (variable.result.comparison?.sourceChanged) return variable.result.comparison.agreement === 'agree-positive'
-    ? 'Coincidencia histórica · pendiente de validar' : 'Resultado histórico · pendiente de validar';
+    ? 'Coincidencia histórica de ambos modelos' : 'Resultado de la evaluación guardada';
   if (variable.consensusSuppressed) {
     if (variable.result.codeRule || ['Código', 'Cálculo'].includes(variable.method)) return 'Calculado por código · fuera de los flags por coincidencia';
     if (variable.result.comparison?.agreement === 'disagree') return 'Los modelos discrepan · no se muestra como flag';

@@ -24,8 +24,12 @@ function flagEvidence(variable) {
 /** Associate only published marks with actual message IDs; never guess from text. */
 export function buildMessageFlags(conversation = {}) {
   const messageIds = new Set((conversation.messages || []).map(message => asId(message.id)).filter(id => id !== null));
+  const sourceChanged = conversation.sourceChanged || conversation.evaluation?.sourceChanged;
+  const displayVariables = (conversation.variables || []).map(variable => sourceChanged && conversation.historicalFlagsAvailable === true
+    && !variable.kind && variable.historicalAutomaticFlagVisible && variable.historicalKind
+    ? { ...variable, kind: variable.historicalKind, historical: true } : variable);
   const seenVariables = new Set();
-  const markedVariables = orderFlags(flagVariables(conversation.variables || []).filter(variable => {
+  const markedVariables = orderFlags(flagVariables(displayVariables).filter(variable => {
     const id = asId(variable.id);
     if (!variable.kind || id === null || seenVariables.has(id)) return false;
     seenVariables.add(id);
@@ -33,7 +37,6 @@ export function buildMessageFlags(conversation = {}) {
   }));
   const byMessage = new Map();
   const unlinkedVariables = [];
-  const sourceChanged = conversation.sourceChanged || conversation.evaluation?.sourceChanged;
   for (const variable of markedVariables) {
     const linkedIds = new Set(sourceChanged ? [] : flagEvidence(variable)
       .map(evidence => asId(evidence?.messageId)).filter(id => id !== null && messageIds.has(id)));

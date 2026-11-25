@@ -1,4 +1,4 @@
-import { classificationOf, markKind } from './flags.js';
+import { classificationOf, markKind, displayedMarks } from './flags.js';
 
 // Index once: dense month views must not scan the complete history for every day.
 export function buildSummaryLanes(conversations, countries, days) {
@@ -35,7 +35,7 @@ const kindOrder = ['critical', 'normal', 'refuted', 'human', 'positive'];
 export function compactMarks(conversations, { visible, variable, classification }) {
   const kinds = new Set();
   const names = new Set();
-  for (const conversation of conversations) for (const mark of conversation.marks || []) {
+  for (const conversation of conversations) for (const mark of displayedMarks(conversation)) {
     if (variable && mark.id !== variable || classification !== 'all' && classificationOf(mark) !== classification) continue;
     if (!(visible.includes(markKind(mark)) || visible.includes(classificationOf(mark)) && mark.effective)) continue;
     names.add(mark.name);

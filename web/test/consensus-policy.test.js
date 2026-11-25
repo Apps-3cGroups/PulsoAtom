@@ -20,7 +20,7 @@ test('updated source changes presentation without rewriting completed execution 
     assert.equal(hasChangedEvaluation(conversation), true);
     assert.equal(evaluationStatus(conversation), 'evaluated');
     assert.equal(evaluationStatusLabel(conversation), 'Resultados históricos · datos actualizados');
-    assert.equal(noVisibleFlagsLabel(conversation), 'Flags automáticos pendientes de validar');
+    assert.equal(noVisibleFlagsLabel(conversation), 'Flags históricos no disponibles en esta respuesta');
     assert.deepEqual(evaluationCoverage([conversation]), { not_evaluated: 0, review_pending: 0, partial: 0, evaluated: 1 });
     assert.equal(conversation.bothModelsComplete, true);
   }
@@ -35,9 +35,9 @@ test('updated source changes presentation without rewriting completed execution 
 test('historical agreement is never described as lack of two-model agreement or a current absence', () => {
   const base = { type: 'Flag', method: 'IA', consensusSuppressed: true, result: { status: 'evaluado', value: 1 } };
   const historical = agreement => ({ ...base, result: { ...base.result, comparison: { sourceChanged: true, agreement } } });
-  assert.equal(unmarkedResultLabel(historical('agree-positive')), 'Coincidencia histórica · pendiente de validar');
+  assert.equal(unmarkedResultLabel(historical('agree-positive')), 'Coincidencia histórica de ambos modelos');
   for (const agreement of ['disagree', 'agree-negative', 'incomplete']) {
-    assert.equal(unmarkedResultLabel(historical(agreement)), 'Resultado histórico · pendiente de validar');
+    assert.equal(unmarkedResultLabel(historical(agreement)), 'Resultado de la evaluación guardada');
   }
   assert.match(unmarkedResultLabel({ ...base, result: { ...base.result, comparison: { agreement: 'disagree' } } }), /Los modelos discrepan/);
 });

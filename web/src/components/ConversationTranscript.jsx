@@ -30,7 +30,7 @@ function MarkCard({ variable, messageCount, selected, onSelectFlag, onShowFlag }
   const classification = classificationOf(variable);
   const source = variable.kind === 'refuted' ? 'Refutado por humano'
     : variable.kind === 'human' || variable.origin === 'human' ? 'Flag humano'
-      : variable.dualDetected ? 'Detectado por ambos modelos' : 'Detectado por la IA';
+      : variable.historical ? 'Coincidencia histórica de ambos modelos' : variable.dualDetected ? 'Detectado por ambos modelos' : 'Detectado por la IA';
   return <div className={`message-sidebar-flag${selected ? ' message-sidebar-flag-selected' : ''}`}>
     <button type="button"
       className={`message-flag-card mark-card-${classification}${variable.kind === 'refuted' ? ' mark-card-refuted' : ''}`}
@@ -150,8 +150,8 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
       </div>
       <aside className="message-flags-sidebar" aria-label="Flags de la conversación">
         <header className="message-flags-sidebar-heading"><h3>Flags de la conversación</h3><span>{index.markedVariables.length}</span></header>
-        <p className="message-flags-sidebar-hint">Selecciona un flag para resaltar sus mensajes. Abre su revisión para ver la evidencia de cada modelo.</p>
-        {!sidebarGroups.length ? <EmptyState title="Sin marcas publicadas" description="Puedes leer la conversación y añadir un flag humano cuando corresponda." />
+        <p className="message-flags-sidebar-hint">{conversation.sourceChanged || conversation.evaluation?.sourceChanged ? 'Flags de la evaluación guardada. Abre su revisión para consultar las respuestas originales de ambos modelos.' : 'Selecciona un flag para resaltar sus mensajes. Abre su revisión para ver la evidencia de cada modelo.'}</p>
+        {!sidebarGroups.length ? <EmptyState title={conversation.sourceChanged ? "Sin flags con coincidencia guardada" : "Sin marcas publicadas"} description={conversation.sourceChanged ? "Puedes consultar los resultados individuales en Modelos y en el checklist." : "Puedes leer la conversación y añadir un flag humano cuando corresponda."} />
           : sidebarGroups.map(group => <section className={`message-flag-group message-flag-group-${group.classification}`} key={group.classification} aria-label={group.label}>
             <h4>{group.label}<span>{group.variables.length}</span></h4>
             {group.variables.map(variable => <MarkCard key={variable.id} variable={variable} messageCount={flagMessageIds.get(String(variable.id))?.length || 0}

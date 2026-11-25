@@ -189,10 +189,15 @@ test('changed Atom content retains both historical answers but cannot publish an
   assert.equal(resultFor(result).comparison.sourceChanged, true);
   assert.equal(resultFor(result).comparison.cells.filter(c => c.result).length, 2);
   assert.equal(operationalConsensus(result, FLAG).detected, false);
+  assert.equal(operationalConsensus(result, FLAG).historicalDetected, true);
   const detail = conversationView(f.state, f.conversation, undefined, true);
   assert.equal(detail.sourceChanged, true);
   assert.equal(detail.bothModelsComplete, true);
   assert.equal(detail.marks.length, 0);
+  assert.equal(detail.historicalMarks.length, 1);
+  assert.equal(detail.historicalMarks[0].id, FLAG);
+  assert.deepEqual(detail.historicalMarks[0].models.map(model => [model.evaluationId, model.createdAt]),
+    [f.anchor, f.clef].map(evaluation => [evaluation.id, evaluation.createdAt]));
 });
 
 test('existing reviews remain linked to the original Gemma evaluation', () => {

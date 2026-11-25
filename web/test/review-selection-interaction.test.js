@@ -100,27 +100,27 @@ async function click(element) {
 }
 const latestRequest = () => requests.at(-1);
 
-test('changed-source results are visibly historical and excluded from the flag-rate denominator', async () => {
+test('restored historical flags are visible in the default period and counted as saved findings', async () => {
   const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
+  const mark = { id: 'restored', name: 'Hallazgo original', kind: 'critical', classification: 'critical',
+    historical: true, historicalDualDetected: true, effective: false, dualDetected: false };
   ordinaryRows = [
-    { ...rows[2], sourceChanged: false, displayDate: period.from, bothModelsComplete: true, p1: 1 },
-    { ...rows[3], sourceChanged: true, displayDate: period.from, bothModelsComplete: true, suppressedFlags: 3 },
-    { ...rows[4], sourceChanged: true, displayDate: period.to, bothModelsComplete: true, p1: 1, positive: 1 },
+    { ...rows[2], sourceChanged: false, displayDate: period.from, bothModelsComplete: true, p1: 1, marks: [{ ...mark, historical: false, effective: true }] },
+    { ...rows[3], sourceChanged: true, displayDate: period.from, bothModelsComplete: true, marks: [], historicalFlagsAvailable: true, historicalMarks: [mark] },
+    { ...rows[4], sourceChanged: true, displayDate: period.to, bothModelsComplete: true, marks: [], historicalFlagsAvailable: true, historicalMarks: [] },
   ];
   await render();
   assert.equal(document.querySelectorAll('.conversation-cell').length, 3);
   assert.equal(document.querySelectorAll('.source-changed-cell').length, 2);
-  assert.equal(document.querySelectorAll('.source-changed-symbol').length, 2);
-  assert.match(document.querySelector('.source-changed-cell').getAttribute('aria-label'), /históricos/);
-  assert.match(document.querySelector('.summary-source-note').textContent, /2 resultados históricos/);
-  assert.match(document.querySelector('.summary-source-note').textContent, /no indica ausencia de problemas/);
-  assert.match(document.querySelector('.summary-total-flags').textContent, /100%/);
-  assert.match(document.querySelector('.summary-total-flags').textContent, /Sobre 1 evaluación con datos sin cambios/);
+  assert.equal(document.querySelectorAll('.source-changed-cell .mark-critical').length, 1);
+  assert.match(document.querySelector('.summary-source-note').textContent, /sin ejecutar nuevas evaluaciones/);
+  assert.match(document.querySelector('.summary-total-flags').textContent, /66\.7%/);
+  assert.match(document.querySelector('.summary-total-flags').textContent, /Sobre 3 evaluaciones guardadas/);
   assert.match(document.querySelector('.summary-total-positive').textContent, /0%/);
   await act(async () => router.navigate('/?from=2026-11-19&to=2026-11-19&completion=both&reviewSelection=all'));
   assert.equal(document.querySelectorAll('.conversation-cell').length, 1);
-  assert.match(document.querySelector('.summary-total-flags').textContent, /—/);
-  assert.match(document.querySelector('.summary-total-positive').textContent, /—/);
+  assert.match(document.querySelector('.summary-total-flags').textContent, /0%/);
+  assert.match(document.querySelector('.summary-total-positive').textContent, /0%/);
 });
 
 test('default entry queries the configured meeting period with complete pairs from its first request and retains detail/history return links', async () => {

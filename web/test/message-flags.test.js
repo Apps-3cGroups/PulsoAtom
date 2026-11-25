@@ -99,3 +99,23 @@ test('grouped options retain severity for human marks, separate refuted marks, a
   const index = buildMessageFlags({ messages: [message('0')], variables: [human] });
   assert.deepEqual(index.byMessage.get('0'), [human]);
 });
+
+
+test('restored historical flags appear in the sidebar but never attach to current messages', () => {
+  const variable = { ...flag('old', 'critical', ['same-id']), kind: null, effective: false, dualDetected: false,
+    historicalAutomaticFlagVisible: true, historicalKind: 'critical' };
+  const conversation = { sourceChanged: true, historicalFlagsAvailable: true,
+    messages: [message('same-id', 'Contenido actualizado')], variables: [variable] };
+  const original = structuredClone(conversation);
+  const index = buildMessageFlags(conversation);
+  assert.equal(index.markedVariables.length, 1);
+  assert.equal(index.markedVariables[0].historical, true);
+  assert.equal(index.markedVariables[0].kind, 'critical');
+  assert.equal(index.markedVariables[0].effective, false);
+  assert.equal(index.markedVariables[0].dualDetected, false);
+  assert.equal(index.byMessage.size, 0);
+  assert.equal(index.unlinkedVariables.length, 1);
+  assert.equal(buildMessageFlags({ ...conversation, historicalFlagsAvailable: false }).markedVariables.length, 0);
+  assert.equal(buildMessageFlags({ ...conversation, sourceChanged: false }).markedVariables.length, 0);
+  assert.deepEqual(conversation, original);
+});

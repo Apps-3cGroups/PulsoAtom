@@ -51,7 +51,7 @@ test('table marks identify updated data even with a historical human mark', asyn
   const conversation = { ...base, sourceChanged: true, marks: [human] }, saved = structuredClone(conversation);
   await render(Marks, { conversation });
   assert.match(document.querySelector('#test').textContent, /Datos actualizados/);
-  assert.match(document.querySelector('#test').textContent, /Flags automáticos pendientes de validar/);
+  assert.doesNotMatch(document.querySelector('#test').textContent, /Flags históricos no disponibles en esta respuesta/);
   assert.doesNotMatch(document.querySelector('#test').textContent, /Contenido nuevo|Sin flags/);
   assert.ok(document.querySelector('[aria-label="Flag humano"]'));
   assert.equal(document.querySelectorAll('.dual-badge').length, 0);
@@ -62,7 +62,7 @@ test('historical labels retain unfinished model execution incidents', async () =
   await render(Marks, { conversation: { ...base, sourceChanged: true, evaluationStatus: 'review_pending' } });
   assert.match(document.querySelector('#test').textContent, /Datos actualizados/);
   assert.match(document.querySelector('#test').textContent, /Falta una revisión de modelo/);
-  assert.match(document.querySelector('#test').textContent, /Flags automáticos pendientes de validar/);
+  assert.match(document.querySelector('#test').textContent, /Flags históricos no disponibles en esta respuesta/);
 });
 
 test('compact empty historical cell has explicit freshness text, not a clean or pending-execution status', async () => {
@@ -71,7 +71,7 @@ test('compact empty historical cell has explicit freshness text, not a clean or 
   assert.ok(cell.classList.contains('is-source-changed'));
   assert.equal(cell.classList.contains('is-pending'), false);
   assert.match(cell.getAttribute('aria-label'), /Resultados históricos · datos actualizados/);
-  assert.match(cell.getAttribute('aria-label'), /Flags automáticos pendientes de validar/);
+  assert.match(cell.getAttribute('aria-label'), /Flags históricos no disponibles en esta respuesta/);
   assert.doesNotMatch(cell.getAttribute('aria-label'), /sin flags visibles/);
 });
 
@@ -94,4 +94,24 @@ test('mixed compact group distinguishes old human marks from current results and
   assert.equal(entries[1].classList.contains('has-source-change'), false);
   assert.match(entries[1].textContent, /Evaluada/);
   await click(entries[0]); assert.equal(opened, 'a');
+});
+
+const historical = { id: 'restored', name: 'Falta de seguimiento', kind: 'critical', classification: 'critical',
+  effective: false, dualDetected: false, historical: true, historicalDualDetected: true, origin: 'system' };
+test('saved historical flags reappear in table and compact map without claiming a current two-model result', async () => {
+  const conversation = { ...base, sourceChanged: true, historicalFlagsAvailable: true, historicalMarks: [historical] };
+  const original = structuredClone(conversation);
+  await render(Marks, { conversation });
+  assert.ok(document.querySelector('[aria-label="Flag crítico"]'));
+  assert.match(document.querySelector('#test').textContent, /2 modelos · histórico/);
+  assert.doesNotMatch(document.querySelector('#test').textContent, /Sin flags|pendientes de validar/);
+  assert.equal(document.querySelectorAll('.dual-badge').length, 0);
+  await act(async () => root.unmount()); root = null;
+  await render(CompactSummaryMap, propsFor([conversation]));
+  const cell = document.querySelector('.compact-conversation');
+  assert.ok(cell.classList.contains('with-flags'));
+  assert.ok(cell.classList.contains('is-source-changed'));
+  assert.equal(cell.classList.contains('is-dual'), false);
+  assert.match(cell.getAttribute('aria-label'), /Crítico/);
+  assert.deepEqual(conversation, original);
 });

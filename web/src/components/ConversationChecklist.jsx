@@ -7,10 +7,10 @@ import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined } from '@ant-design
 import { EmptyState, FlagSymbol, Mark, PriorityTag } from './common';
 import FlagModelComparison from './FlagModelComparison';
 import { canReviewVariable, nextReviewAction, reviewActions } from './ReviewModal';
-import { classificationOf, flagVariables, unmarkedResultLabel } from '../services/flags';
+import { classificationOf, flagVariables, unmarkedResultLabel, displayedVariableKind } from '../services/flags';
 
 const resultLabel = v => v.kind === 'refuted' ? 'Refutado por humano' : v.kind === 'human' ? 'Levantado por humano'
-  : v.kind ? (v.dualDetected ? 'Detectado por ambos modelos' : 'Flag guardado')
+  : v.historicalAutomaticFlagVisible ? 'Coincidencia histórica de ambos modelos' : v.kind ? (v.dualDetected ? 'Detectado por ambos modelos' : 'Flag guardado')
     : v.result.error ? 'Error técnico de evaluación' : v.result.status === 'no_evaluado' ? 'Sin datos o contexto suficientes' : unmarkedResultLabel(v);
 const evidenceList = value => Array.isArray(value) ? value : value ? [value] : [];
 const evidenceKey = evidence => JSON.stringify([evidence.messageId == null ? null : String(evidence.messageId), evidence.quote || '']);
@@ -23,7 +23,7 @@ export default function ConversationChecklist({ conversation, includeAll, onShow
   const [unavailable, setUnavailable] = useState(includeAll);
   const catalog = flagVariables(conversation.variables);
   const visible = catalog.filter(v => (!family || v.family === family) && (classification === 'all' || classificationOf(v) === classification)
-    && (!onlyMarked || v.kind) && (unavailable || v.kind || v.result.error || (conversation.evaluated ? v.result.status === 'evaluado' : v.enabledInEvaluation)));
+    && (!onlyMarked || displayedVariableKind(v)) && (unavailable || displayedVariableKind(v) || v.result.error || (conversation.evaluated ? v.result.status === 'evaluado' : v.enabledInEvaluation)));
   const groups = [...new Set(visible.filter(v => classificationOf(v) !== 'positive').map(v => v.family))].map(name => ({ name, variables: visible.filter(v => v.family === name && classificationOf(v) !== 'positive') }));
   const positives = visible.filter(v => classificationOf(v) === 'positive');
   if (positives.length) groups.push({ name: 'Resultados positivos', variables: positives, positive: true });
@@ -31,7 +31,7 @@ export default function ConversationChecklist({ conversation, includeAll, onShow
     <div className="detail-filters"><Select aria-label="Familia del checklist" value={family || undefined} placeholder="Todas las familias" allowClear onChange={setFamily} options={[...new Set(catalog.map(v => v.family))].map(value => ({ value, label: value }))} /><Select aria-label="Clasificación del checklist" value={classification} onChange={setClassification} options={[{ value: 'all', label: 'Todos los flags' }, { value: 'critical', label: 'Críticos' }, { value: 'normal', label: 'Menores' }, { value: 'positive', label: '+ Positivos' }]} /><Checkbox checked={onlyMarked} onChange={e => setOnlyMarked(e.target.checked)}>Solo con marca</Checkbox><Checkbox checked={unavailable} onChange={e => setUnavailable(e.target.checked)}>Mostrar no evaluadas</Checkbox></div>
     <p className="checklist-visible-count" role="status">{visible.length} variables visibles</p>
     {!groups.length && <EmptyState title="Sin variables con estos filtros" description="Prueba otra familia o muestra también las no evaluadas." />}
-    {groups.map(group => <div className={`checklist-family ${group.positive ? 'positive-checklist-section' : ''}`} key={group.name}><h3>{group.positive && <Mark kind="positive" />}{group.name}<span>{group.variables.length}</span></h3>{group.variables.map(v => <button className="checklist-summary-row" key={v.id} onClick={() => onShowFlag(v.id)}><span className="variable-symbol">{v.kind ? <FlagSymbol mark={v} /> : <span className="empty-symbol" />}</span><span><b>{v.name}</b><small>{resultLabel(v)}{!v.enabledInEvaluation ? ' · Fuera del checklist evaluado' : ''}</small></span><PriorityTag priority={classificationOf(v)} /><ArrowRightOutlined /></button>)}</div>)}
+    {groups.map(group => <div className={`checklist-family ${group.positive ? 'positive-checklist-section' : ''}`} key={group.name}><h3>{group.positive && <Mark kind="positive" />}{group.name}<span>{group.variables.length}</span></h3>{group.variables.map(v => <button className="checklist-summary-row" key={v.id} onClick={() => onShowFlag(v.id)}><span className="variable-symbol">{displayedVariableKind(v) ? <FlagSymbol mark={{ ...v, kind: displayedVariableKind(v) }} /> : <span className="empty-symbol" />}</span><span><b>{v.name}</b><small>{resultLabel(v)}{!v.enabledInEvaluation ? ' · Fuera del checklist evaluado' : ''}</small></span><PriorityTag priority={classificationOf(v)} /><ArrowRightOutlined /></button>)}</div>)}
   </section>;
 }
 
@@ -55,7 +55,7 @@ export function ConversationFlagDetails({ conversation, variable: v, index, onSh
   });
   return <section className="conversation-flag-details">
     <Button type="text" icon={<ArrowLeftOutlined />} onClick={onChecklist}>Volver al checklist</Button>
-    <div className="flag-details-heading"><div>{v.kind && <FlagSymbol mark={v} />}<PriorityTag priority={classificationOf(v)} /><span className="muted">Versión {v.version}</span></div>{canReview && <Button icon={<EditOutlined />} onClick={() => onReview(action)}>{reviewActions[action]}</Button>}</div>
+    <div className="flag-details-heading"><div>{displayedVariableKind(v) && <FlagSymbol mark={{ ...v, kind: displayedVariableKind(v) }} />}<PriorityTag priority={classificationOf(v)} /><span className="muted">Versión {v.version}</span></div>{canReview && <Button icon={<EditOutlined />} onClick={() => onReview(action)}>{reviewActions[action]}</Button>}</div>
     <p className="flag-details-status">{resultLabel(v)}</p>
     {v.review && <div className="flag-human-record"><b>{v.review.action === 'refutar' ? 'Refutación humana' : 'Flag humano'}</b><p>{v.review.comment}</p><small>{v.review.authorName} · {clock.date(v.review.createdAt)} · {clock.time(v.review.createdAt)}{v.verdict?.id === v.review.id ? ` · ${v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}` : ''}</small></div>}
     {!conversation.rawModelView && v.verdict && v.verdict.id !== v.review?.id && <div className="review-note"><b>Dictamen: {{ present: 'evento presente', absent: 'evento ausente', insufficient: 'contexto insuficiente', reverted: 'revertido' }[v.verdict.outcome]}</b><p>{v.verdict.comment}</p><small>{v.verdict.authorName} · {clock.date(v.verdict.createdAt)} · {v.verdict.mode === 'blind' ? 'A ciegas' : 'Asistido'}</small></div>}

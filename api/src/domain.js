@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import { selectedEvaluation, evaluationSelectionContext, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { classificationOf, catalogAvailability, currentCatalog } from './catalog-presentation.js';
-import { operationalConsensus, hasCompleteLocalModelPair } from './operational-evaluation.js';
+import { operationalConsensus, hasCompleteLocalModelPair, hasVerifiedHistoricalModelPair } from './operational-evaluation.js';
 import { navigationSummaryCache } from './navigation-cache.js';
 
 export const catalogFields = z.object({
@@ -95,15 +95,31 @@ export function conversationView(state, conversation, context = viewContext(stat
     if (classification && review?.action === 'refutar') kind = 'refuted';
     else if (classification && review?.action === 'levantar') kind = 'human';
     else if (automaticFlagVisible) kind = classification;
+    // Keep historical model agreement separate from effective current marks.
+    // Existing human decisions retain precedence and are never duplicated.
+    const historicalAutomaticFlagVisible = !context.profileId && !!ref.active && !!classification
+      && detected && consensus?.historicalDetected === true && !kind && !review;
+    const historicalKind = historicalAutomaticFlagVisible ? classification : null;
     const priority = classification === 'critical' ? 'Crítico' : classification === 'normal' ? 'Normal' : null;
     const effective = !!kind && kind !== 'refuted';
     const dualDetected = effective && consensus?.detected === true;
     return { ...(detail ? { ...definition, availability: catalogAvailability(definition) }
       : { id: definition.id, name: definition.name, type: definition.type, method: definition.method }),
-      enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, consensusSuppressed, consensusPending };
+      enabledInEvaluation: ref.active, result, verdict, review: review || null, kind, classification, priority, origin: review?.action === 'levantar' ? 'human' : 'system', effective, dualDetected, automaticFlagVisible, historicalAutomaticFlagVisible, historicalKind, consensusSuppressed, consensusPending };
   });
   const marks = variables.filter(v => v.kind).map(v => ({ id: v.id, name: v.name, kind: v.kind, priority: v.priority, classification: v.classification, origin: v.origin, effective: v.effective, dualDetected: v.dualDetected,
     comparison: v.result.comparison ? Object.fromEntries(['agreement', 'detections', 'votes', 'expected', 'missing', 'label'].map(k => [k, v.result.comparison[k]])) : null }));
+  const historicalMarks = variables.filter(v => v.historicalKind).map(v => {
+    const models = v.result.comparison.cells.map(({ profileId, label, provider, model, evaluationId, createdAt, sourceHash }) =>
+      ({ profileId, label, provider, model, evaluationId, createdAt, sourceHash }));
+    const dates = models.map(model => model.createdAt).filter(date => date && Number.isFinite(Date.parse(date)))
+      .sort((a, b) => Date.parse(a) - Date.parse(b));
+    return { id: v.id, name: v.name, kind: v.historicalKind, priority: v.priority, classification: v.classification,
+      origin: 'system', effective: false, historical: true, dualDetected: false, historicalDualDetected: true,
+      createdAt: dates.at(-1) || null, models,
+      comparison: { ...Object.fromEntries(['agreement', 'detections', 'votes', 'expected', 'missing'].map(key => [key, v.result.comparison[key]])),
+        sourceChanged: true, label: 'Coincidencia histórica de ambos modelos' } };
+  });
   const p1 = marks.filter(m => m.effective && m.classification === 'critical').length;
   const p2 = marks.filter(m => m.effective && m.classification === 'normal').length;
   const positive = marks.filter(m => m.effective && m.classification === 'positive').length;
@@ -124,7 +140,7 @@ export function conversationView(state, conversation, context = viewContext(stat
   const base = { ...conversationTimezone(conversation, config.countryTimezones), provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
     activityDate: conversation.activityDate || conversation.date, startedDate: conversation.startedDate,
     activityAt: conversation.activityAt, lastActivityAt: conversation.lastActivityAt || null,
-    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, bothModelsComplete, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
+    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, bothModelsComplete, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, historicalMarks, historicalFlagsAvailable: !context.profileId && bothModelsComplete && hasVerifiedHistoricalModelPair(evaluation), originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
   return detail ? { ...base, messages: conversation.messages, messageCounts: messageCounts(conversation.messages), sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: evaluationStatus === 'review_pending', modelReviews: evaluation.modelReviews || [], provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
     metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : (context.summaryCache?.set(conversation.id, base), base);
 }

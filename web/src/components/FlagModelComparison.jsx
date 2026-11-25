@@ -12,9 +12,9 @@ export default function FlagModelComparison({ variable, demo }) {
   const agreed = comparison.agreement === 'agree-positive';
   return <section className="flag-comparison" aria-label={`Revisión de modelos: ${variable.name}`}>
     {demo && <Tag color="gold">Demostración · resultados sintéticos</Tag>}
-    <div className={`flag-agreement ${agreed ? 'flag-agreement-positive' : ''}`}>
+    <div className={`flag-agreement ${agreed && !comparison.sourceChanged ? 'flag-agreement-positive' : ''}`}>
       {agreed || comparison.agreement === 'agree-negative' ? <CheckCircleOutlined /> : comparison.agreement === 'disagree' ? <ExclamationCircleOutlined /> : <ClockCircleOutlined />}
-      <div><strong>{agreed ? 'Detectado por 2 modelos' : comparison.label}</strong><p>El acuerdo entre modelos no equivale a certeza. El dictamen humano se aplica al flag común.</p></div>
+      <div><strong>{agreed ? comparison.sourceChanged ? 'Coincidencia histórica de ambos modelos' : 'Detectado por 2 modelos' : comparison.label}</strong><p>{comparison.sourceChanged ? 'Respuestas originales guardadas. Las fechas y evidencias corresponden a esa evaluación.' : 'El acuerdo entre modelos no equivale a certeza. El dictamen humano se aplica al flag común.'}</p></div>
     </div>
     {comparison.contingencyLabel && <p className="flag-contingency"><strong>{comparison.contingencyLabel}</strong></p>}
     <div className="flag-model-columns">{comparison.cells.map(cell => {

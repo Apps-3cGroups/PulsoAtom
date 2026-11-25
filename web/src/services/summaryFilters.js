@@ -1,5 +1,5 @@
 import { compactMarks } from './summaryMap.js';
-import { evaluationStatus, hasChangedEvaluation } from './flags.js';
+import { evaluationStatus, hasChangedEvaluation, displayedMarks, classificationOf } from './flags.js';
 
 export const figureKinds = ['critical', 'normal', 'positive', 'refuted', 'human'];
 export function selectedCountries(params, countries) {
@@ -33,15 +33,21 @@ export function filterSummaryConversations(conversations, visible, { includePend
 }
 export function summaryMetrics(conversations) {
   const evaluated = conversations.filter(c => c.evaluated).length;
-  // Execution completion does not make an old result a negative finding on
-  // changed messages. Keep those rows visible, outside the flag-rate sample.
+  // Count the original saved findings only when historical visibility was verified by the API.
   const currentResults = conversations.filter(c => c.evaluated && evaluationStatus(c) === 'evaluated' && !hasChangedEvaluation(c));
+  const savedResults = conversations.filter(c => c.evaluated && evaluationStatus(c) === 'evaluated'
+    && (!hasChangedEvaluation(c) || c.historicalFlagsAvailable === true));
+  const savedAlertCases = savedResults.filter(c => displayedMarks(c).some(m => m.kind !== 'refuted'
+    && (m.effective || m.historical) && ['critical', 'normal'].includes(classificationOf(m)))).length;
+  const savedPositiveCases = savedResults.filter(c => displayedMarks(c).some(m => m.kind !== 'refuted'
+    && (m.effective || m.historical) && classificationOf(m) === 'positive')).length;
+  const recoveredFlags = conversations.reduce((n, c) => n + displayedMarks(c).filter(m => m.historical).length, 0);
   const sourceChanged = conversations.filter(hasChangedEvaluation).length;
   const withAlerts = currentResults.filter(c => c.p1 || c.p2).length;
   const originalAlerts = currentResults.reduce((n, c) => n + (c.originalAlerts || 0), 0);
   const refuted = currentResults.reduce((n, c) => n + (c.refuted || 0), 0);
   return { total: conversations.length, evaluated, pending: conversations.length - evaluated, withAlerts,
-    currentResults: currentResults.length, sourceChanged,
+    currentResults: currentResults.length, sourceChanged, savedResults: savedResults.length, savedAlertCases, savedPositiveCases, recoveredFlags,
     alertPercent: currentResults.length ? Math.round(withAlerts / currentResults.length * 100) : null, originalAlerts, refuted,
     refutedPercent: originalAlerts ? Math.round(refuted / originalAlerts * 100) : null,
     withPositives: currentResults.filter(c => c.positive > 0).length,

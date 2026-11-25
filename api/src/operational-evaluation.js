@@ -33,6 +33,8 @@ const consensusByEvaluation = new WeakMap();
 export const operationalConsensus = (evaluation, variableId) => evaluation && consensusByEvaluation.get(evaluation)?.get(variableId);
 const completeLocalPairs = new WeakSet();
 export const hasCompleteLocalModelPair = evaluation => !!evaluation && completeLocalPairs.has(evaluation);
+const verifiedHistoricalPairs = new WeakSet();
+export const hasVerifiedHistoricalModelPair = evaluation => !!evaluation && verifiedHistoricalPairs.has(evaluation);
 
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const cohortContextMatches = (a, b) => a && b && ['sourceHash', 'catalogHash', 'promptHash', 'promptVersion', 'rulesVersion'].every(key => a[key] && a[key] === b[key]);
@@ -173,6 +175,12 @@ export function operationalEvaluation(state, anchor) {
     const modelReviews = [modelReview(state, anchor, { profile, task, evaluation: anchor })];
     return { ...anchor, modelReviews, modelReviewPending: modelReviews.some(review => ['pending', 'running'].includes(review.status)) };
   }
+  const completePair = completeLocalPair(evaluations, anchor);
+  const verifiedHistoricalPair = completePair && evaluations.every(({ profile, task, evaluation }) =>
+    exactEvaluationProfile(evaluation, profile) && sameProfile(task.profile, profile)
+    && unique(state.evaluations.filter(candidate => candidate.id === evaluation.id)) === evaluation
+    && unique(state.tasks.filter(candidate => candidate.jobId === task.jobId
+      && candidate.conversationId === anchor.conversationId && candidate.profile?.id === profile.id)) === task);
   const ids = [...new Set(evaluations.flatMap(({ evaluation }) => (evaluation?.results || []).map(r => r.variableId)))];
   const consensus = new Map();
   const results = ids.map(variableId => {
@@ -195,6 +203,7 @@ export function operationalEvaluation(state, anchor) {
           && typeof evaluation?.model === 'string' && !!evaluation.model.trim(),
         status: evaluation?.results.find(r => r.variableId === variableId)?.error ? 'failed' : evaluation?.results.some(r => r.variableId === variableId) ? 'completed' : task?.status || 'pending', error: publicError(evaluation?.results.find(r => r.variableId === variableId)?.error || (!evaluation ? task?.error || null : null)),
         result: publicResult(evaluation?.results.find(r => r.variableId === variableId)) || null,
+        evaluationId: evaluation?.id || null, sourceHash: evaluation?.sourceHash || null,
         createdAt: evaluation?.createdAt || null,
       };
     });
@@ -210,7 +219,11 @@ export function operationalEvaluation(state, anchor) {
     const imposed = cells.some(c => c.result?.codeRule);
     const agreement = imposed ? 'rule' : votes.length === 2 && detections === 2 ? 'agree-positive'
       : votes.length === 2 && detections === 0 ? 'agree-negative' : votes.length === 2 ? 'disagree' : 'incomplete';
-    consensus.set(variableId, { detected: !sourceChanged && agreement === 'agree-positive', pending: agreement === 'incomplete', agreement });
+    // Historical agreement is a read-only presentation of these same verified
+    // saved answers. It never certifies the current source or enables reviews.
+    consensus.set(variableId, { detected: !sourceChanged && agreement === 'agree-positive',
+      historicalDetected: sourceChanged && verifiedHistoricalPair && agreement === 'agree-positive',
+      pending: agreement === 'incomplete', agreement });
     const label = ({ rule: 'Resultado con regla de código · sin consenso independiente', 'agree-positive': 'Detectado por 2 modelos',
       'agree-negative': 'Ningún modelo detecta el evento', disagree: 'Discrepancia · requiere revisión',
       incomplete: `${detections} detección${detections === 1 ? '' : 'es'} · comparación incompleta` })[agreement];
@@ -227,6 +240,7 @@ export function operationalEvaluation(state, anchor) {
   const modelReviews = evaluations.map(participant => modelReview(state, anchor, participant));
   const operational = { ...anchor, dual: true, results, modelReviews, modelReviewPending: modelReviews.some(review => ['pending', 'running'].includes(review.status)) };
   consensusByEvaluation.set(operational, consensus);
-  if (completeLocalPair(evaluations, anchor) && modelReviews.every(review => review.status === 'completed' && !review.errorCount)) completeLocalPairs.add(operational);
+  if (completePair && modelReviews.every(review => review.status === 'completed' && !review.errorCount)) completeLocalPairs.add(operational);
+  if (verifiedHistoricalPair && completeLocalPairs.has(operational)) verifiedHistoricalPairs.add(operational);
   return operational;
 }
