@@ -112,6 +112,7 @@ test('restored historical flags are visible in the default period and counted as
   await render();
   assert.equal(document.querySelectorAll('.conversation-cell').length, 3);
   assert.equal(document.querySelectorAll('.source-changed-cell').length, 2);
+  assert.equal(document.querySelectorAll('.summary-page .anticon-clock-circle').length, 0);
   assert.equal(document.querySelectorAll('.source-changed-cell .mark-critical').length, 1);
   assert.match(document.querySelector('.summary-source-note').textContent, /sin ejecutar nuevas evaluaciones/);
   assert.match(document.querySelector('.summary-total-flags').textContent, /66\.7%/);

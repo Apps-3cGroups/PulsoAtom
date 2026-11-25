@@ -267,7 +267,7 @@ jobs:
             pm2 save >/dev/null
 
             echo "Waiting for API startup and its initialization transaction"
-            curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 90 --retry-connrefused --max-time 15 http://127.0.0.1:4001/pulsoAtom/api/health
+            curl --fail --silent --show-error --retry 90 --retry-delay 2 --retry-max-time 200 --retry-connrefused --max-time 15 http://127.0.0.1:4001/pulsoAtom/api/health
             printf '\n'
 
             echo "Applying online navigation indexes after API startup"

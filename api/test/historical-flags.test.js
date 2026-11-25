@@ -7,6 +7,8 @@ import { operationalEvaluation, operationalConsensus } from '../src/operational-
 import { conversationView, recordReview, summarize, viewContext } from '../src/domain.js';
 import { enableNavigationSummaryCache } from '../src/navigation-cache.js';
 import { dualizeEvaluation } from './fixtures/dual-state.js';
+import { navigationSummaryProjection, decodeNavigationSummary } from '../src/navigation-projection.js';
+import { jsonRemoveProjection } from './fixtures/navigation-projection.js';
 
 const FLAG = 'cliente_amenazo_cancelar_pedido';
 const POSITIVE = 'cliente_felicito_al_asistente';
@@ -161,4 +163,19 @@ test('navigation cache invalidates historical presentation when source or saved 
   f.secondTask.status = 'pending';
   assert.deepEqual(summary().historicalMarks, []);
   assert.ok(f.state.evaluations.every(e => !Object.hasOwn(e, 'historicalMarks')));
+});
+
+test('summary projection preserves current and historical flags, statuses, counts and exact provenance', () => {
+  for (const changed of [false, true]) {
+    const f = fixture({ changed });
+    for (const evaluation of f.state.evaluations) evaluation.promptSnapshot = { text: 'Frozen instructions', hash: evaluation.modelPromptHash };
+    for (const task of f.state.tasks) { task.profileStates = { retained: { results: f.first.results } }; task.codeResults = []; }
+    f.job.runtimeConfiguration = { 'clef-local': { promptText: 'Frozen runtime' } };
+    for (const profile of Object.values(f.job.promptSnapshot.profiles)) Object.assign(profile, { text: 'Frozen text', itemPrompts: { flag: 'Frozen item prompt' }, promptText: 'Configured' });
+    const projected = structuredClone(f.state);
+    for (const key of ['evaluations', 'tasks', 'jobs']) projected[key] = projected[key].map(row => decodeNavigationSummary(key, jsonRemoveProjection(row, navigationSummaryProjection(key))));
+    assert.deepEqual(conversationView(projected, projected.conversations[0]), conversationView(f.state, f.conversation));
+    assert.ok(f.first.results.some(result => result.evidence?.length));
+    assert.ok(projected.evaluations.every(evaluation => evaluation.results.every(result => !result.evidence && !result.reason)));
+  }
 });

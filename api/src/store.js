@@ -6,6 +6,7 @@ import { missingDatabase, databaseError } from './errors.js';
 import { copySourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { migrateCatalogV5 } from './catalog-v5.js';
 import { enableNavigationSummaryCache } from './navigation-cache.js';
+import { navigationSummaryProjection, decodeNavigationSummary } from './navigation-projection.js';
 import { requireReviewSelection, applyReviewSelection } from './review-selection.js';
 
 export class DemoStore {
@@ -221,7 +222,7 @@ export class MysqlStore {
     ]);
     return { jobs: jobs[0].map(row => decode(row.payload)), modelPolicies: policies[0].map(row => decode(row.payload)), ...Object.fromEntries(settings[0].map(row => [row.id, decode(row.payload)])) };
   }
-  async readNavigation(conversationIds = []) {
+  async readNavigation(conversationIds = [], { summaryOnly = false } = {}) {
     // During an online rollout an index may still be waiting for a source transaction.
     // The JSON predicate is equivalent and keeps navigation available until it exists.
     if (!this.navigationColumns || Date.now() - this.navigationColumnsAt > 60000) {
@@ -241,26 +242,33 @@ export class MysqlStore {
         for (let offset = 0; offset < ids.length; offset += 10000) {
           const batch = ids.slice(offset, offset + 10000);
           const predicate = column === 'conversation_key' && !this.navigationColumns.has(tables[key]) ? "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.conversationId'))" : column;
-          const projection = key === 'tasks' ? "JSON_REMOVE(payload, '$.codeResults')" : 'payload';
+          const projection = summaryOnly ? navigationSummaryProjection(key)
+            : key === 'tasks' ? "JSON_REMOVE(payload, '$.codeResults')" : 'payload';
           const cacheable = ['evaluations', 'tasks', 'comparisons', 'jobs'].includes(key);
           const fields = cacheable ? 'id, sequence_id, SHA2(CAST(payload AS CHAR), 256) AS revision' : 'sequence_id, payload';
           const [rows] = await connection.query(`SELECT ${fields} FROM ${tables[key]} WHERE ${predicate} IN (${batch.map(() => '?').join(',')}) ORDER BY sequence_id`, batch);
           if (cacheable) {
             this.navigationCache ||= new Map(); this.navigationCacheBytes ||= 0;
-            const cacheKey = row => `${key}:${row.id}:${row.revision}`;
+            // A summary cache entry must never satisfy a later full detail read.
+            const cacheKey = row => `${summaryOnly ? 'summary' : 'full'}:${key}:${row.id}:${row.revision}`;
             const values = new Map(rows.flatMap(row => this.navigationCache.has(cacheKey(row)) ? [[row.id, this.navigationCache.get(cacheKey(row)).value]] : []));
             const missing = rows.filter(row => !values.has(row.id));
             if (missing.length) {
               // Same repeatable-read snapshot as the revision query, including updates
               // to existing task/evaluation IDs. Never trust age or sequence alone.
-              const [fresh] = await connection.query(`SELECT id, ${projection} AS payload FROM ${tables[key]} WHERE id IN (${missing.map(() => '?').join(',')})`, missing.map(row => row.id));
               const revisions = new Map(missing.map(row => [row.id, row]));
-              for (const row of fresh) {
-                const value = decode(row.payload), bytes = Buffer.byteLength(JSON.stringify(value));
-                this.navigationRevisions ||= new WeakMap(); this.navigationRevisions.set(value, revisions.get(row.id).revision);
-                values.set(row.id, value);
-                const id = cacheKey(revisions.get(row.id));
-                if (!this.navigationCache.has(id)) { this.navigationCache.set(id, { value, bytes }); this.navigationCacheBytes += bytes; }
+              const payloadBatchSize = summaryOnly ? 250 : missing.length;
+              for (let start = 0; start < missing.length; start += payloadBatchSize) {
+                const selected = missing.slice(start, start + payloadBatchSize);
+                const [fresh] = await connection.query(`SELECT id, ${projection} AS payload FROM ${tables[key]} WHERE id IN (${selected.map(() => '?').join(',')})`, selected.map(row => row.id));
+                for (const row of fresh) {
+                  const value = summaryOnly ? decodeNavigationSummary(key, decode(row.payload)) : decode(row.payload);
+                  const bytes = Buffer.byteLength(JSON.stringify(value));
+                  this.navigationRevisions ||= new WeakMap(); this.navigationRevisions.set(value, revisions.get(row.id).revision);
+                  values.set(row.id, value);
+                  const id = cacheKey(revisions.get(row.id));
+                  if (!this.navigationCache.has(id)) { this.navigationCache.set(id, { value, bytes }); this.navigationCacheBytes += bytes; }
+                }
               }
               while (this.navigationCacheBytes > 128 * 1024 * 1024) {
                 const first = this.navigationCache.keys().next().value;
@@ -395,12 +403,12 @@ export class AtomHistoryStore {
     // Keep the selected metadata and its members from the same initial read.
     return applyReviewSelection(this.attach({ ...state, reviewSelection: selection }, source), id);
   }
-  async readForNavigation(query, { activeOnly = false, now = new Date() } = {}) {
+  async readForNavigation(query, { activeOnly = false, summaryOnly = false, now = new Date() } = {}) {
     if (query.reviewSelection) return this.readReviewSelection(query.reviewSelection);
     if (!this.base.readNavigation || !this.reader.readOverview) return this.readWithConversations();
     const scheduling = activeOnly ? await this.readSchedulerState() : null;
     const source = await this.reader.readOverview(query, { activeOnly, settings: scheduling?.settings, now });
-    const state = await this.base.readNavigation(source.conversations.map(c => c.id));
+    const state = await this.base.readNavigation(source.conversations.map(c => c.id), { summaryOnly: summaryOnly && !query.modelProfileId });
     const evaluatedIds = new Set(state.evaluations.map(e => e.conversationId));
     source.conversations = await this.reader.hydrateOverview(source.conversations, evaluatedIds);
     if (activeOnly) state.jobs = [...new Map([...state.jobs, ...scheduling.jobs].map(j => [j.id, j])).values()];

@@ -5,7 +5,7 @@ import { selectedCountries, selectedFigures, figureKinds, cleanOverviewParams, f
 import { useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Checkbox, ConfigProvider, Tooltip } from 'antd';
-import { AppstoreOutlined, CalendarOutlined, ClockCircleOutlined, InfoCircleOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, CalendarOutlined, InfoCircleOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { useApi, usePortal } from '../hooks';
 import { queryString } from '../services/api';
 import { LoadingState, ErrorState, EmptyState, Mark, dateText } from '../components/common';
@@ -98,7 +98,7 @@ export default function Summary() {
         <Button type="text" size="small" aria-label="Actualizar resumen" title="Actualizar resumen" icon={<ReloadOutlined />} loading={loading} onClick={reload} />
       </div>
     </div>
-    {metrics?.sourceChanged > 0 && <div className="summary-source-note" role="status"><ClockCircleOutlined aria-hidden="true" /><span><strong>{metrics.sourceChanged} resultados históricos con datos actualizados.</strong> Se muestran los flags originales guardados, sin ejecutar nuevas evaluaciones. Las respuestas y fechas de cada modelo se conservan en el detalle.</span></div>}
+    {metrics?.sourceChanged > 0 && <div className="summary-source-note" role="status"><span><strong>{metrics.sourceChanged} resultados históricos con datos actualizados.</strong> Se muestran los flags originales guardados, sin ejecutar nuevas evaluaciones. Las respuestas y fechas de cada modelo se conservan en el detalle.</span></div>}
     <ConfigProvider theme={{
       // Keep filter options above map tooltips so overlapping hints cannot intercept clicks.
       components: { Select: { zIndexPopup: 1100 } },
@@ -116,7 +116,7 @@ export default function Summary() {
           const sourceChanged = hasChangedEvaluation(c);
           const agreed = (sourceChanged ? historicalDualMarks(c) : dualMarks(c)).filter(m => classification === 'all' || classificationOf(m) === classification);
           const status = evaluationStatus(c), pending = status !== 'evaluated';
-          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {conversationClock(c).dateTime(c.activityAt || c.displayAt)} · {c.channel}</span><span>{conversationClock(c).label}</span>{selection && <span>Día de selección: {dateText(c.displayDate)}</span>}{c.sourceChanged && <strong>La fuente se actualizó desde la evaluación guardada.</strong>}<strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? `${sourceChanged ? 'Marcas históricas: ' : ''}${marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ')}` : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>{sourceChanged ? 'Coincidencia histórica de ambos modelos' : 'Detectado por ambos modelos'}: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} ${sourceChanged ? 'source-changed-cell' : ''} status-${status} ${agreed.length && !sourceChanged ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{sourceChanged && <ClockCircleOutlined className="source-changed-symbol" aria-hidden="true" />}{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
+          return <Tooltip key={c.id} title={<div className="conversation-tooltip"><b>{c.client.name}{c.client.phoneLast4 ? ` · …${c.client.phoneLast4}` : ''}</b><span>Última actividad: {conversationClock(c).dateTime(c.activityAt || c.displayAt)} · {c.channel}</span><span>{conversationClock(c).label}</span>{selection && <span>Día de selección: {dateText(c.displayDate)}</span>}{c.sourceChanged && <strong>La fuente se actualizó desde la evaluación guardada.</strong>}<strong>{evaluationStatusLabel(c)}</strong><span>{marks.length ? `${sourceChanged ? 'Marcas históricas: ' : ''}${marks.map(m => `${m.name}${m.kind === 'refuted' ? ' (refutado)' : ''}`).join(' · ')}` : c.evaluated ? noVisibleFlagsLabel(c) : 'Todavía no tiene resultados guardados'}</span>{c.unavailableFlags > 0 && <span>{c.unavailableFlags} variables sin datos o contexto suficientes</span>}{agreed.length > 0 && <strong>{sourceChanged ? 'Coincidencia histórica de ambos modelos' : 'Detectado por ambos modelos'}: {agreed.map(m => m.name).join(' · ')}</strong>}</div>}><button className={`conversation-cell ${pending ? 'pending-cell' : ''} ${sourceChanged ? 'source-changed-cell' : ''} status-${status} ${agreed.length && !sourceChanged ? 'has-dual-detection' : ''}`} aria-label={`Abrir conversación de ${c.client.name}, ${agent.name}, ${day}, ${evaluationStatusLabel(c)}`} onClick={() => open(c)}>{kinds.map(kind => <Mark key={kind} kind={kind} small />)}</button></Tooltip>;
         })}</div>)}</div></div>)}</section>;
       })}</div></div>}</section></ConfigProvider>
   </div>;
