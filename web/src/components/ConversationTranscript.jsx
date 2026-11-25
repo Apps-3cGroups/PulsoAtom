@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { Button, Checkbox, Popover, Tooltip } from 'antd';
 import Select from './Select';
 import { ArrowLeftOutlined, ArrowRightOutlined, CloseOutlined, FlagOutlined } from '@ant-design/icons';
-import { classificationOf, flagLabel } from '../services/flags';
+import { classificationOf, flagLabel, noVisibleFlagsLabel, hasChangedEvaluation } from '../services/flags';
 import { filterMessageRows, groupFlagOptions } from '../services/messageFlags';
 import { EmptyState, FlagSymbol } from './common';
 
@@ -151,7 +151,7 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
       <aside className="message-flags-sidebar" aria-label="Flags de la conversación">
         <header className="message-flags-sidebar-heading"><h3>Flags de la conversación</h3><span>{index.markedVariables.length}</span></header>
         <p className="message-flags-sidebar-hint">{conversation.sourceChanged || conversation.evaluation?.sourceChanged ? 'Flags de la evaluación guardada. Abre su revisión para consultar las respuestas originales de ambos modelos.' : 'Selecciona un flag para resaltar sus mensajes. Abre su revisión para ver la evidencia de cada modelo.'}</p>
-        {!sidebarGroups.length ? <EmptyState title={conversation.sourceChanged ? "Sin flags con coincidencia guardada" : "Sin marcas publicadas"} description={conversation.sourceChanged ? "Puedes consultar los resultados individuales en Modelos y en el checklist." : "Puedes leer la conversación y añadir un flag humano cuando corresponda."} />
+        {!sidebarGroups.length ? <EmptyState title={hasChangedEvaluation(conversation) ? noVisibleFlagsLabel(conversation) : "Sin marcas publicadas"} description={hasChangedEvaluation(conversation) ? "Puedes consultar los resultados individuales en Modelos y en el checklist." : "Puedes leer la conversación y añadir un flag humano cuando corresponda."} />
           : sidebarGroups.map(group => <section className={`message-flag-group message-flag-group-${group.classification}`} key={group.classification} aria-label={group.label}>
             <h4>{group.label}<span>{group.variables.length}</span></h4>
             {group.variables.map(variable => <MarkCard key={variable.id} variable={variable} messageCount={flagMessageIds.get(String(variable.id))?.length || 0}
