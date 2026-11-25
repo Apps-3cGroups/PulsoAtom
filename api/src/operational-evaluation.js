@@ -52,6 +52,12 @@ const unique = values => values.length === 1 ? values[0] : null;
 const uniqueResults = evaluation => Array.isArray(evaluation.results)
   && evaluation.results.every(r => r && typeof r.variableId === 'string')
   && new Set(evaluation.results.map(r => r.variableId)).size === evaluation.results.length;
+const rowsById = (state, collection, id, index) => index ? index[collection].get(id) || []
+  : (state[collection] || []).filter(row => row.id === id);
+const tasksFor = (state, jobId, conversationId, index) => index ? index.tasksByJobConversation.get(jobId)?.get(conversationId) || []
+  : state.tasks.filter(task => task.jobId === jobId && task.conversationId === conversationId);
+const catalogVersion = (state, id, version, index) => index ? index.catalogVersions.get(id)?.get(version)?.[0]
+  : state.catalogVersions?.find(item => item.itemId === id && item.version === version);
 
 // Completion belongs to the validated current pair, including explicit cohort
 // complements. A saved label, a positive vote or a valid abstention alone cannot
@@ -76,22 +82,23 @@ function completeLocalPair(participants, anchor) {
 // This is an explicit additive link, not "latest result from any comparison".
 // Only the frozen complement of the selected operational Gemma job can supply
 // the second opinion. Stored answers and the anchor ID remain untouched.
-function cohortPair(state, anchor, originalJob) {
+function cohortPair(state, anchor, originalJob, index) {
   if (originalJob?.purpose !== 'operational' || originalJob.mode !== 'single' || !originalJob.maintenanceId
     || anchor.purpose !== 'operational' || anchor.profileId !== 'gemma-local' || !uniqueResults(anchor)
     || originalJob.modelProfiles?.length !== 1 || !originalJob.conversationIds?.includes(anchor.conversationId)
-    || state.jobs.filter(j => j.id === originalJob.id).length !== 1
-    || state.evaluations.filter(e => e.id === anchor.id).length !== 1) return null;
-  const originalTask = unique(state.tasks.filter(t => t.id === anchor.taskId));
+    || rowsById(state, 'jobs', originalJob.id, index).length !== 1
+    || rowsById(state, 'evaluations', anchor.id, index).length !== 1) return null;
+  const originalTask = unique(rowsById(state, 'tasks', anchor.taskId, index));
   const originalProfile = originalJob.modelProfiles[0];
   if (!originalTask || originalTask.jobId !== originalJob.id || originalTask.conversationId !== anchor.conversationId
     || originalTask.evaluationId !== anchor.id || !['completed', 'partial'].includes(originalTask.status)
     || !sameProfile(originalTask.profile, originalProfile) || !exactEvaluationProfile(anchor, originalProfile)
     || !cohortContextMatches(originalTask.context, anchor) || !sameCatalog(originalJob.catalogVersions, anchor.catalogVersions)) return null;
-  const source = unique((state.conversations || []).filter(c => c.id === anchor.conversationId));
+  const source = unique(rowsById(state, 'conversations', anchor.conversationId, index));
   const sourceChanged = !source || sourceFingerprint(source) !== anchor.sourceHash;
   const cohortId = `clef-complement-${originalJob.maintenanceId}`;
-  const job = unique(state.jobs.filter(j => j.cohortId === cohortId && j.conversationIds?.includes(anchor.conversationId)));
+  const job = unique((index ? index.cohorts.get(cohortId) || [] : state.jobs)
+    .filter(j => j.cohortId === cohortId && j.conversationIds?.includes(anchor.conversationId)));
   if (!job || job.purpose !== 'comparison' || job.mode !== 'single' || job.maintenanceId !== originalJob.maintenanceId
     || !hash(job.cohortManifestHash) || job.modelProfiles?.length !== 2
     || !job.modelProfiles.every(p => p && ['gemma-local', 'clef-local'].includes(p.id) && hash(p.configurationHash)
@@ -99,12 +106,12 @@ function cohortPair(state, anchor, originalJob) {
       && (!p.protocol || p.protocol === 'chat'))
     || new Set(job.modelProfiles.map(p => p.id)).size !== 2 || new Set(job.modelProfiles.map(p => `${p.provider}:${p.model}`)).size !== 2
     || !sameCatalog(job.catalogVersions, anchor.catalogVersions)) return null;
-  const sample = unique((state.comparisons || []).filter(s => s.jobId === job.id));
+  const sample = unique(index ? index.comparisons.get(job.id) || [] : (state.comparisons || []).filter(s => s.jobId === job.id));
   const sampleCase = sample && unique((sample.cases || []).filter(c => c.conversationId === anchor.conversationId));
   if (!sample || sample.id !== job.id || sample.cohortId !== cohortId || sample.modelProfiles?.length !== 2
     || !job.modelProfiles.every(p => sameProfile(p, unique(sample.modelProfiles.filter(s => s?.id === p.id))))
     || !sameCatalog(sample.catalogVersions, anchor.catalogVersions) || !cohortContextMatches(sampleCase, anchor)) return null;
-  const tasks = state.tasks.filter(t => t.jobId === job.id && t.conversationId === anchor.conversationId);
+  const tasks = tasksFor(state, job.id, anchor.conversationId, index);
   if (tasks.some(t => !job.modelProfiles.some(p => p.id === t.profile?.id))) return null;
   const gemmaProfile = job.modelProfiles.find(p => p.id === 'gemma-local');
   const gemmaTask = unique(tasks.filter(t => t.profile?.id === 'gemma-local'));
@@ -121,7 +128,7 @@ function cohortPair(state, anchor, originalJob) {
     || !['pending', 'running', 'completed', 'partial', 'failed'].includes(clefTask.status))) return null;
   let clefEvaluation = null;
   if (clefTask?.evaluationId) {
-    clefEvaluation = unique(state.evaluations.filter(e => e.id === clefTask.evaluationId));
+    clefEvaluation = unique(rowsById(state, 'evaluations', clefTask.evaluationId, index));
     if (!clefEvaluation || clefEvaluation.purpose !== 'comparison' || clefEvaluation.jobId !== job.id
       || clefEvaluation.taskId !== clefTask.id || clefEvaluation.conversationId !== anchor.conversationId
       || !uniqueResults(clefEvaluation) || !exactEvaluationProfile(clefEvaluation, clefProfile) || !cohortContextMatches(clefEvaluation, anchor)
@@ -135,9 +142,9 @@ const publicError = error => error ? { code: /^[A-Z][A-Z0-9_]{0,79}$/.test(error
   message: 'No se obtuvo una respuesta válida del modelo para esta revisión.' } : null;
 const publicResult = result => result?.error ? { ...result, error: publicError(result.error) } : result;
 
-function modelReview(state, anchor, { profile, task, evaluation, provenance = 'operational' }) {
+function modelReview(state, anchor, { profile, task, evaluation, provenance = 'operational' }, index) {
   const refs = (anchor.catalogVersions || []).filter(ref => ref.active && ['IA', 'IA + código'].includes(
-    state.catalogVersions?.find(v => v.itemId === ref.id && v.version === ref.version)?.snapshot?.method));
+    catalogVersion(state, ref.id, ref.version, index)?.snapshot?.method));
   const results = refs.flatMap(ref => evaluation?.results?.filter(r => r.variableId === ref.id) || []);
   const evaluatedCount = results.filter(r => r.status === 'evaluado' && !r.error).length;
   const abstainedCount = results.filter(r => r.status === 'no_evaluado' && !r.error).length;
@@ -152,34 +159,35 @@ function modelReview(state, anchor, { profile, task, evaluation, provenance = 'o
     createdAt: evaluation?.createdAt || null, purpose: evaluation?.purpose || (provenance === 'cohort-complement' ? 'comparison' : 'operational'), provenance };
 }
 
-export function operationalEvaluation(state, anchor) {
+export function operationalEvaluation(state, anchor, index) {
   if (!anchor) return anchor;
-  const job = state.jobs.find(j => j.id === anchor.jobId);
+  if (index?.state !== state) index = undefined;
+  const job = index ? index.jobs.get(anchor.jobId)?.[0] : state.jobs.find(j => j.id === anchor.jobId);
   const dual = job?.mode === 'dual' && job.purpose === 'operational' && job.modelProfiles?.length === 2 && new Set(job.modelProfiles.map(p => p.id)).size === 2;
-  const tasks = state.tasks.filter(t => t.jobId === job?.id && t.conversationId === anchor.conversationId);
-  const cohort = dual ? null : cohortPair(state, anchor, job);
-  const source = dual && state.conversations?.find(c => c.id === anchor.conversationId);
+  const tasks = tasksFor(state, job?.id, anchor.conversationId, index);
+  const cohort = dual ? null : cohortPair(state, anchor, job, index);
+  const source = dual && (index ? index.conversations.get(anchor.conversationId)?.[0] : state.conversations?.find(c => c.id === anchor.conversationId));
   const sourceChanged = !!cohort?.sourceChanged || !!(source && anchor.sourceHash && sourceFingerprint(source) !== anchor.sourceHash);
   const evaluations = dual ? job.modelProfiles.map(profile => {
     const task = tasks.find(t => t.profile.id === profile.id);
-    const evaluation = state.evaluations.find(e => e.id === task?.evaluationId && e.jobId === job.id
+    const evaluation = (index ? index.evaluations.get(task?.evaluationId) || [] : state.evaluations).find(e => e.id === task?.evaluationId && e.jobId === job.id
       && e.taskId === task?.id && e.profileId === profile.id
       && evaluationMatchesPrompt(e, task, job)
       && equivalent(e, anchor) && evaluationMatchesProfile(e, profile));
     return { profile, task, evaluation };
   }) : cohort?.participants;
   if (!evaluations) {
-    const task = state.tasks.find(t => t.id === anchor.taskId);
+    const task = index ? index.tasks.get(anchor.taskId)?.[0] : state.tasks.find(t => t.id === anchor.taskId);
     const profile = job?.modelProfiles?.find(p => p.id === anchor.profileId) || anchor.modelConfiguration
       || { id: anchor.profileId || 'historical', label: anchor.profileLabel, model: anchor.model, provider: anchor.provider };
-    const modelReviews = [modelReview(state, anchor, { profile, task, evaluation: anchor })];
+    const modelReviews = [modelReview(state, anchor, { profile, task, evaluation: anchor }, index)];
     return { ...anchor, modelReviews, modelReviewPending: modelReviews.some(review => ['pending', 'running'].includes(review.status)) };
   }
   const completePair = completeLocalPair(evaluations, anchor);
   const verifiedHistoricalPair = completePair && evaluations.every(({ profile, task, evaluation }) =>
     exactEvaluationProfile(evaluation, profile) && sameProfile(task.profile, profile)
-    && unique(state.evaluations.filter(candidate => candidate.id === evaluation.id)) === evaluation
-    && unique(state.tasks.filter(candidate => candidate.jobId === task.jobId
+    && unique(rowsById(state, 'evaluations', evaluation.id, index)) === evaluation
+    && unique(tasksFor(state, task.jobId, anchor.conversationId, index).filter(candidate => candidate.jobId === task.jobId
       && candidate.conversationId === anchor.conversationId && candidate.profile?.id === profile.id)) === task);
   const ids = [...new Set(evaluations.flatMap(({ evaluation }) => (evaluation?.results || []).map(r => r.variableId)))];
   const consensus = new Map();
@@ -187,7 +195,7 @@ export function operationalEvaluation(state, anchor) {
     const available = evaluations.flatMap(({ evaluation }) => evaluation?.results.filter(r => r.variableId === variableId) || []).map(publicResult);
     const first = available[0];
     const ref = anchor.catalogVersions?.find(v => v.id === variableId);
-    const definition = state.catalogVersions?.find(v => v.itemId === variableId && v.version === ref?.version)?.snapshot;
+    const definition = catalogVersion(state, variableId, ref?.version, index)?.snapshot;
     const type = first.type || definition?.type;
     // Numeric metrics and categorical/list descriptors never enter binary voting.
     if (['Métrica', 'Descriptor'].includes(type)) return available.find(r => r.status === 'evaluado' && !r.error) || first;
@@ -237,7 +245,7 @@ export function operationalEvaluation(state, anchor) {
       evidence: positives.length ? evidence : [], comparison: { cells, contingencyLabel, detections, votes: votes.length, expected: 2, missing, agreement, label, commonEvidence,
         ...(sourceChanged ? { sourceChanged: true } : {}) } };
   });
-  const modelReviews = evaluations.map(participant => modelReview(state, anchor, participant));
+  const modelReviews = evaluations.map(participant => modelReview(state, anchor, participant, index));
   const operational = { ...anchor, dual: true, results, modelReviews, modelReviewPending: modelReviews.some(review => ['pending', 'running'].includes(review.status)) };
   consensusByEvaluation.set(operational, consensus);
   if (completePair && modelReviews.every(review => review.status === 'completed' && !review.errorCount)) completeLocalPairs.add(operational);

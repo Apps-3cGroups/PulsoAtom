@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { catalogV5 } from '../src/catalog-v5.js';
 import { catalogReferences, digest, evaluationContext } from '../src/evaluation-context.js';
-import { operationalEvaluation, operationalConsensus } from '../src/operational-evaluation.js';
+import { operationalEvaluation, operationalConsensus, hasCompleteLocalModelPair, hasVerifiedHistoricalModelPair } from '../src/operational-evaluation.js';
+import { operationalReadIndex } from '../src/operational-index.js';
 import { conversationView } from '../src/domain.js';
 import { navigationSummaryProjection, decodeNavigationSummary } from '../src/navigation-projection.js';
 import { jsonRemoveProjection } from './fixtures/navigation-projection.js';
@@ -224,4 +225,32 @@ test('summary projection preserves explicit historical cohort membership and bot
   for (const key of ['evaluations', 'tasks', 'jobs']) projected[key] = projected[key].map(row => decodeNavigationSummary(key, jsonRemoveProjection(row, navigationSummaryProjection(key))));
   assert.deepEqual(conversationView(projected, projected.conversations[0]), conversationView(f.state, f.conversation));
   assert.ok(f.clef.results.some(result => result.evidence?.length));
+});
+
+test('read indexes preserve cohort ambiguity, source, catalog and contract guards without losing duplicates', () => {
+  const mutations = [
+    () => {}, f => { f.conversation.messages[0].text += ' Updated.'; },
+    f => { f.state.conversations.push(structuredClone(f.conversation)); },
+    f => { f.state.jobs.push(structuredClone(f.job)); },
+    f => { f.state.jobs.push(structuredClone(f.originalJob)); },
+    f => { f.state.comparisons.push(structuredClone(f.sample)); },
+    f => { f.state.tasks.push(structuredClone(f.originalTask)); },
+    f => { f.state.tasks.push(structuredClone(f.reused)); },
+    f => { f.state.evaluations.push(structuredClone(f.clef)); },
+    f => { f.state.evaluations.push(structuredClone(f.anchor)); },
+    f => { f.clefTask.context.sourceHash = 'foreign'; },
+    f => { f.sample.catalogVersions[0].version++; },
+    f => { f.clef.modelConfiguration.configurationHash = digest('foreign'); },
+    f => { f.clefTask.status = 'pending'; f.clefTask.evaluationId = null; },
+  ];
+  for (const mutate of mutations) {
+    const f = fixture(); mutate(f);
+    const before = structuredClone(f.state), old = operationalEvaluation(f.state, f.anchor);
+    const indexed = operationalEvaluation(f.state, f.anchor, operationalReadIndex(f.state));
+    assert.deepEqual(indexed, old);
+    assert.equal(hasCompleteLocalModelPair(indexed), hasCompleteLocalModelPair(old));
+    assert.equal(hasVerifiedHistoricalModelPair(indexed), hasVerifiedHistoricalModelPair(old));
+    for (const result of old.results) assert.deepEqual(operationalConsensus(indexed, result.variableId), operationalConsensus(old, result.variableId));
+    assert.deepEqual(f.state, before);
+  }
 });

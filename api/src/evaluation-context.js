@@ -1,4 +1,5 @@
 import { operationalEvaluation } from './operational-evaluation.js';
+import { operationalReadIndex } from './operational-index.js';
 import { createHash } from 'node:crypto';
 import { evaluationInstructions, PROMPT_VERSION, RULES_VERSION } from './evaluator.js';
 
@@ -48,7 +49,11 @@ export function selectedStoredEvaluation(state, conversation, profileId, context
 }
 export function selectedEvaluation(state, conversation, profileId, context) {
   const evaluation = selectedStoredEvaluation(state, conversation, profileId, context);
-  return profileId ? evaluation : operationalEvaluation(state, evaluation);
+  if (profileId || !evaluation) return evaluation;
+  // Explicit read contexts may reuse lookup indexes, never a derived answer.
+  // Stored-anchor exposure and mutable calls without context avoid this path.
+  const index = context && (context.operationalIndex ||= operationalReadIndex(state, context.byId));
+  return operationalEvaluation(state, evaluation, index);
 }
 export function latestVerdict(state, conversationId, sourceHash, variableId, version) {
   if (!sourceHash) return null;
