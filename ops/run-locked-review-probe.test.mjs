@@ -73,6 +73,28 @@ test('persisted production running job blocks all inference and all commits', as
   assert.equal(f.fetchCalls, 0); assert.equal(f.commits.length, 0); assert.deepEqual(f.persisted, before);
 });
 
+test('external scheduler runtime updates during inference do not invalidate frozen comparison inputs', async () => {
+  const f = fixture(), fetch = f.fetchImpl;
+  const result = await runLockedReviewProbe({ ...f, fetchImpl: async (...args) => {
+    f.persisted.settings.automationRuntime = { lastCheckedAt: new Date().toISOString(), checked: f.fetchCalls + 1 };
+    f.persisted.settings.automationAlerts = [{ code: 'scheduler-heartbeat' }];
+    return fetch(...args);
+  } });
+  assert.equal(result.completed, true); assert.equal(f.fetchCalls, 2);
+  assert.equal(f.persisted.settings.automationRuntime.checked, 2);
+  assert.deepEqual(f.persisted.settings.automationAlerts, [{ code: 'scheduler-heartbeat' }]);
+});
+
+test('actual prompt changes during inference still invalidate the comparison configuration', async () => {
+  const f = fixture(), fetch = f.fetchImpl;
+  await assert.rejects(runLockedReviewProbe({ ...f, fetchImpl: async (...args) => {
+    f.persisted.settings.automation.prompts.shared = 'A different evaluation criterion';
+    return fetch(...args);
+  } }), { code: 'REVIEW_CONFIGURATION_CHANGED' });
+  assert.equal(f.fetchCalls, 1);
+  assert.equal(f.persisted.settings.automation.prompts.shared, 'A different evaluation criterion');
+});
+
 test('transaction guard rejects settings or operational-reference mutations without committing', async () => {
   const f = fixture(), store = createLockedProbeStore({ ...f, idempotencyKey: 'test-key' });
   await assert.rejects(store.transaction(state => {

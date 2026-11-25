@@ -13,7 +13,15 @@ import { AppError } from '../api/src/errors.js';
 
 const fail = code => { throw new AppError(409, 'No se pudo completar el diagnóstico con bloqueo global.', code); };
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value;
-const configurationHash = state => digest({ settings: state.settings, catalog: state.catalog });
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+// Scheduler counters/alerts change during a long inference. Freeze only the
+// inputs that affect this comparison; the transaction guard below still rejects
+// any settings mutation made by the probe itself.
+const configurationHash = state => digest(canonical({ catalog: state.catalog,
+  runtime: state.settings.automation ? runtimeConfiguration(state.settings.automation) : null,
+  localModelConfiguration: state.settings.localModelConfiguration ?? null,
+  aiPolicy: state.settings.aiPolicy ?? null }));
 const diagnostic = error => ['EVALUATION_RUNNING', 'REVIEW_FOREIGN_JOB_CHANGED', 'REVIEW_SETTINGS_CHANGED', 'REVIEW_WORKER_SCOPE_CHANGED', 'REVIEW_REUSE_FORBIDDEN'].includes(error?.code)
   ? { code: error.code, message: 'El diagnóstico respetó el bloqueo y los límites de escritura de producción.' } : probeErrorDiagnostic(error);
 
