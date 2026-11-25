@@ -191,6 +191,7 @@ test('changed Atom content retains both historical answers but cannot publish an
   assert.equal(operationalConsensus(result, FLAG).detected, false);
   const detail = conversationView(f.state, f.conversation, undefined, true);
   assert.equal(detail.sourceChanged, true);
+  assert.equal(detail.bothModelsComplete, true);
   assert.equal(detail.marks.length, 0);
 });
 
@@ -201,6 +202,7 @@ test('existing reviews remain linked to the original Gemma evaluation', () => {
   const before = structuredClone(f.state);
   const detail = conversationView(f.state, f.conversation, undefined, true);
   assert.equal(detail.evaluation.id, f.anchor.id);
+  assert.equal(detail.bothModelsComplete, true);
   assert.equal(detail.variables.find(v => v.id === FLAG).kind, 'refuted');
   assert.equal(detail.refuted, 1);
   assert.deepEqual(f.state, before);

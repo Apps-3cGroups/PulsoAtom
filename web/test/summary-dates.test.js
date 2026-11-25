@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../src/services/summaryDates.js';
+import { resolveSummaryRange, summaryDayWindow, summaryRangeError, SUMMARY_PRESETS } from '../src/services/summaryDates.js';
 const now = new Date('2026-11-04T01:00:00Z');
 
 test('real periods end yesterday in Honduras and default to three days regardless of the latest loaded day', () => {
@@ -10,11 +10,22 @@ test('real periods end yesterday in Honduras and default to three days regardles
   assert.equal(resolveSummaryRange({ timezone: 'UTC', now }).to, '2026-11-03');
   assert.equal(resolveSummaryRange({ mode: 'real', latest: '2027-01-01', now }).to, '2026-11-02');
 });
-test('only Ayer, 3 días and 30 días are accepted, including old saved links', () => {
+test('quick periods retain Ayer, 3 días and 30 días and reject unsupported presets', () => {
   assert.deepEqual(SUMMARY_PRESETS, [1, 3, 30]);
   for (const days of SUMMARY_PRESETS) assert.equal(resolveSummaryRange({ days, now }).totalDays, days);
   for (const days of [0, 2, 4, 7, 14, -7, 7.5, 'invalid', 999]) assert.equal(resolveSummaryRange({ days, now }).preset, 3);
-  assert.equal(resolveSummaryRange({ from: '2024-01-01', to: '2025-12-31', now }).totalDays, 3);
+});
+test('explicit dates take precedence over rolling presets and retain all requested days', () => {
+  assert.deepEqual(resolveSummaryRange({ from: '2026-11-10', to: '2026-11-12', days: 30, now }), {
+    from: '2026-11-10', to: '2026-11-12', preset: null, totalDays: 3,
+  });
+  assert.deepEqual(summaryDayWindow(resolveSummaryRange({ from: '2024-02-28', to: '2024-03-01' })).days, ['2024-03-01', '2024-02-29', '2024-02-28']);
+  assert.equal(summaryRangeError('2026-11-01', '2026-12-01'), null);
+  assert.match(summaryRangeError('2026-11-01', '2026-12-02'), /31 días/);
+  for (const range of [{ from: '2026-02-30', to: '2026-03-01' }, { from: '2026-11-10' }, { from: '2026-11-12', to: '2026-11-10' }]) {
+    const result = resolveSummaryRange({ ...range, now });
+    assert.ok(result.error); assert.equal(result.totalDays, 0); assert.equal(result.preset, null);
+  }
 });
 test('demo periods remain deterministic, including leap dates and year boundaries', () => {
   assert.deepEqual(resolveSummaryRange({ mode: 'demo', latest: '2026-01-02', days: 3, now }), {

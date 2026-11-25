@@ -33,6 +33,13 @@
 .summary-page .summary-controls .segmented-range button { font-size: calc(13px * var(--font-scale, 1)); padding: 4px 7px; white-space: nowrap; }
 .summary-page .summary-controls .country-multiselect { width: 180px; min-width: 180px; max-width: 180px; }
 .summary-page .summary-controls .ant-select { font-size: calc(13px * var(--font-scale, 1)); }
+.summary-custom-range { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; flex-basis: 100%; padding-block: 5px; }
+.summary-custom-range label { display: grid; gap: 3px; color: var(--muted); font-size: calc(12px * var(--font-scale, 1)); }
+.summary-custom-range input { width: 155px; }
+.summary-custom-range-note { color: var(--muted); font-size: calc(12px * var(--font-scale, 1)); align-self: center; }
+.summary-custom-range-note[role='alert'] { color: #b42318; }
+.summary-meeting-periods { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; padding-block: 4px; }
+.summary-meeting-periods > span { font-size: calc(12px * var(--font-scale, 1)); color: var(--muted); }
 @media (max-width: 1599px) {
   .summary-page .summary-controls .summary-period { margin-left: 0; }
 }

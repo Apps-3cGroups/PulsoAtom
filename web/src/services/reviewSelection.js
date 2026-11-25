@@ -26,5 +26,19 @@ export function withSummaryPeriod(params, days = 3) {
   ['from', 'to', 'days'].forEach(key => next.delete(key));
   next.set('reviewSelection', 'all');
   next.set('days', String(days));
+  next.delete('meetingPeriod');
+  return next;
+}
+
+export function withSummaryDateRange(params, from, to, { meetingPeriod } = {}) {
+  const next = new URLSearchParams(params);
+  ['days', 'meetingPeriod', 'page'].forEach(key => next.delete(key));
+  next.set('reviewSelection', 'all');
+  next.set('from', from);
+  next.set('to', to);
+  if (meetingPeriod) {
+    ['country', 'countries', 'figures'].forEach(key => next.delete(key));
+    next.set('meetingPeriod', meetingPeriod); next.set('completion', 'both');
+  }
   return next;
 }

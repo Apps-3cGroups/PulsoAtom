@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { figureKinds, filterSummaryConversations, summaryMetrics, selectedCountries, selectedFigures, cleanOverviewParams } from '../src/services/summaryFilters.js';
+import { figureKinds, filterSummaryConversations, summaryMetrics, selectedCountries, selectedFigures, cleanOverviewParams, hasModelCoverage, bothModelsComplete } from '../src/services/summaryFilters.js';
 const mark = (id, kind, extras = {}) => ({ id, kind, classification: kind, effective: true, name: id, ...extras });
 const rows = [
   { id: 'critical', evaluated: true, p1: 1, originalAlerts: 1, marks: [mark('a', 'critical')] },
@@ -33,6 +33,25 @@ test('pending visibility distinguishes missing model reviews from saved partial 
   assert.deepEqual(filterSummaryConversations(conversations, ['critical']).map(c => c.id), ['complete', 'partial']);
   assert.deepEqual(filterSummaryConversations(conversations, ['positive']), []);
   assert.deepEqual(filterSummaryConversations(conversations, []), []);
+});
+test('both-model coverage requires complete Clef and Gemma and keeps clean conversations and valid abstentions', () => {
+  const base = { id: 'complete', evaluated: true, evaluationStatus: 'evaluated', marks: [], bothModelsComplete: true,
+    modelReviews: [{ profileId: 'clef-local', status: 'completed', abstainedCount: 1 }, { profileId: 'gemma-local', status: 'completed', abstainedCount: 1 }] };
+  const cases = [base,
+    { ...base, id: 'server-verified', modelReviews: undefined, bothModelsComplete: true },
+    { ...base, id: 'one-model', bothModelsComplete: false, modelReviews: base.modelReviews.slice(0, 1) },
+    { ...base, id: 'partial', evaluationStatus: 'partial' },
+    { ...base, id: 'pending', bothModelsComplete: false, modelReviews: [base.modelReviews[0], { profileId: 'gemma-local', status: 'running' }] },
+    { ...base, id: 'duplicate', bothModelsComplete: false, modelReviews: [base.modelReviews[0], base.modelReviews[0]] },
+    { ...base, id: 'missing-coverage', bothModelsComplete: undefined, modelReviews: undefined },
+    { ...base, id: 'legacy-status-labels', bothModelsComplete: undefined },
+    { ...base, id: 'server-incomplete', bothModelsComplete: false },
+  ];
+  assert.deepEqual(filterSummaryConversations(cases, figureKinds, { bothComplete: true }).map(item => item.id), ['complete', 'server-verified']);
+  assert.equal(bothModelsComplete({ ...base, evaluationStatus: 'partial', bothModelsComplete: true }), false);
+  assert.equal(hasModelCoverage(cases.find(item => item.id === 'missing-coverage')), false);
+  assert.equal(hasModelCoverage(cases.find(item => item.id === 'legacy-status-labels')), false);
+  assert.equal(hasModelCoverage(cases.find(item => item.id === 'server-incomplete')), true);
 });
 test('legacy hidden filters are removed without losing country, period or exception selection', () => {
   const original = new URLSearchParams('days=30&country=HN&figures=human,refuted&pending=1&variable=old&classification=critical&agreement=both');

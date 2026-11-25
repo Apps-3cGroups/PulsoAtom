@@ -16,9 +16,18 @@ export function cleanOverviewParams(params) {
   ['country', 'variable', 'pending', 'classification', 'agreement'].forEach(key => next.delete(key));
   return next;
 }
-export function filterSummaryConversations(conversations, visible, { includePending = false } = {}) {
+export function hasModelCoverage(conversation) {
+  return typeof conversation.bothModelsComplete === 'boolean';
+}
+export function bothModelsComplete(conversation) {
+  // The API verifies the operational pair, identities and technical errors.
+  // Status labels alone cannot establish that coverage in an older response.
+  return conversation.bothModelsComplete === true && evaluationStatus(conversation) === 'evaluated';
+}
+export function filterSummaryConversations(conversations, visible, { includePending = false, bothComplete = false } = {}) {
   if (!visible.length) return [];
-  const eligible = includePending ? conversations : conversations.filter(c => !['not_evaluated', 'review_pending'].includes(evaluationStatus(c)));
+  const eligible = conversations.filter(c => (!bothComplete || bothModelsComplete(c))
+    && (includePending || !['not_evaluated', 'review_pending'].includes(evaluationStatus(c))));
   if (figureKinds.every(kind => visible.includes(kind))) return eligible;
   return eligible.filter(c => compactMarks([c], { visible, classification: 'all' }).kinds.length > 0);
 }

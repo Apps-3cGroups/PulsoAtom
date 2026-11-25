@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { AppError } from './errors.js';
 import { selectedEvaluation, evaluationSelectionContext, latestVerdict, sourceFingerprint, ensureEvaluationState } from './evaluation-context.js';
 import { classificationOf, catalogAvailability, currentCatalog } from './catalog-presentation.js';
-import { operationalConsensus } from './operational-evaluation.js';
+import { operationalConsensus, hasCompleteLocalModelPair } from './operational-evaluation.js';
 import { navigationSummaryCache } from './navigation-cache.js';
 
 export const catalogFields = z.object({
@@ -115,13 +115,16 @@ export function conversationView(state, conversation, context = viewContext(stat
   const pendingFlags = evaluation ? variables.filter(v => v.enabledInEvaluation && v.classification && v.result.status !== 'evaluado' && !v.review).length : 0;
   const evaluationErrors = variables.filter(v => v.enabledInEvaluation && (v.result.error || v.result.comparison?.cells?.some(cell => cell.error))).length;
   const evaluationStatus = evaluationCompletion(evaluation, variables, !!context.profileId);
+  const bothModelsComplete = context.profileId
+    ? conversationView(state, conversation, context.operationalContext ||= viewContext(state)).bothModelsComplete
+    : evaluationStatus === 'evaluated' && hasCompleteLocalModelPair(evaluation);
   const unavailableFlags = variables.filter(v => evaluation && resultMap.has(v.id) && v.enabledInEvaluation && v.classification && !v.review
     && !v.result.error && !v.result.comparison?.cells?.some(cell => cell.error)
     && (v.result.status === 'no_evaluado' || v.result.comparison?.cells?.some(cell => cell.result?.status === 'no_evaluado'))).length;
   const base = { ...conversationTimezone(conversation, config.countryTimezones), provisional: !!evaluation?.provisional, sourceChanged: !!evaluation?.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), id: conversation.id, country: conversation.country, countryName: conversation.countryName, agent: conversation.agent, client: conversation.client, date: conversation.date, startedAt: conversation.startedAt, endedAt: conversation.endedAt, channel: conversation.channel, topics: conversation.topics, media: conversation.media, demo: conversation.demo, evaluated: !!evaluation, rawModelView: !!context.profileId,
     activityDate: conversation.activityDate || conversation.date, startedDate: conversation.startedDate,
     activityAt: conversation.activityAt, lastActivityAt: conversation.lastActivityAt || null,
-    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
+    p1, p2, critical: p1, normal: p2, positive, dualDetected: marks.some(m => m.dualDetected), pendingFlags, suppressedFlags, consensusPendingFlags, evaluationErrors, evaluationStatus, bothModelsComplete, unavailableFlags, evaluationIncomplete: ['partial', 'review_pending'].includes(evaluationStatus), marks, originalAlerts, refuted: marks.filter(m => m.kind === 'refuted' && m.classification !== 'positive').length, human: marks.filter(m => m.kind === 'human').length };
   return detail ? { ...base, messages: conversation.messages, messageCounts: messageCounts(conversation.messages), sourceUrl: conversation.sourceUrl, evaluation: evaluation ? { id: evaluation.id, dual: !!evaluation.dual, modelReviewPending: evaluationStatus === 'review_pending', modelReviews: evaluation.modelReviews || [], provisional: !!evaluation.provisional, createdAt: evaluation.createdAt, demo: evaluation.demo, profileId: evaluation.profileId, profileLabel: evaluation.profileLabel, model: evaluation.model, provider: evaluation.provider, requestedModel: evaluation.requestedModel, usedFallback: !!evaluation.usedFallback, sourceChanged: !!evaluation.sourceHash && evaluation.sourceHash !== sourceFingerprint(conversation), sourceHash: evaluation.sourceHash, evaluatedCount: evaluation.results.filter(r => r.status === 'evaluado').length } : null,
     metrics: variables.filter(v => v.type === 'Métrica'), descriptors: variables.filter(v => v.type === 'Descriptor'), variables, reviews } : (context.summaryCache?.set(conversation.id, base), base);
 }
@@ -136,6 +139,7 @@ export const listQuerySchema = z.object({
   priority: z.enum(['P1', 'P2', 'Crítico', 'Normal', 'all']).optional(),
   classification: z.enum(['critical', 'normal', 'positive', 'all']).optional(), agreement: z.enum(['both', 'all']).optional(),
   status: z.enum(['evaluated', 'pending', 'all']).optional(),
+  completion: z.enum(['both', 'all']).optional(),
   page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(15),
 }).refine(q => !q.from || !q.to || q.from <= q.to, 'La fecha inicial no puede ser posterior a la final.');
 const normalize = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -163,7 +167,8 @@ export function filteredConversations(state, query, textSearch = false) {
     const hasMarkFilter = classification || query.variable || query.agreement === 'both';
     const matches = !hasMarkFilter || c.marks.some(m => (!classification || (m.effective && m.classification === classification))
       && (!query.variable || m.id === query.variable) && (query.agreement !== 'both' || m.dualDetected));
-    return matches && (!query.status || query.status === 'all' || (query.status === 'evaluated' ? c.evaluated : !c.evaluated));
+    return matches && (query.completion !== 'both' || c.bothModelsComplete)
+      && (!query.status || query.status === 'all' || (query.status === 'evaluated' ? c.evaluated : !c.evaluated));
   }).sort((a, b) => (b.displayAt || b.displayDate).localeCompare(a.displayAt || a.displayDate) || a.id.localeCompare(b.id));
 }
 export function summarize(conversations) {
