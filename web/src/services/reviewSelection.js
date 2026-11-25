@@ -4,9 +4,12 @@ export function reviewSelectionId(params) {
   return value && value !== 'all' ? value : undefined;
 }
 
-export function summarySelectionParams(params, selection) {
+export function summarySelectionParams(params, selection, defaultPeriod) {
   const next = new URLSearchParams(params);
   // Explicit filters and the "all" opt-out survive refresh and back navigation.
+  if (!next.toString() && defaultPeriod?.id) {
+    return withSummaryDateRange(next, defaultPeriod.from, defaultPeriod.to, { meetingPeriod: defaultPeriod.id });
+  }
   if (!next.toString() && selection?.id) next.set('reviewSelection', selection.id);
   return next;
 }
