@@ -18,11 +18,12 @@ const operations = ['GET /v1/models', 'GET /api/v1/models', 'POST /v1/chat/compl
 const keywords = ['anyOf', 'oneOf', 'allOf', 'const', 'enum', 'type', 'properties', 'additionalProperties', 'required',
   '$ref', '$defs', 'items', 'minItems', 'maxItems', 'minLength', 'maxLength', 'min_repeat', 'max_repeat', 'strict'];
 
-export function createWorkerProbeFetch({ fetchImpl = fetch, redactions = [] } = {}) {
+export function createWorkerProbeFetch({ fetchImpl = fetch, redactions = [], maxRequests = 32 } = {}) {
+  if (![32, 192].includes(maxRequests)) fail('INVALID_ARGUMENTS');
   const requests = [];
   let blockedRequests = 0;
   const observedFetch = async (url, options) => {
-    if (requests.length >= 32) { blockedRequests++; throw new Error('WORKER_PROBE_REQUEST_LIMIT'); }
+    if (requests.length >= maxRequests) { blockedRequests++; throw new Error('WORKER_PROBE_REQUEST_LIMIT'); }
     let request;
     try { request = JSON.parse(options.body); } catch { fail('AI_CONFIGURATION'); }
     const operation = `${request.method} ${request.path}`;
@@ -66,7 +67,7 @@ export function createWorkerProbeFetch({ fetchImpl = fetch, redactions = [] } = 
     entry.durationMs = Date.now() - started;
     return response;
   };
-  return { fetchImpl: observedFetch, report: () => ({ requests: structuredClone(requests), networkCalls: requests.length, blockedRequests }) };
+  return { fetchImpl: observedFetch, report: () => ({ requests: structuredClone(requests), networkCalls: requests.length, maxNetworkRequests: maxRequests, blockedRequests }) };
 }
 
 class WorkerProbeMemoryStore {
