@@ -31,6 +31,8 @@ export function evaluationMatchesProfile(evaluation, profile) {
 // Runtime-only provenance: stored summaries or labels cannot establish consensus.
 const consensusByEvaluation = new WeakMap();
 export const operationalConsensus = (evaluation, variableId) => evaluation && consensusByEvaluation.get(evaluation)?.get(variableId);
+const completeLocalPairs = new WeakSet();
+export const hasCompleteLocalModelPair = evaluation => !!evaluation && completeLocalPairs.has(evaluation);
 
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const cohortContextMatches = (a, b) => a && b && ['sourceHash', 'catalogHash', 'promptHash', 'promptVersion', 'rulesVersion'].every(key => a[key] && a[key] === b[key]);
@@ -48,6 +50,26 @@ const unique = values => values.length === 1 ? values[0] : null;
 const uniqueResults = evaluation => Array.isArray(evaluation.results)
   && evaluation.results.every(r => r && typeof r.variableId === 'string')
   && new Set(evaluation.results.map(r => r.variableId)).size === evaluation.results.length;
+
+// Completion belongs to the validated current pair, including explicit cohort
+// complements. A saved label, a positive vote or a valid abstention alone cannot
+// establish that both executions finished without a technical incident.
+function completeLocalPair(participants, anchor) {
+  return participants.length === 2
+    && ['clef-local', 'gemma-local'].every(id => participants.filter(p => p.profile.id === id).length === 1)
+    && new Set(participants.map(p => `${p.profile.provider}:${p.profile.model}`)).size === 2
+    && participants.every(({ profile, task, evaluation }) => task?.status === 'completed' && !task.error
+      && evaluation && !evaluation.partial && !evaluation.error && !evaluation.validationErrors?.length
+      && !evaluation.demo && !evaluation.usedFallback && profile.provider === 'gateway'
+      && evaluation.provider === profile.provider && evaluation.model === profile.model
+      && uniqueResults(evaluation)
+      && (anchor.catalogVersions || []).filter(ref => ref.active).every(ref => {
+        const ownRef = evaluation.catalogVersions?.find(item => item.id === ref.id);
+        const result = evaluation.results.find(item => item.variableId === ref.id);
+        return ownRef?.active && ownRef.version === ref.version && result && !result.error
+          && ['evaluado', 'no_evaluado'].includes(result.status);
+      }));
+}
 
 // This is an explicit additive link, not "latest result from any comparison".
 // Only the frozen complement of the selected operational Gemma job can supply
@@ -205,5 +227,6 @@ export function operationalEvaluation(state, anchor) {
   const modelReviews = evaluations.map(participant => modelReview(state, anchor, participant));
   const operational = { ...anchor, dual: true, results, modelReviews, modelReviewPending: modelReviews.some(review => ['pending', 'running'].includes(review.status)) };
   consensusByEvaluation.set(operational, consensus);
+  if (completeLocalPair(evaluations, anchor) && modelReviews.every(review => review.status === 'completed' && !review.errorCount)) completeLocalPairs.add(operational);
   return operational;
 }

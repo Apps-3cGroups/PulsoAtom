@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewSelectionId, summarySelectionParams, selectedReview, withSummaryPeriod, reviewSelectionSourceNote } from '../src/services/reviewSelection.js';
+import { reviewSelectionId, summarySelectionParams, selectedReview, withSummaryPeriod, withSummaryDateRange, reviewSelectionSourceNote } from '../src/services/reviewSelection.js';
 import { figureKinds, filterSummaryConversations, summaryMetrics } from '../src/services/summaryFilters.js';
 import { buildSummaryLanes } from '../src/services/summaryMap.js';
 import { summaryDayWindow } from '../src/services/summaryDates.js';
@@ -38,6 +38,22 @@ test('all normal periods leave the selection while preserving adjustable country
     assert.equal(next.has('to'), false);
     assert.equal(summarySelectionParams(next, selection).toString(), next.toString());
   }
+});
+
+test('meeting ranges opt out of the saved sample and survive publication of a different selection', () => {
+  const next = withSummaryDateRange(new URLSearchParams('reviewSelection=review94&days=3&countries=HN,PA&figures=critical'), '2026-11-10', '2026-11-12', { meetingPeriod: 'meeting-volume' });
+  assert.equal(next.get('reviewSelection'), 'all'); assert.equal(next.get('completion'), 'both');
+  assert.equal(next.get('from'), '2026-11-10'); assert.equal(next.get('to'), '2026-11-12'); assert.equal(next.has('days'), false);
+  assert.equal(next.has('countries'), false); assert.equal(next.has('country'), false); assert.equal(next.has('figures'), false);
+  const published = { id: 'fresh214', from: '2026-11-17', to: '2026-11-19', count: 214 };
+  assert.equal(summarySelectionParams(next, published).toString(), next.toString());
+  assert.equal(selectedReview(next, published), null);
+  next.set('countries', 'HN,PA'); next.set('figures', 'critical');
+  const custom = withSummaryDateRange(next, '2026-11-17', '2026-11-19');
+  assert.equal(custom.has('meetingPeriod'), false); assert.equal(custom.get('completion'), 'both');
+  assert.equal(custom.get('countries'), 'HN,PA'); assert.equal(custom.get('figures'), 'critical');
+  const back = conversationReturn(new URL(conversationLink('chat1', `/?${custom}`), 'https://pulso.invalid').searchParams);
+  assert.equal(back.to, `/?${custom}`);
 });
 
 test('all 94 members remain visible by default including no flags, pending reviews, changed sources and errors', () => {
