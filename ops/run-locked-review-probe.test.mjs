@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createState } from '../api/src/data/seed.js';
 import { digest, sourceFingerprint } from '../api/src/evaluation-context.js';
 import { freshReviewSelectionHash } from '../api/src/fresh-review-run.js';
-import { runLockedReviewProbe, createLockedProbeStore } from './run-locked-review-probe.mjs';
+import { runLockedReviewProbe, createLockedProbeStore, parseLockedProbeArguments } from './run-locked-review-probe.mjs';
+import { createWorkerProbeFetch } from './probe-review-worker.mjs';
 
 function fixture() {
   const state = createState(false);
@@ -44,7 +45,10 @@ function fixture() {
   };
   let fetchCalls = 0;
   return { state, manifest, base, persisted, commits,
-    reader: { async read({ conversationIds }) { assert.deepEqual(conversationIds, [all[0].id]); return { conversations: [structuredClone(all[0])] }; } },
+    reader: { async read({ conversationIds }) {
+      assert.ok(conversationIds.length && conversationIds.every(id => all.some(item => item.id === id)));
+      return { conversations: structuredClone(all.filter(item => conversationIds.includes(item.id))) };
+    } },
     env: { GATEWAY_BASE_URL: 'https://gateway.private.invalid', AGENT_SHARED_TOKEN: 'secret-canary-abc', GATEWAY_PORTAL_KEY: 'portal-pulso' },
     get fetchCalls() { return fetchCalls; },
     fetchImpl: async (url, options) => { fetchCalls++; const request = JSON.parse(options.body);
@@ -99,8 +103,47 @@ test('transaction guard rejects settings or operational-reference mutations with
   const f = fixture(), store = createLockedProbeStore({ ...f, idempotencyKey: 'test-key' });
   await assert.rejects(store.transaction(state => {
     state.jobs.push({ id: 'new-job', purpose: 'comparison', idempotencyKey: 'test-key', conversationIds: [f.manifest.cases[0].conversationId], total: 2 });
-    state.tasks.push(...[1, 2].map(id => ({ id: String(id), jobId: 'new-job', conversationId: f.manifest.cases[0].conversationId, status: 'pending' })));
+    state.tasks.push(...['clef-local', 'gemma-local'].map(id => ({ id, profile: { id }, jobId: 'new-job', conversationId: f.manifest.cases[0].conversationId, status: 'pending' })));
     state.settings.dailyEnabled = !state.settings.dailyEnabled;
   }), { code: 'REVIEW_SETTINGS_CHANGED' });
   assert.equal(f.commits.length, 0); assert.equal(f.fetchCalls, 0);
+});
+
+test('all-countries explicitly selects six fixed sources and persists exactly twelve fresh comparison tasks', async () => {
+  const f = fixture(), result = await runLockedReviewProbe({ ...f, allCountries: true });
+  assert.equal(result.completed, true); assert.equal(result.caseCount, 6); assert.equal(result.expectedTasks, 12);
+  assert.deepEqual(result.countries, ['HN', 'PA', 'CR', 'SV', 'MX', 'NI']);
+  assert.equal(f.persisted.jobs.length, 1); assert.equal(f.persisted.jobs[0].caseCount, 6); assert.equal(f.persisted.jobs[0].concurrency, 1);
+  assert.equal(f.persisted.tasks.length, 12); assert.equal(f.persisted.evaluations.length, 12); assert.equal(f.fetchCalls, 12);
+  assert.equal(result.maxNetworkRequests, 192);
+  for (const country of result.countries) assert.deepEqual(result.tasks.filter(task => task.country === country).map(task => task.profileId).sort(), ['clef-local', 'gemma-local']);
+  assert.deepEqual(f.persisted.operationalRefs, []);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_|private-conversation|private-message|secret-canary|https/);
+});
+
+test('all-countries keeps global exclusion, rejects outside IDs and verifies each source hash', async () => {
+  const f = fixture(), store = createLockedProbeStore({ ...f, allCountries: true, idempotencyKey: 'test-key' });
+  await assert.rejects(store.readWithConversations({ conversationIds: ['outside-selection'] }), { code: 'REVIEW_SOURCE_SCOPE_CHANGED' });
+  await assert.rejects(store.readWithConversations({ conversationIds: [f.manifest.cases[0].conversationId, f.manifest.cases[0].conversationId] }), { code: 'REVIEW_SOURCE_SCOPE_CHANGED' });
+  const reader = f.reader;
+  const changed = createLockedProbeStore({ ...f, allCountries: true, idempotencyKey: 'test-key', reader: { async read(options) {
+    const source = await reader.read(options); source.conversations.at(-1).messages[0].text = 'Changed'; return source;
+  } } });
+  await assert.rejects(changed.readWithConversations(), { code: 'SOURCE_CHANGED' });
+  f.persisted.jobs.push({ id: 'foreign-job', status: 'running', updatedAt: new Date().toISOString(), createdAt: new Date().toISOString() });
+  const result = await runLockedReviewProbe({ ...f, allCountries: true });
+  assert.equal(result.error.code, 'EVALUATION_RUNNING'); assert.equal(f.fetchCalls, 0); assert.equal(f.commits.length, 0);
+});
+
+test('mode is opt-in and the expanded observer still has a fixed maximum', async () => {
+  assert.deepEqual(parseLockedProbeArguments(['--request-id', 'test-request']), { requestId: 'test-request', allCountries: false });
+  assert.deepEqual(parseLockedProbeArguments(['--request-id', 'test-request', '--all-countries']), { requestId: 'test-request', allCountries: true });
+  assert.throws(() => parseLockedProbeArguments(['--request-id', 'test-request', '--all-countries', '--all-countries']), { code: 'INVALID_ARGUMENTS' });
+  assert.throws(() => createWorkerProbeFetch({ maxRequests: 193 }), { code: 'INVALID_ARGUMENTS' });
+  let calls = 0;
+  const observer = createWorkerProbeFetch({ maxRequests: 192, fetchImpl: async () => { calls++; return Response.json({ ok: true }); } });
+  const options = { method: 'POST', body: JSON.stringify({ method: 'GET', path: '/api/v1/models', body: null }) };
+  for (let index = 0; index < 192; index++) await observer.fetchImpl('https://private.invalid', options);
+  await assert.rejects(observer.fetchImpl('https://private.invalid', options), /WORKER_PROBE_REQUEST_LIMIT/);
+  assert.equal(calls, 192); assert.equal(observer.report().blockedRequests, 1);
 });
