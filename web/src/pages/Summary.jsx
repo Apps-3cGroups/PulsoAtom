@@ -31,32 +31,33 @@ export default function Summary() {
   const navigate = useNavigate();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const selectionParams = summarySelectionParams(params, bootstrap.reviewSelection);
+  const defaultMeetingPeriod = meetingPeriodSnapshot.periods.find(period => period.id === meetingPeriodSnapshot.defaultPeriodId);
+  const selectionParams = summarySelectionParams(params, bootstrap.reviewSelection, defaultMeetingPeriod);
   const selection = selectedReview(selectionParams, bootstrap.reviewSelection);
   const selectionId = reviewSelectionId(selectionParams);
   const mapRef = useRef(null);
-  const countries = selectedCountries(params, bootstrap.countries);
+  const countries = selectedCountries(selectionParams, bootstrap.countries);
   const classification = 'all';
-  const visible = selectedFigures(params);
+  const visible = selectedFigures(selectionParams);
   const patchFilters = values => setParams(previous => {
-    const next = cleanOverviewParams(summarySelectionParams(previous, bootstrap.reviewSelection));
+    const next = cleanOverviewParams(summarySelectionParams(previous, bootstrap.reviewSelection, defaultMeetingPeriod));
     next.delete('meetingPeriod');
     for (const [key, value] of Object.entries(values)) value == null ? next.delete(key) : next.set(key, value);
     if (!next.toString()) next.set('reviewSelection', 'all');
     return next;
   });
   useEffect(() => {
-    const next = cleanOverviewParams(summarySelectionParams(params, bootstrap.reviewSelection));
+    const next = cleanOverviewParams(summarySelectionParams(params, bootstrap.reviewSelection, defaultMeetingPeriod));
     if (params.toString() && !next.toString()) next.set('reviewSelection', 'all');
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [params, setParams, bootstrap.reviewSelection]);
+  }, [params, setParams, bootstrap.reviewSelection, defaultMeetingPeriod]);
   const { from, to, preset, totalDays, error: rangeError } = selection ? { from: selection.from, to: selection.to, preset: null } : resolveSummaryRange({
-    from: params.get('from') ?? undefined, to: params.get('to') ?? undefined,
-    days: params.get('days'),
+    from: selectionParams.get('from') ?? undefined, to: selectionParams.get('to') ?? undefined,
+    days: selectionParams.get('days'),
     latest: bootstrap.activityDateRange?.max || bootstrap.dateRange.max,
     mode: bootstrap.mode, timezone: 'America/Tegucigalpa',
   });
-  const bothComplete = params.get('completion') === 'both';
+  const bothComplete = selectionParams.get('completion') === 'both';
   const compact = preset === 30 || totalDays > 7;
   const summaryPath = rangeError ? null : `/summary?${queryString({ from, to, countries: countries.join(','), dateBasis: 'activity', reviewSelection: selectionId, completion: bothComplete ? 'both' : undefined })}`;
   const { data, dataPath, loading, error, reload } = useApi(summaryPath, { timeoutMs: 60000 });
@@ -111,7 +112,7 @@ export default function Summary() {
       <Checkbox checked={bothComplete} onChange={event => patchFilters({ completion: event.target.checked ? 'both' : null })}>Ambos modelos completos</Checkbox>
       <SummaryDateRange from={from} to={to} onApply={changeDates} />
       {meetingPeriodSnapshot.periods.length > 0 && <div className="summary-meeting-periods" aria-label="Períodos para la reunión">
-        {meetingPeriodSnapshot.periods.map(period => <Tooltip key={period.id} title={`${summaryRangeLabel(period.from, period.to)} · Países con resultados completos: ${period.countries.join(', ')}`}><Button size="small" type={params.get('meetingPeriod') === period.id ? 'primary' : 'default'} onClick={() => chooseMeetingPeriod(period)}>{period.label}</Button></Tooltip>)}
+        {meetingPeriodSnapshot.periods.map(period => <Tooltip key={period.id} title={`${summaryRangeLabel(period.from, period.to)} · Países con resultados completos: ${period.countries.join(', ')}`}><Button size="small" type={selectionParams.get('meetingPeriod') === period.id ? 'primary' : 'default'} onClick={() => chooseMeetingPeriod(period)}>{period.label}</Button></Tooltip>)}
         <span>Selección según datos revisados{meetingPeriodSnapshot.asOf ? ` al ${dateText(meetingPeriodSnapshot.asOf)}` : ''}. Los totales se actualizan al consultar.</span>
       </div>}
     </div>

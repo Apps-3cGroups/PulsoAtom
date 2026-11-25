@@ -107,8 +107,57 @@ async function inputDate(element, value) {
 }
 const latestRequest = () => requests.at(-1);
 
-test('default entry renders all 94; each preset opts out and the selection can be restored', async () => {
+test('default entry queries the configured meeting period with complete pairs from its first request and retains detail/history return links', async () => {
+  const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
+  ordinaryRows = [
+    { ...rows[2], displayDate: period.from, bothModelsComplete: true },
+    { ...rows[1], displayDate: period.to, bothModelsComplete: false },
+    { ...rows[3], displayDate: '2026-11-25', bothModelsComplete: true },
+  ];
   await render();
+  const params = new URLSearchParams(router.state.location.search);
+  assert.equal(params.get('reviewSelection'), 'all');
+  assert.equal(params.get('meetingPeriod'), period.id);
+  assert.equal(params.get('completion'), 'both');
+  assert.ok(requests.length > 0);
+  for (const request of requests) {
+    assert.equal(request.searchParams.get('from'), period.from);
+    assert.equal(request.searchParams.get('to'), period.to);
+    assert.equal(request.searchParams.get('completion'), 'both');
+    assert.equal(request.searchParams.has('reviewSelection'), false);
+  }
+  assert.equal(document.querySelectorAll('.conversation-cell').length, 1);
+  assert.equal(document.querySelector('input[type="checkbox"]').checked, true);
+  assert.equal(document.querySelector('[aria-label="Resumen desde"]').value, period.from);
+  assert.equal(document.querySelector('[aria-label="Resumen hasta"]').value, period.to);
+  assert.match(button(period.label).className, /ant-btn-primary/);
+  assert.doesNotMatch(document.querySelector('.summary-stat-card').textContent, /de 94/);
+  const summaryUrl = `${router.state.location.pathname}${router.state.location.search}`;
+  await click(document.querySelector('.conversation-cell'));
+  await click(button('Resumen'));
+  assert.equal(`${router.state.location.pathname}${router.state.location.search}`, summaryUrl);
+  await click(document.querySelector('.country-title button'));
+  assert.equal(latestRequest().searchParams.get('from'), period.from);
+  assert.equal(latestRequest().searchParams.get('to'), period.to);
+  assert.equal(latestRequest().searchParams.get('completion'), 'both');
+  assert.equal(latestRequest().searchParams.has('reviewSelection'), false);
+  const historyUrl = `${router.state.location.pathname}${router.state.location.search}`;
+  await click(document.querySelector('.table-client'));
+  await click(button('Histórico'));
+  assert.equal(`${router.state.location.pathname}${router.state.location.search}`, historyUrl);
+});
+
+test('both meeting presets and all 94 saved members remain accessible from the new default', async () => {
+  await render();
+  for (const period of meetingPeriodSnapshot.periods) {
+    await click(button(period.label));
+    const params = new URLSearchParams(router.state.location.search);
+    assert.equal(params.get('meetingPeriod'), period.id);
+    assert.equal(params.get('from'), period.from);
+    assert.equal(params.get('to'), period.to);
+    assert.equal(params.get('completion'), 'both');
+  }
+  await click(button('Volver a la selección'));
   assert.equal(new URLSearchParams(router.state.location.search).get('reviewSelection'), reviewSelection.id);
   assert.equal(latestRequest().searchParams.get('from'), reviewSelection.from);
   assert.equal(latestRequest().searchParams.get('to'), reviewSelection.to);
