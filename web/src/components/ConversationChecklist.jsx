@@ -8,6 +8,7 @@ import { EmptyState, FlagSymbol, Mark, PriorityTag } from './common';
 import FlagModelComparison from './FlagModelComparison';
 import { canReviewVariable, nextReviewAction, reviewActions } from './ReviewModal';
 import { classificationOf, flagVariables, unmarkedResultLabel, displayedVariableKind } from '../services/flags';
+import { evidenceMessageLookup } from '../services/messageFlags';
 
 const resultLabel = v => v.kind === 'refuted' ? 'Refutado por humano' : v.kind === 'human' ? 'Levantado por humano'
   : v.historicalAutomaticFlagVisible ? 'Coincidencia histórica de ambos modelos' : v.kind ? (v.dualDetected ? 'Detectado por ambos modelos' : 'Flag guardado')
@@ -41,7 +42,8 @@ export function ConversationFlagDetails({ conversation, variable: v, index, onSh
   const canReview = !conversation.rawModelView && !sourceChanged && canReviewVariable(conversation, v);
   const action = nextReviewAction(v);
   const messages = conversation.messages || [];
-  const evidenceMessages = sourceChanged ? [] : messages.filter(m => index.byMessage.get(String(m.id))?.some(mark => mark.id === v.id));
+  const resolveEvidence = evidenceMessageLookup(conversation);
+  const evidenceMessages = messages.filter(m => index.byMessage.get(String(m.id))?.some(mark => mark.id === v.id));
   const linkedIds = new Set(evidenceMessages.map(message => String(message.id)));
   const comparison = v.result.comparison && !v.result.comparison.codeOnly ? v.result.comparison : null;
   const visibleEvidence = new Set((comparison?.cells || []).flatMap(cell => evidenceList(cell.result?.evidence)).filter(Boolean).map(evidenceKey));
@@ -62,10 +64,10 @@ export function ConversationFlagDetails({ conversation, variable: v, index, onSh
     {v.result.error && <Alert showIcon type="warning" message="Esta variable tuvo un error técnico" description={v.result.reason} />}
     {comparison ? <FlagModelComparison variable={v} demo={conversation.demo} /> : <><div className="flag-criterion"><b>Criterio evaluado</b><p>{catalogText(v.definition)}</p>{v.condition && <p>{catalogText(v.condition)}</p>}</div><p className="muted">{v.result.reason || 'Sin justificación registrada.'}</p>{v.result.comparison?.codeOnly && <p className="muted">Resultado calculado por código; no representa dos votos de IA.</p>}</>}
     {savedEvidence.length > 0 && <section className="flag-linked-messages" aria-label="Evidencia guardada"><h3>Evidencia guardada</h3>{savedEvidence.map(({ evidence, source }, position) => {
-      const message = !sourceChanged && evidence.messageId != null ? messages.find(item => String(item.id) === String(evidence.messageId)) : null;
+      const message = resolveEvidence(evidence);
       const content = <><span>{evidence.quote || 'Sin cita textual guardada.'}</span><span className="evidence-meta"><span>{source}{evidence.messageId != null ? ` · Mensaje ${evidence.messageId}` : ''}</span>{message && <><span>Ver en la conversación</span><ArrowRightOutlined /></>}</span></>;
       return message ? <button type="button" className="evidence-quote" key={position} onClick={() => onShowMessage(message.id)}>{content}</button> : <blockquote className="evidence-quote" key={position}>{content}</blockquote>;
     })}</section>}
-    <div className="flag-linked-messages"><h3>Mensajes vinculados ({evidenceMessages.length})</h3>{evidenceMessages.map(m => <button type="button" className="evidence-quote" key={m.id} onClick={() => onShowMessage(m.id)}><span>{m.text}</span><span className="evidence-meta">{hasDate(m.timestamp) ? `${clock.date(m.timestamp)} · ${clock.time(m.timestamp)}` : 'Fecha no disponible'}<span>Ver en la conversación</span><ArrowRightOutlined /></span></button>)}{!evidenceMessages.length && <p className="muted">{sourceChanged ? 'El contenido cambió. Las citas guardadas corresponden a la evaluación anterior y no se vinculan a los mensajes actuales.' : 'Este resultado no tiene una marca vinculada a un mensaje actual.'}</p>}</div>
+    <div className="flag-linked-messages"><h3>Mensajes vinculados ({evidenceMessages.length})</h3>{evidenceMessages.map(m => <button type="button" className="evidence-quote" key={m.id} onClick={() => onShowMessage(m.id)}><span>{m.text}</span><span className="evidence-meta">{hasDate(m.timestamp) ? `${clock.date(m.timestamp)} · ${clock.time(m.timestamp)}` : 'Fecha no disponible'}<span>Ver en la conversación</span><ArrowRightOutlined /></span></button>)}{!evidenceMessages.length && <p className="muted">{sourceChanged ? 'No se encontró un mensaje único con el mismo identificador y la cita guardada. La evidencia original sigue disponible en la revisión.' : 'Este resultado no tiene una marca vinculada a un mensaje actual.'}</p>}</div>
   </section>;
 }
