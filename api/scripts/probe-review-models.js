@@ -328,6 +328,8 @@ const technicalWords = new Set(('failed failure error invalid unsupported unreco
   + 'schemaerror validationerror valueerror runtimeerror typeerror nested root field fields required missing valid '
   + 'max_tokens context length exceeded limit tokens memory insufficient loaded load available unavailable configuration reasoning '
   + 'response_format json_schema anyof oneof allof const enum type additionalproperties ref defs items minitems maxitems minlength maxlength '
+  + 'loading canceled cancelled cancellation interrupted aborted timed timeout stopped due system resources resource guardrail guardrails threshold '
+  + 'estimated capacity busy already reached disk space device failed loading request user released unloaded unloading '
   + 'min_repeat max_repeat repeat quantifier size dfa fsm complexity minimum maximum greater less than nullable pattern strict').split(' '));
 
 // Only fixed technical vocabulary survives. Even an upstream error that echoes

@@ -163,9 +163,14 @@ export async function executeFreshReview({ store, registry, manifest, progress, 
     status: 'prepared', chunks: planned };
   await checkpoint(progress);
   const deadline = Date.parse(manifest.reviewDeadline);
-  const ensureTime = () => { if (clock().getTime() >= deadline) fail('REVIEW_DEADLINE_REACHED', 'La hora solicitada llegó antes de poder iniciar o reintentar el lote.'); };
+  // The deadline is a delivery target, not authorization to abandon the fixed
+  // sample. Continue only these members and record one explicit late notice.
+  const noteDeadline = async () => {
+    if (clock().getTime() < deadline || progress.deadlineMissedAt) return;
+    progress.deadlineMissedAt = clock().toISOString(); await checkpoint(progress);
+    report({ event: 'deadline_missed', requestId: manifest.id, requestedAt: manifest.reviewDeadline, continuingAuthorizedCases: manifest.caseCount });
+  };
   for (const chunk of progress.chunks) {
-    ensureTime();
     const current = await store.readSchedulerState();
     const matches = current.jobs.filter(job => job.idempotencyKey === chunk.idempotencyKey);
     if (matches.length > 1 || chunk.jobId && matches[0]?.id !== chunk.jobId) fail('REVIEW_JOB_CHANGED', 'El lote guardado no coincide con su clave de ejecución.');
@@ -178,7 +183,7 @@ export async function executeFreshReview({ store, registry, manifest, progress, 
     if (job) chunk.jobId = job.id;
     let attempts = chunk.launchRounds || 0;
     while (!job || !['completed'].includes(job.status)) {
-      ensureTime();
+      await noteDeadline();
       if (job?.automation?.cancelledAt || job?.status === 'cancelled') fail('AUTOMATION_CANCELLED', 'Una corrida cancelada no se reanuda.');
       if (attempts >= 3) break;
       try {
@@ -197,13 +202,15 @@ export async function executeFreshReview({ store, registry, manifest, progress, 
         await checkpoint(progress); report({ event: 'batch_started', part: chunk.index, jobId: job.id, cases: chunk.ids.length, round: attempts });
         job = await execution.completion;
         const state = await guarded.read(); job = state.jobs.find(value => value.id === chunk.jobId);
+        if (Date.parse(job.finishedAt || 0) >= deadline) await noteDeadline();
         chunk.status = job.status; chunk.models = evaluationModelProgress(state, job); chunk.updatedAt = clock().toISOString();
         await checkpoint(progress); report({ event: 'batch_finished', part: chunk.index, jobId: job.id, status: job.status, models: chunk.models });
       } catch (error) {
         if (!['EVALUATION_RUNNING', 'REVIEW_FOREIGN_JOB_CHANGED'].includes(error.code)) throw error;
         progress.status = 'waiting'; await checkpoint(progress);
         report({ event: 'waiting_for_worker', part: chunk.index, code: error.code });
-        await wait(Math.min(15000, Math.max(1, deadline - clock().getTime())));
+        const untilDeadline = deadline - clock().getTime();
+        await wait(untilDeadline > 0 ? Math.min(15000, untilDeadline) : 15000);
       }
     }
     if (job) { chunk.status = job.status; chunk.jobId = job.id; chunk.finishedAt = job.finishedAt || null; }
