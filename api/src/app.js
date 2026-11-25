@@ -314,7 +314,7 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     const query = listQuerySchema.parse(req.query);
     if (query.modelProfileId && req.user.role !== 'admin') throw new AppError(403, 'La consulta por modelo está disponible solo en administración.', 'FORBIDDEN');
     const state = query.reviewSelection ? await readSelectedHistory(query.reviewSelection)
-      : store.readForNavigation ? await store.readForNavigation(query) : await readHistory();
+      : store.readForNavigation ? await store.readForNavigation(query, { summaryOnly: true }) : await readHistory();
     const conversations = filteredConversations(state, query);
     const visibleIds = new Set(conversations.map(c => c.id));
     await expose(state, req.user.id, state.conversations.filter(c => visibleIds.has(c.id)), query.modelProfileId);

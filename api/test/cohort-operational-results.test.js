@@ -4,6 +4,8 @@ import { catalogV5 } from '../src/catalog-v5.js';
 import { catalogReferences, digest, evaluationContext } from '../src/evaluation-context.js';
 import { operationalEvaluation, operationalConsensus } from '../src/operational-evaluation.js';
 import { conversationView } from '../src/domain.js';
+import { navigationSummaryProjection, decodeNavigationSummary } from '../src/navigation-projection.js';
+import { jsonRemoveProjection } from './fixtures/navigation-projection.js';
 
 const FLAG = 'cliente_amenazo_cancelar_pedido';
 const POSITIVE = 'cliente_felicito_al_asistente';
@@ -211,4 +213,15 @@ test('existing reviews remain linked to the original Gemma evaluation', () => {
   assert.equal(detail.variables.find(v => v.id === FLAG).kind, 'refuted');
   assert.equal(detail.refuted, 1);
   assert.deepEqual(f.state, before);
+});
+
+test('summary projection preserves explicit historical cohort membership and both model answers', () => {
+  const f = fixture(); f.conversation.messages[0].text += ' Cambio posterior.';
+  f.anchor.promptSnapshot = { text: 'Original stored prompt' };
+  f.clefTask.profileStates = { retained: { results: f.clef.results } };
+  f.job.runtimeConfiguration = { frozen: 'Original runtime' };
+  const projected = structuredClone(f.state);
+  for (const key of ['evaluations', 'tasks', 'jobs']) projected[key] = projected[key].map(row => decodeNavigationSummary(key, jsonRemoveProjection(row, navigationSummaryProjection(key))));
+  assert.deepEqual(conversationView(projected, projected.conversations[0]), conversationView(f.state, f.conversation));
+  assert.ok(f.clef.results.some(result => result.evidence?.length));
 });

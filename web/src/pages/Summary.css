@@ -18,10 +18,8 @@
 .summary-stat-tooltip { display: grid; gap: 4px; }
 .summary-stat-basis { color: var(--secondary); font-size: calc(11px * var(--font-scale, 1)); line-height: 1.3; }
 .summary-source-note { display: flex; flex: none; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid #e4d4af; border-radius: 6px; background: #fff9eb; color: #77571e; font-size: calc(12px * var(--font-scale, 1)); line-height: 1.4; }
-.summary-source-note > .anticon { flex: none; }
 .summary-page .conversation-cell.source-changed-cell { border: 1px dashed #ae843a; background: #fff5dc; }
 .summary-page .conversation-cell.source-changed-cell:hover { background: #ffedc0; }
-.summary-page .conversation-cell > .source-changed-symbol { color: #8a641f; font-size: 11px; }
 .summary-total-flags strong { color: #c53d31; }
 .summary-total-positive strong { color: #167b54; }
 .summary-range-actions, .summary-range { display: inline-flex; align-items: center; gap: 8px; }
