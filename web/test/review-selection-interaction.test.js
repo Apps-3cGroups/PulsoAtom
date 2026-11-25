@@ -247,12 +247,12 @@ test('clearing the last explicit exception filter does not reactivate the defaul
   assert.equal(requests.some(url => url.searchParams.has('reviewSelection')), false);
 });
 
-test('summary and history detail links retain the selection, filters and source-change warning', async () => {
+test('summary and history detail links retain the selection and filters without the source-change banner', async () => {
   await render('/?reviewSelection=review94&countries=HN');
   const summaryUrl = `${router.state.location.pathname}${router.state.location.search}`;
   await click(document.querySelector('button[aria-label^="Abrir conversación de Cliente 0,"]'));
   assert.equal(latestRequest().searchParams.get('reviewSelection'), 'review94');
-  assert.match(document.querySelector('#test').textContent, /La conversación cambió desde la evaluación/);
+  assert.doesNotMatch(document.querySelector('#test').textContent, /La conversación cambió desde la evaluación/);
   assert.match(document.querySelector('#test').textContent, /Falta una revisión de modelo/);
   assert.match(document.querySelector('#test').textContent, /68 conversaciones se evaluaron antes de la corrección de horas/);
   await click(button('Resumen'));
