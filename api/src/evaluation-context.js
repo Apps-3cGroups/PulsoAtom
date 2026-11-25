@@ -37,12 +37,18 @@ const group = (values, key) => values.reduce((map, value) => {
 export function evaluationSelectionContext(state) {
   return { evaluations: group(state.evaluations, 'conversationId'), byId: group(state.evaluations, 'id'), refs: group(state.operationalRefs || [], 'id') };
 }
-export function selectedEvaluation(state, conversation, profileId, context) {
+// Selection provenance is the stored anchor. Building a dual-model consensus
+// changes results, never the source/catalog metadata used to record exposure.
+export function selectedStoredEvaluation(state, conversation, profileId, context) {
   if (profileId) return (context?.evaluations.get(conversation.id) || state.evaluations).filter(e => e.conversationId === conversation.id && historicalProfileId(e) === profileId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const ref = context ? context.refs.get(conversation.id)?.[0] : state.operationalRefs?.find(r => r.id === conversation.id);
   const id = ref?.evaluationId || conversation.evaluationId;
-  return operationalEvaluation(state, context ? context.byId.get(id)?.[0] : state.evaluations.find(e => e.id === id));
+  return context ? context.byId.get(id)?.[0] : state.evaluations.find(e => e.id === id);
+}
+export function selectedEvaluation(state, conversation, profileId, context) {
+  const evaluation = selectedStoredEvaluation(state, conversation, profileId, context);
+  return profileId ? evaluation : operationalEvaluation(state, evaluation);
 }
 export function latestVerdict(state, conversationId, sourceHash, variableId, version) {
   if (!sourceHash) return null;
@@ -50,12 +56,24 @@ export function latestVerdict(state, conversationId, sourceHash, variableId, ver
 }
 export const evaluationExposureId = (userId, evaluation) => evaluation?.sourceHash
   ? digest([userId, evaluation.conversationId, evaluation.sourceHash, evaluation.catalogHash]) : null;
-export function exposeEvaluation(state, userId, evaluation) {
-  const id = evaluationExposureId(userId, evaluation);
-  if (!id) return;
+export function evaluationExposures(userId, evaluations, { createdAt = new Date().toISOString() } = {}) {
+  const exposures = new Map();
+  for (const evaluation of evaluations) {
+    const id = evaluationExposureId(userId, evaluation);
+    if (id && !exposures.has(id)) exposures.set(id, { id, userId, conversationId: evaluation.conversationId,
+      sourceHash: evaluation.sourceHash, catalogVersions: evaluation.catalogVersions, createdAt });
+  }
+  return [...exposures.values()];
+}
+export function exposeEvaluations(state, userId, evaluations) {
+  const exposures = evaluationExposures(userId, evaluations);
+  if (!exposures.length) return;
   ensureEvaluationState(state);
-  if (!state.exposures.some(e => e.id === id)) state.exposures.push({ id, userId, conversationId: evaluation.conversationId,
-    sourceHash: evaluation.sourceHash, catalogVersions: evaluation.catalogVersions, createdAt: new Date().toISOString() });
+  const existing = new Set(state.exposures.map(e => e.id));
+  state.exposures.push(...exposures.filter(e => !existing.has(e.id)));
+}
+export function exposeEvaluation(state, userId, evaluation) {
+  exposeEvaluations(state, userId, [evaluation]);
 }
 export const wasExposed = (state, userId, conversationId, sourceHash, variableId, version) => (state.exposures || []).some(e =>
   e.userId === userId && e.conversationId === conversationId && e.sourceHash === sourceHash && e.catalogVersions.some(v => v.id === variableId && v.version === version && v.active));
