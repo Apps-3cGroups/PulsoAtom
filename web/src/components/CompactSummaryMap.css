@@ -57,7 +57,6 @@
 .compact-conversation.tone-human { background: #f5effc; border-color: #bca6d5; }
 .compact-conversation.tone-positive { background: #edf8f4; border-color: #a6cabb; }
 .compact-conversation.is-dual { box-shadow: inset 0 -2px #5272b3; }
-.compact-conversation.is-source-changed { border: 1px dashed #9b651b; background: repeating-linear-gradient(135deg, #fff8e9 0 3px, #f4dfb4 3px 5px); box-shadow: inset 0 0 0 1px #f7e3ba; }
 .compact-source-status { color: #80500d; }
 .compact-conversation:hover, .compact-conversation:focus-visible { outline: 2px solid #5267a3; outline-offset: 1px; z-index: 2; background: #edf2ff; }
 .compact-conversation.is-group::after { content: ''; position: absolute; bottom: 0; right: 0; width: 2px; height: 2px; background: #617d9f; }
