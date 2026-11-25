@@ -204,3 +204,19 @@ test('manifest integrity survives MySQL JSON object-key normalization but detect
   normalized.cases.reverse(); normalized.cases[0].currentSourceHash = 'f'.repeat(64);
   assert.throws(() => validateFreshReviewManifest(normalized), { code: 'INVALID_REVIEW_REQUEST' });
 });
+
+
+test('a missed delivery deadline is reported once while the exact authorized run continues without a busy wait', async () => {
+  const f = fixture();
+  f.manifest.reviewDeadline = new Date(Date.now() - 1000).toISOString();
+  f.state.jobs.push({ id: 'other-late', status: 'running', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const events = [], waits = [];
+  const progress = await executeFreshReview({ ...f, report: event => events.push(event), wait: async ms => {
+    waits.push(ms); f.state.jobs.find(job => job.id === 'other-late').status = 'completed';
+  } });
+  assert.equal(progress.status, 'completed'); assert.ok(progress.deadlineMissedAt);
+  assert.equal(events.filter(event => event.event === 'deadline_missed').length, 1);
+  assert.deepEqual(waits, [15000]);
+  assert.equal(f.calls.length, f.manifest.caseCount * 2);
+  assert.deepEqual([...new Set(f.calls.map(call => call.conversationId))], f.manifest.cases.map(item => item.conversationId));
+});

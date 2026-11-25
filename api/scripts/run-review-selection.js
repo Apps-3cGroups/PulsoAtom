@@ -100,6 +100,7 @@ async function status(base, manifest, progress) {
     GROUP BY profileId,status`, ids))[0] : [];
   return { event: 'status', requestId: manifest.id, cases: manifest.caseCount, expectedReviews: manifest.expectedNewEvaluations,
     status: progress?.status || 'prepared', published: !!progress?.publishedAt, errorCode: progress?.errorCode || null,
+    deadlineMissedAt: progress?.deadlineMissedAt || null,
     jobs: jobs.map(({ id, status, updatedAt }) => ({ id, status, updatedAt })), models: manifest.profiles.map(profileId => ({ profileId,
       expected: manifest.caseCount, statuses: Object.fromEntries(rows.filter(row => row.profileId === profileId).map(row => [row.status, Number(row.count)])) })) };
 }
