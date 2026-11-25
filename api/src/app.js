@@ -16,7 +16,7 @@ import { matchesSomos3cPassword } from './identity.js';
 import { mountTdRoutes } from './td-routes.js';
 import { registryFromEnv, asRegistry } from './model-registry.js';
 import { mountModelRoutes } from './model-routes.js';
-import { selectedEvaluation, evaluationSelectionContext, exposeEvaluation, sourceFingerprint } from './evaluation-context.js';
+import { selectedEvaluation, selectedStoredEvaluation, evaluationSelectionContext, evaluationExposures, exposeEvaluations, sourceFingerprint } from './evaluation-context.js';
 import { normalizeBasePath } from './basePath.js';
 import { catalogAvailability, currentCatalog } from './catalog-presentation.js';
 import { conversationDailyMetrics } from './daily-metrics.js';
@@ -278,7 +278,10 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
   const expose = async (state, userId, conversations, profileId) => {
     const selection = evaluationSelectionContext(state);
     const evaluations = conversations.map(c => {
-      const e = selectedEvaluation(state, c, profileId, selection);
+      const stored = selectedStoredEvaluation(state, c, profileId, selection);
+      // Legacy answers without a source hash still need the projected results
+      // to retain exactly which variables the previous exposure path recorded.
+      const e = stored?.sourceHash ? stored : selectedEvaluation(state, c, profileId, selection);
       if (!e) return null;
       // Viewing a legacy prediction can bias a later review even when its original
       // input cannot be proven equivalent. Track exposure conservatively, without
@@ -288,10 +291,8 @@ export function createApp(store, config, evaluator = registryFromEnv({ demo: con
     }).filter(Boolean);
     if (evaluations.length) {
       if (store.recordExposures) {
-        const exposureState = { ...state, exposures: [] };
-        evaluations.forEach(e => exposeEvaluation(exposureState, userId, e));
-        await store.recordExposures(exposureState.exposures);
-      } else await store.transaction(s => evaluations.forEach(e => exposeEvaluation(s, userId, e)));
+        await store.recordExposures(evaluationExposures(userId, evaluations));
+      } else await store.transaction(s => exposeEvaluations(s, userId, evaluations));
     }
   };
   app.get(`${prefix}/active`, async (req, res) => {
