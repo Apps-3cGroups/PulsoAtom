@@ -21,9 +21,30 @@ function flagEvidence(variable) {
   return evidence;
 }
 
-/** Associate only published marks with actual message IDs; never guess from text. */
+/** Resolve a saved citation to its unique original ID, never to another message. */
+export function evidenceMessageLookup(conversation = {}) {
+  const messages = new Map();
+  for (const message of conversation.messages || []) {
+    const id = asId(message.id);
+    if (id !== null) messages.set(id, messages.has(id) ? null : message);
+  }
+  const changed = conversation.sourceChanged || conversation.evaluation?.sourceChanged;
+  return evidence => {
+    const message = messages.get(asId(evidence?.messageId));
+    if (!message) return null;
+    // Historical hashes may differ after actor/time corrections. A matching
+    // citation links only that quoted text; it does not certify the whole source.
+    // The evaluator stores the complete text, capped at 2,000 characters.
+    if (changed && (typeof evidence?.quote !== 'string' || !evidence.quote.trim()
+      || typeof message.text !== 'string' || !(message.text === evidence.quote
+        || (evidence.quote.length === 2000 && message.text.startsWith(evidence.quote))))) return null;
+    return message;
+  };
+}
+
+/** Associate published marks with actual IDs and verify historical quotations. */
 export function buildMessageFlags(conversation = {}) {
-  const messageIds = new Set((conversation.messages || []).map(message => asId(message.id)).filter(id => id !== null));
+  const resolveEvidence = evidenceMessageLookup(conversation);
   const sourceChanged = conversation.sourceChanged || conversation.evaluation?.sourceChanged;
   const displayVariables = (conversation.variables || []).map(variable => sourceChanged && conversation.historicalFlagsAvailable === true
     && !variable.kind && variable.historicalAutomaticFlagVisible && variable.historicalKind
@@ -38,8 +59,8 @@ export function buildMessageFlags(conversation = {}) {
   const byMessage = new Map();
   const unlinkedVariables = [];
   for (const variable of markedVariables) {
-    const linkedIds = new Set(sourceChanged ? [] : flagEvidence(variable)
-      .map(evidence => asId(evidence?.messageId)).filter(id => id !== null && messageIds.has(id)));
+    const linkedIds = new Set(flagEvidence(variable)
+      .map(evidence => asId(resolveEvidence(evidence)?.id)).filter(id => id !== null));
     if (!linkedIds.size) unlinkedVariables.push(variable);
     for (const id of linkedIds) {
       if (!byMessage.has(id)) byMessage.set(id, []);

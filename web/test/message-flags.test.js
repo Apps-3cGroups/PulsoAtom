@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMessageFlags, filterMessageRows, groupFlagOptions } from '../src/services/messageFlags.js';
+import { buildMessageFlags, evidenceMessageLookup, filterMessageRows, groupFlagOptions } from '../src/services/messageFlags.js';
 
 const message = (id, text = 'Mensaje sintético') => ({ id, text });
 const evidence = messageId => ({ messageId, quote: 'Cita sintética' });
@@ -101,7 +101,7 @@ test('grouped options retain severity for human marks, separate refuted marks, a
 });
 
 
-test('restored historical flags appear in the sidebar but never attach to current messages', () => {
+test('restored historical flags stay unlinked when the original citation does not match current text', () => {
   const variable = { ...flag('old', 'critical', ['same-id']), kind: null, effective: false, dualDetected: false,
     historicalAutomaticFlagVisible: true, historicalKind: 'critical' };
   const conversation = { sourceChanged: true, historicalFlagsAvailable: true,
@@ -118,4 +118,55 @@ test('restored historical flags appear in the sidebar but never attach to curren
   assert.equal(buildMessageFlags({ ...conversation, historicalFlagsAvailable: false }).markedVariables.length, 0);
   assert.equal(buildMessageFlags({ ...conversation, sourceChanged: false }).markedVariables.length, 0);
   assert.deepEqual(conversation, original);
+});
+
+test('historical flags link unchanged original evidence after timestamp or actor corrections without changing provenance', () => {
+  const variable = { ...flag('saved', 'critical', ['one', 'two']), kind: null, effective: false, dualDetected: false,
+    historicalAutomaticFlagVisible: true, historicalKind: 'critical' };
+  variable.result.evidence = [{ messageId: 'one', quote: 'Texto original completo.' }];
+  variable.result.comparison = { cells: [
+    { status: 'completed', result: { status: 'evaluado', value: 1, evidence: [{ messageId: 'two', quote: 'Segundo texto completo.' }] } },
+    { status: 'failed', result: { status: 'evaluado', value: 1, evidence: [{ messageId: 'three', quote: 'Otro texto.' }] } },
+  ] };
+  const conversation = { sourceChanged: true, historicalFlagsAvailable: true,
+    messages: [{ ...message('one', 'Texto original completo.'), actor: 'humano', timestamp: '2026-11-18T18:00:00Z' },
+      message('two', 'Segundo texto completo.'), message('three', 'Otro texto.')], variables: [variable] };
+  const original = structuredClone(conversation), index = buildMessageFlags(conversation);
+  assert.deepEqual([...index.byMessage.keys()], ['one', 'two']);
+  assert.deepEqual(index.unlinkedVariables, []);
+  assert.equal(index.markedVariables[0].historical, true);
+  assert.equal(index.markedVariables[0].effective, false);
+  assert.equal(index.markedVariables[0].dualDetected, false);
+  assert.deepEqual(conversation, original);
+});
+
+test('historical evidence rejects changed, ambiguous, missing and empty citations without guessing another message', () => {
+  const cases = [
+    { messages: [message('same', 'maybe yes')], quote: 'yes' },
+    { messages: [message('same', 'Mensaje editado'), message('other', 'Original')], quote: 'Original' },
+    { messages: [message('other', 'Original')], quote: 'Original' },
+    { messages: [message('same', 'Original'), message('same', 'Original')], quote: 'Original' },
+    { messages: [message('same', 'Original')], quote: '' },
+    { messages: [message('same', '   ')], quote: '   ' },
+    { messages: [message('same', 'Original')], quote: null },
+    { messages: [message('same', ' Original ')], quote: 'Original' },
+  ];
+  for (const { messages, quote } of cases) {
+    const variable = flag('saved', 'critical');
+    variable.result.evidence = [{ messageId: 'same', quote }];
+    const conversation = { evaluation: { sourceChanged: true }, messages, variables: [variable] };
+    assert.equal(evidenceMessageLookup(conversation)(variable.result.evidence[0]), null);
+    assert.equal(buildMessageFlags(conversation).byMessage.size, 0);
+    assert.equal(buildMessageFlags(conversation).unlinkedVariables.length, 1);
+  }
+});
+
+test('historical evidence accepts the exact 2000-character evaluator prefix and keeps current-source ID behavior', () => {
+  const quote = 'a'.repeat(2000), current = message('same', `${quote} Original suffix.`);
+  const lookup = evidenceMessageLookup({ sourceChanged: true, messages: [current] });
+  assert.equal(lookup({ messageId: 'same', quote }), current);
+  assert.equal(lookup({ messageId: 'same', quote: quote.slice(1) }), null);
+  assert.equal(lookup({ messageId: 'same', quote: `${quote.slice(1)}b` }), null);
+  assert.equal(evidenceMessageLookup({ messages: [current] })({ messageId: 'same' }), current);
+  assert.equal(evidenceMessageLookup({ messages: [message(0), message('0')] })({ messageId: 0 }), null);
 });

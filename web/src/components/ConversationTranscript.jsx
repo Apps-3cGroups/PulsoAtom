@@ -150,7 +150,7 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
       </div>
       <aside className="message-flags-sidebar" aria-label="Flags de la conversación">
         <header className="message-flags-sidebar-heading"><h3>Flags de la conversación</h3><span>{index.markedVariables.length}</span></header>
-        <p className="message-flags-sidebar-hint">{conversation.sourceChanged || conversation.evaluation?.sourceChanged ? 'Flags de la evaluación guardada. Abre su revisión para consultar las respuestas originales de ambos modelos.' : 'Selecciona un flag para resaltar sus mensajes. Abre su revisión para ver la evidencia de cada modelo.'}</p>
+        <p className="message-flags-sidebar-hint">{conversation.sourceChanged || conversation.evaluation?.sourceChanged ? 'Selecciona un flag para resaltar los mensajes cuya cita guardada coincide. Las respuestas originales de ambos modelos siguen en su revisión.' : 'Selecciona un flag para resaltar sus mensajes. Abre su revisión para ver la evidencia de cada modelo.'}</p>
         {!sidebarGroups.length ? <EmptyState title={hasChangedEvaluation(conversation) ? noVisibleFlagsLabel(conversation) : "Sin marcas publicadas"} description={hasChangedEvaluation(conversation) ? "Puedes consultar los resultados individuales en Modelos y en el checklist." : "Puedes leer la conversación y añadir un flag humano cuando corresponda."} />
           : sidebarGroups.map(group => <section className={`message-flag-group message-flag-group-${group.classification}`} key={group.classification} aria-label={group.label}>
             <h4>{group.label}<span>{group.variables.length}</span></h4>
@@ -158,7 +158,7 @@ export default function ConversationTranscript({ conversation, index, eligibleFl
               selected={String(variable.id) === String(selectedFlagId)} onSelectFlag={onSelectFlag} onShowFlag={onShowFlag} />)}
           </section>)}
         {index.unlinkedVariables.length > 0 && <p className="message-flags-unlinked-note">{conversation.sourceChanged || conversation.evaluation?.sourceChanged
-          ? 'El contenido cambió desde la evaluación. Las marcas conservan su revisión, pero no se vinculan a estos mensajes.'
+          ? 'Las marcas sin una cita verificable conservan su revisión, pero no se vinculan a los mensajes actuales.'
           : 'Las marcas sin mensaje vinculable conservan su revisión. No hay una cita asociada a un mensaje disponible.'}</p>}
       </aside>
     </div>
