@@ -43,7 +43,7 @@ const expanded = () => input().getAttribute('aria-expanded') === 'true';
 async function event(target, name, details = {}) {
   await act(async () => target.dispatchEvent(new dom.window.MouseEvent(name, { bubbles: true, cancelable: true, ...details })));
 }
-async function mouseClick(target) { for (const name of ['mousedown', 'mouseup', 'click']) await event(target, name); }
+async function mouseClick(target) { for (const name of ['mousedown', 'mouseup', 'click']) await event(target, name, { detail: 1 }); }
 
 test('a completed click without mousedown opens text, padding and arrow; real options remain selectable', async () => {
   for (const target of ['.ant-select-selector', '.ant-select-selection-placeholder', '.ant-select-arrow']) {
@@ -69,6 +69,17 @@ test('ordinary mouse clicks toggle once; keyboard navigation and escape remain a
   assert.equal(expanded(), true);
   await act(async () => input().dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true })));
   assert.equal(expanded(), false);
+});
+
+test('a click without pointer input opens after an earlier pointer gesture closed the menu without a click', async () => {
+  await render();
+  const trigger = document.querySelector('.ant-select-selector');
+  await mouseClick(trigger);
+  assert.equal(expanded(), true);
+  await event(trigger, 'mousedown', { detail: 1 });
+  assert.equal(expanded(), false);
+  await event(trigger, 'click', { detail: 0 });
+  assert.equal(expanded(), true);
 });
 
 test('multiple selection, removing tags and clearing do not reopen a closed list', async () => {
