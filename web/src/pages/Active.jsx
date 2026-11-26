@@ -65,7 +65,7 @@ export function ConversationEntry({ conversation: c, showCountry, returnTo, visi
     <header><div><h3 title={c.agent.name}>{c.agent.name}</h3>{showCountry && <div className="active-card-country">{countryLabel(c.country, c.countryName)}</div>}</div><span className={`active-card-status ${attention ? 'flagged' : ''}`}>{attention ? 'Con flags' : pending ? 'Pendiente' : 'OK'}</span></header>
     <div className="active-card-body">
       {c.activeReason?.code === 'friday-cohort' && <span className="active-pending">{c.activeReason.label}</span>}
-      {marks.length > 0 && <ul className="active-flags">{marks.map(m => <li key={m.id}><Mark kind={classificationOf(m)} /><span>{m.name}</span></li>)}</ul>}
+      {marks.length > 0 && <ul className="active-flags">{marks.map(m => <li key={m.id}><Mark kind={classificationOf(m)} small /><span>{m.name}</span></li>)}</ul>}
       {media.length > 0 && <div className="active-card-media"><Mark kind="media" /><span>{media.join(' · ')}</span></div>}
       {evaluationNeedsAttention(c) ? <span className="active-pending">{evaluationStatusLabel(c)}</span> : !marks.length && <span className="active-no-flags">{noVisibleFlagsLabel(c)}</span>}
       {!evaluationNeedsAttention(c) && c.unavailableFlags > 0 && <span className="muted small">{c.unavailableFlags} variables sin datos suficientes</span>}

@@ -53,11 +53,6 @@
   margin-left: auto;
 }
 
-/* Keep the 220px cards and fixed footer; only flag text grows for projection. */
-.active-page .active-card-body .active-flags li {
-  font-size: calc(15px * var(--font-scale, 1));
-}
-
 @media (max-width: 900px) {
   .active-page .active-toolbar .active-legend {
     flex-basis: 100%;
