@@ -407,6 +407,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
     transition-duration: .01ms !important;
     transition-delay: 0s !important;
   }
+  /* The select measures its popup by changing offsets synchronously. */
+  .ant-select-dropdown { transition-property: none !important; }
 }
 .ant-select-selection-placeholder, .ant-input::placeholder { color: var(--muted) !important; }
 @media (max-width: 1200px) { .metric-detail, .metric-label { font-size: calc(12px * var(--font-scale, 1)); } }

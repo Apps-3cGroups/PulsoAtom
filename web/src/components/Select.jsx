@@ -25,7 +25,8 @@ const Select = forwardRef(function Select({ open, defaultOpen = false, onOpenCha
     }}
     onClick={event => {
       onClick?.(event);
-      const wasOpen = startedOpen.current;
+      // Keyboard and assistive clicks have detail 0 and no corresponding mousedown.
+      const wasOpen = event.detail !== 0 && startedOpen.current;
       startedOpen.current = false;
       // Portaled options bubble through React; clearing/removing a tag has its
       // own action. Neither may reopen the menu after committing a selection.
