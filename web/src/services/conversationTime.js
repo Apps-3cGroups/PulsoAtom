@@ -1,7 +1,9 @@
 // The API resolves the country's operational zone. No browser-local parsing or
 // fixed UTC offsets: Intl applies the civil-time rules for the message's date.
 const formatters = new Map();
-export function conversationClock(conversation) {
+export const timezoneDisplayName = timezone => timezone?.replace(/^America\//, '').replaceAll('_', ' ');
+
+export function conversationClock(conversation, { shortLabel = false } = {}) {
   let timezone = conversation?.displayTimezone;
   try {
     if (!timezone) throw new Error();
@@ -13,8 +15,9 @@ export function conversationClock(conversation) {
   catch { timezone = 'UTC'; }
   if (!formatters.has(timezone)) return conversationClock({ displayTimezone: 'UTC', displayTimezoneSource: 'fallback' });
   const source = conversation?.displayTimezoneSource;
+  const zoneName = shortLabel ? timezoneDisplayName(timezone) : timezone;
   const label = timezone !== conversation?.displayTimezone || timezone === 'UTC' && (!source || source === 'fallback') ? 'Hora UTC · zona local sin configurar'
-    : source === 'capital' ? `Hora local de la capital · ${timezone}` : `Hora local · ${timezone}`;
+    : source === 'capital' ? `Hora local de la capital · ${zoneName}` : `Hora local · ${zoneName}`;
   const instant = value => typeof value === 'string' && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value) : null;
   const format = (value, formatter, missing) => {
     const date = instant(value);

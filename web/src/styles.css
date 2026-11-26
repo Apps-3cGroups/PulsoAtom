@@ -80,8 +80,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .demo-pill { padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--demo-ink) 35%, transparent); border-radius: 4px; font-size: calc(9px * var(--font-scale, 1)); font-weight: 600; letter-spacing: .12em; }
 .demo-banner-date { margin-left: auto; font-size: calc(10px * var(--font-scale, 1)); white-space: nowrap; }
 .workspace { flex: 1; padding: 26px 32px 34px; width: 100%; max-width: 1800px; margin-inline: auto; }
-.app-footer { display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid var(--border); padding: 14px 32px; color: var(--faint); font-size: calc(12px * var(--font-scale, 1)); letter-spacing: .02em; }
-.footer-divider { margin: 0 8px; color: var(--muted); }
+.app-footer { display: flex; justify-content: flex-end; border-top: 1px solid var(--border); padding: 14px 32px; color: var(--faint); font-size: calc(12px * var(--font-scale, 1)); letter-spacing: .02em; }
 .page-heading { display: flex; align-items: center; gap: 24px; justify-content: space-between; margin-bottom: 24px; }
 .page-heading .eyebrow { margin-bottom: 9px; }
 .page-heading h1 { font-size: calc(27px * var(--font-scale, 1)); line-height: 1.15; font-weight: 600; letter-spacing: -.6px; }
@@ -219,10 +218,11 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .filter-error { color: var(--p1); font-size: calc(11px * var(--font-scale, 1)); flex-basis: 100%; }
 .history-search { max-width: 440px; margin-bottom: 17px; }
 .history-search .ant-input-affix-wrapper { font-size: calc(13px * var(--font-scale, 1)); }
-.search-hero { margin: 6px 0 24px; }
-.search-hero .ant-input-affix-wrapper { padding: 17px 20px; font-size: calc(18px * var(--font-scale, 1)); border-color: var(--border-strong); }
+.search-hero { display: grid; grid-template-columns: minmax(0, 68%) minmax(0, 1fr); align-items: center; gap: 12px 16px; margin: 6px 0 24px; }
+.search-hero .ant-input-affix-wrapper { min-width: 0; padding: 17px 20px; font-size: calc(18px * var(--font-scale, 1)); border-color: var(--border-strong); }
 .search-hero .ant-input-prefix { color: var(--accent); margin-right: 15px; }
-.search-suggestions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.search-suggestions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 800px) { .search-hero { grid-template-columns: minmax(0, 1fr); } }
 .search-suggestions button { border: 1px solid var(--border); background: transparent; color: var(--secondary); border-radius: 20px; font-size: calc(12px * var(--font-scale, 1)); padding: 5px 10px; }
 .search-suggestions button:hover { border-color: var(--accent); color: var(--accent); }
 .search-excerpt { padding: 8px 20px; }
@@ -912,9 +912,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outlin
 .active-conversation-card h3 { font-size: calc(17px * var(--font-scale, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .active-card-status { flex: none; font-size: calc(11px * var(--font-scale, 1)); border-radius: 20px; padding: 4px 8px; background: var(--surface-raised); color: var(--muted); }
 .active-card-status.flagged { color: #a62d21; background: #ffebe6; }
-.active-card-body { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-gutter: stable; padding: 8px 16px 18px; }
-.active-card-body .active-flags { margin: 0; }
-.active-card-body .active-flags li { margin: 10px 0; font-size: calc(13px * var(--font-scale, 1)); align-items: baseline; }
+.active-card-body { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; scrollbar-gutter: stable; padding: 5px 16px 12px; }
+.active-card-body .active-flags { display: grid; gap: 4px; margin: 0; }
+.active-card-body .active-flags li { margin: 0; line-height: 1.35; }
 .active-card-media { display: flex; gap: 7px; color: var(--muted); margin-top: 12px; }
 .active-card-media > span { min-width: 0; }
 .active-conversation-card > footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; flex: none; gap: 7px; font-size: calc(11px * var(--font-scale, 1)); padding: 10px 14px; color: var(--muted); border-top: 1px solid var(--border); }

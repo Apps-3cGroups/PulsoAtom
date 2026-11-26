@@ -51,7 +51,7 @@ function MarkCard({ variable, messageCount, selected, onSelectFlag, onShowFlag }
 export default function ConversationTranscript({ conversation, index, eligibleFlags = [], filters,
   onFiltersChange, highlight, onShowFlag, onShowContext, onAddFlag, selectedFlagId, onSelectFlag, onFocusMessage }) {
   const [addingTo, setAddingTo] = useState(null);
-  const clock = conversationClock(conversation);
+  const clock = conversationClock(conversation, { shortLabel: true });
   const messages = conversation.messages || [];
   const rows = useMemo(() => filterMessageRows(messages, index, filters), [messages, index, filters]);
   const linkedVariables = useMemo(() => {

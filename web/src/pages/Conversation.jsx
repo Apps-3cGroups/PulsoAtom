@@ -75,7 +75,7 @@ export default function Conversation() {
   if (request.error) return <><Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnTarget.to)}>{returnTarget.action}</Button><ErrorState error={request.error} retry={request.reload} /></>;
   if (request.loading || !conversation || request.dataPath !== requestPath) return <LoadingState />;
   const c = conversation;
-  const clock = conversationClock(c);
+  const clock = conversationClock(c, { shortLabel: true });
   const status = evaluationStatus(c);
   const selectedFlag = c.variables.find(v => v.id === selectedFlagId);
   const titles = { checklist: 'Checklist de la evaluación', models: 'Evaluaciones de los modelos', metrics: 'Métricas de la conversación', history: 'Historial de revisiones', flag: selectedFlag?.name || 'Detalle del flag' };

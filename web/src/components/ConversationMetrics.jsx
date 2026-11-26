@@ -1,4 +1,4 @@
-import { conversationClock } from '../services/conversationTime';
+import { conversationClock, timezoneDisplayName } from '../services/conversationTime';
 import { Popover, Tooltip } from 'antd';
 import Select from './Select';
 import { CalendarOutlined, ClockCircleOutlined, CommentOutlined, InfoCircleOutlined, MessageOutlined } from '@ant-design/icons';
@@ -43,7 +43,7 @@ function Participation({ assistant, client, counts, children }) {
 }
 
 export default function ConversationMetrics({ conversation, selectedDate, onDateChange }) {
-  const clock = conversationClock(conversation);
+  const clock = conversationClock(conversation, { shortLabel: true });
   const view = dailyMetricsView(conversation.dailyMetrics, selectedDate);
   const day = view.selectedDay;
   const variables = (Array.isArray(day?.metrics) ? day.metrics : []).filter(v => conversationMetricIds.includes(v.id));
@@ -57,11 +57,11 @@ export default function ConversationMetrics({ conversation, selectedDate, onDate
   const time = timestamp => spansLocalDates ? clock.dateTime(timestamp) : clock.time(timestamp);
   const ratio = value('ratio_mensajes_asistente_entre_cliente'), turn = value('num_mensajes_por_turno_asistente');
   const duration = value('min_duracion_conversacion');
-  const explanation = <div className="metric-help-content"><p>Las cifras corresponden solo al día seleccionado. La transcripción y el checklist conservan su alcance original.</p><p>El tiempo transcurrido incluye pausas. La espera más larga solo considera intervalos que terminaron con una respuesta humana dentro del día.</p><p>Las esperas pendientes se observan hasta el último mensaje disponible; no avanzan con la hora actual.</p><p>{variables.filter(v => metricValue(v) !== null).length} de 7 métricas disponibles · Calculadas por código.</p>{view.timezone && <p>Jornada de cálculo: {view.timezone}. Horas mostradas: {clock.timezone}.</p>}</div>;
+  const explanation = <div className="metric-help-content"><p>Las cifras corresponden solo al día seleccionado. La transcripción y el checklist conservan su alcance original.</p><p>El tiempo transcurrido incluye pausas. La espera más larga solo considera intervalos que terminaron con una respuesta humana dentro del día.</p><p>Las esperas pendientes se observan hasta el último mensaje disponible; no avanzan con la hora actual.</p><p>{variables.filter(v => metricValue(v) !== null).length} de 7 métricas disponibles · Calculadas por código.</p>{view.timezone && <p>Jornada de cálculo: {timezoneDisplayName(view.timezone)}. Horas mostradas: {timezoneDisplayName(clock.timezone)}.</p>}</div>;
   return <section className="conversation-metrics" aria-label="Métricas del día de actividad">
     <header><div><span className="eyebrow">LA CONVERSACIÓN EN CIFRAS</span><h2>Así fue este día</h2><p className="metric-day-summary" aria-live="polite" aria-atomic="true">{available ? <><b>{metricDateText(day.date)}</b><span>·</span>{day.messageCount} {day.messageCount === 1 ? 'mensaje' : 'mensajes'}<span>·</span>{time(day.firstMessageAt)}–{time(day.lastMessageAt)}</> : 'Consulta la actividad registrada en esta conversación.'}</p></div><div className="metric-day-controls"><label htmlFor="conversation-metric-day"><CalendarOutlined /> Día de actividad</label><Select id="conversation-metric-day" aria-label="Día de actividad" value={view.selectedDate || undefined} onChange={onDateChange} disabled={!view.days.length} placeholder="Sin días disponibles" options={view.days.map(item => ({ value: item.date, label: metricDateText(item.date) }))} /></div></header>
     {available ? <>
-      <p className="message-timezone">{clock.label} · Jornada de cálculo: {view.timezone}</p>
+      <p className="message-timezone">{clock.label} · Jornada de cálculo: {timezoneDisplayName(view.timezone)}</p>
       <div className="metric-overview-grid" key={day.date}>
         <div className="metric-story-panel">
           <div className="metric-time-kpis">
