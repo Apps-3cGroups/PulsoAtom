@@ -12,7 +12,6 @@ import { LoadingState, ErrorState, EmptyState, Mark, dateText } from '../compone
 import { resolveSummaryRange, summaryDayWindow, SUMMARY_PRESETS } from '../services/summaryDates';
 import { summaryRangeLabel, summaryPercentage } from '../services/summaryPresentation';
 import { reviewSelectionId, summarySelectionParams, selectedReview, withSummaryPeriod, reviewSelectionSourceNote } from '../services/reviewSelection';
-import { meetingPeriodSnapshot } from '../data/meetingPeriods';
 import { buildSummaryLanes } from '../services/summaryMap';
 import CompactSummaryMap from '../components/CompactSummaryMap';
 import { CountrySelect, ExceptionsFilter } from '../components/ExceptionControls';
@@ -30,8 +29,7 @@ export default function Summary() {
   const navigate = useNavigate();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const defaultMeetingPeriod = meetingPeriodSnapshot.periods.find(period => period.id === meetingPeriodSnapshot.defaultPeriodId);
-  const selectionParams = summarySelectionParams(params, bootstrap.reviewSelection, defaultMeetingPeriod);
+  const selectionParams = summarySelectionParams(params);
   const selection = selectedReview(selectionParams, bootstrap.reviewSelection);
   const selectionId = reviewSelectionId(selectionParams);
   const mapRef = useRef(null);
@@ -39,17 +37,17 @@ export default function Summary() {
   const classification = 'all';
   const visible = selectedFigures(selectionParams);
   const patchFilters = values => setParams(previous => {
-    const next = cleanOverviewParams(summarySelectionParams(previous, bootstrap.reviewSelection, defaultMeetingPeriod));
+    const next = cleanOverviewParams(summarySelectionParams(previous));
     next.delete('meetingPeriod');
     for (const [key, value] of Object.entries(values)) value == null ? next.delete(key) : next.set(key, value);
     if (!next.toString()) next.set('reviewSelection', 'all');
     return next;
   });
   useEffect(() => {
-    const next = cleanOverviewParams(summarySelectionParams(params, bootstrap.reviewSelection, defaultMeetingPeriod));
+    const next = cleanOverviewParams(summarySelectionParams(params));
     if (params.toString() && !next.toString()) next.set('reviewSelection', 'all');
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [params, setParams, bootstrap.reviewSelection, defaultMeetingPeriod]);
+  }, [params, setParams]);
   const { from, to, preset, totalDays, error: rangeError } = selection ? { from: selection.from, to: selection.to, preset: null } : resolveSummaryRange({
     from: selectionParams.get('from') ?? undefined, to: selectionParams.get('to') ?? undefined,
     days: selectionParams.get('days'),

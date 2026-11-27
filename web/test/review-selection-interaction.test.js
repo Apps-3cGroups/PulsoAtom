@@ -8,7 +8,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-let dom, h, act, createRoot, createMemoryRouter, RouterProvider, ConfigProvider, Summary, Conversations, Conversation, PortalContext, meetingPeriodSnapshot, originalMeetingSnapshot, root, router;
+let dom, h, act, createRoot, createMemoryRouter, RouterProvider, ConfigProvider, Summary, Conversations, Conversation, PortalContext, root, router;
 const originalFetch = globalThis.fetch;
 const requests = [];
 const reviewSelection = { id: 'review94', title: 'Selección para revisión', from: '2026-11-17', to: '2026-11-19', count: 94, sourceChangedCount: 68, timeCorrectionCount: 68,
@@ -47,7 +47,7 @@ before(async () => {
   const folder = await mkdtemp(join(tmpdir(), 'pulso-review-selection-'));
   try {
     const result = await build({ stdin: {
-      contents: "export {default as Summary} from './pages/Summary.jsx'; export {default as Conversations} from './pages/Conversations.jsx'; export {default as Conversation} from './pages/Conversation.jsx'; export {PortalContext} from './hooks.js'; export {meetingPeriodSnapshot} from './data/meetingPeriods.js';",
+      contents: "export {default as Summary} from './pages/Summary.jsx'; export {default as Conversations} from './pages/Conversations.jsx'; export {default as Conversation} from './pages/Conversation.jsx'; export {PortalContext} from './hooks.js';",
       resolveDir: fileURLToPath(new URL('../src/', import.meta.url)),
     }, bundle: true, write: false, platform: 'node', format: 'esm', jsx: 'automatic', loader: { '.css': 'empty' },
     plugins: [{ name: 'packages', setup(builder) {
@@ -55,8 +55,7 @@ before(async () => {
     } }] });
     const file = join(folder, 'review-selection.mjs');
     await writeFile(file, result.outputFiles[0].text);
-    ({ Summary, Conversations, Conversation, PortalContext, meetingPeriodSnapshot } = await import(pathToFileURL(file).href));
-    originalMeetingSnapshot = { ...meetingPeriodSnapshot };
+    ({ Summary, Conversations, Conversation, PortalContext } = await import(pathToFileURL(file).href));
   } finally { await rm(folder, { recursive: true, force: true }); }
   globalThis.fetch = async input => {
     const url = new URL(input, 'http://localhost');
@@ -83,7 +82,6 @@ before(async () => {
 afterEach(async () => {
   if (root) await act(async () => root.unmount());
   router?.dispose(); root = null; router = null; requests.length = 0; ordinaryRows = []; bootstrap.reviewSelection = reviewSelection;
-  Object.assign(meetingPeriodSnapshot, originalMeetingSnapshot);
 });
 after(() => { globalThis.fetch = originalFetch; dom?.window.close(); });
 
@@ -100,16 +98,16 @@ async function click(element) {
 }
 const latestRequest = () => requests.at(-1);
 
-test('restored historical flags are visible in the default period and counted as saved findings', async () => {
-  const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
+test('restored historical flags are visible in an explicit period and counted as saved findings', async () => {
+  const { from, to } = reviewSelection;
   const mark = { id: 'restored', name: 'Hallazgo original', kind: 'critical', classification: 'critical',
     historical: true, historicalDualDetected: true, effective: false, dualDetected: false };
   ordinaryRows = [
-    { ...rows[2], sourceChanged: false, displayDate: period.from, bothModelsComplete: true, p1: 1, marks: [{ ...mark, historical: false, effective: true }] },
-    { ...rows[3], sourceChanged: true, displayDate: period.from, bothModelsComplete: true, marks: [], historicalFlagsAvailable: true, historicalMarks: [mark] },
-    { ...rows[4], sourceChanged: true, displayDate: period.to, bothModelsComplete: true, marks: [], historicalFlagsAvailable: true, historicalMarks: [] },
+    { ...rows[2], sourceChanged: false, displayDate: from, bothModelsComplete: true, p1: 1, marks: [{ ...mark, historical: false, effective: true }] },
+    { ...rows[3], sourceChanged: true, displayDate: from, bothModelsComplete: true, marks: [], historicalFlagsAvailable: true, historicalMarks: [mark] },
+    { ...rows[4], sourceChanged: true, displayDate: to, bothModelsComplete: true, marks: [], historicalFlagsAvailable: true, historicalMarks: [] },
   ];
-  await render();
+  await render(`/?from=${from}&to=${to}&completion=both&reviewSelection=all`);
   assert.equal(document.querySelectorAll('.conversation-cell').length, 3);
   assert.equal(document.querySelectorAll('.source-changed-cell').length, 2);
   assert.equal(document.querySelectorAll('.summary-page .anticon-clock-circle').length, 0);
@@ -124,43 +122,46 @@ test('restored historical flags are visible in the default period and counted as
   assert.match(document.querySelector('.summary-total-positive').textContent, /0%/);
 });
 
-test('default entry queries the configured meeting period with complete pairs from its first request and retains detail/history return links', async () => {
-  const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
+test('default entry queries the latest three days from its first request and retains detail/history return links', async () => {
+  const from = '2026-11-22', to = bootstrap.activityDateRange.max;
   ordinaryRows = [
-    { ...rows[2], displayDate: period.from, bothModelsComplete: true },
-    { ...rows[1], displayDate: period.to, bothModelsComplete: false },
+    { ...rows[2], displayDate: from, bothModelsComplete: true },
+    { ...rows[4], displayDate: to, bothModelsComplete: false },
     { ...rows[3], displayDate: '2026-11-25', bothModelsComplete: true },
   ];
   await render();
   const params = new URLSearchParams(router.state.location.search);
   assert.equal(params.get('reviewSelection'), 'all');
-  assert.equal(params.get('meetingPeriod'), period.id);
-  assert.equal(params.get('completion'), 'both');
+  assert.equal(params.get('days'), '3');
+  assert.equal(params.has('meetingPeriod'), false);
+  assert.equal(params.has('completion'), false);
   assert.ok(requests.length > 0);
   for (const request of requests) {
-    assert.equal(request.searchParams.get('from'), period.from);
-    assert.equal(request.searchParams.get('to'), period.to);
-    assert.equal(request.searchParams.get('completion'), 'both');
+    assert.equal(request.searchParams.get('from'), from);
+    assert.equal(request.searchParams.get('to'), to);
+    assert.equal(request.searchParams.has('completion'), false);
     assert.equal(request.searchParams.has('reviewSelection'), false);
   }
-  assert.equal(document.querySelectorAll('.conversation-cell').length, 1);
-  assert.equal(document.querySelector('input[type="checkbox"]').checked, true);
-  assert.match(document.querySelector('.summary-range').textContent, /17 nov 2026 — 19 nov 2026/);
+  assert.equal(document.querySelectorAll('.conversation-cell').length, 2);
+  assert.equal(document.querySelector('input[type="checkbox"]').checked, false);
+  assert.match(document.querySelector('.summary-range').textContent, /22 nov 2026 — 24 nov 2026/);
+  assert.equal(button('3 días').getAttribute('aria-pressed'), 'true');
   assert.equal(document.querySelector('[aria-label="Resumen desde"]'), null);
   assert.equal(document.querySelector('[aria-label="Resumen hasta"]'), null);
   assert.equal(document.querySelector('[aria-label="Período personalizado"]'), null);
   assert.equal(document.querySelector('[aria-label="Períodos para la reunión"]'), null);
   assert.equal(button('Aplicar fechas'), undefined);
-  for (const removed of meetingPeriodSnapshot.periods) assert.equal(button(removed.label), undefined);
   for (const label of ['Ayer', '3 días', '30 días']) assert.ok(button(label));
   assert.doesNotMatch(document.querySelector('.summary-stat-card').textContent, /de 94/);
   const summaryUrl = `${router.state.location.pathname}${router.state.location.search}`;
   await click(document.querySelector('.conversation-cell'));
   await click(button('Resumen'));
   assert.equal(`${router.state.location.pathname}${router.state.location.search}`, summaryUrl);
+  await click(document.querySelector('input[type="checkbox"]'));
+  assert.equal(document.querySelectorAll('.conversation-cell').length, 1);
   await click(document.querySelector('.country-title button'));
-  assert.equal(latestRequest().searchParams.get('from'), period.from);
-  assert.equal(latestRequest().searchParams.get('to'), period.to);
+  assert.equal(latestRequest().searchParams.get('from'), from);
+  assert.equal(latestRequest().searchParams.get('to'), to);
   assert.equal(latestRequest().searchParams.get('completion'), 'both');
   assert.equal(latestRequest().searchParams.has('reviewSelection'), false);
   const historyUrl = `${router.state.location.pathname}${router.state.location.search}`;
@@ -179,8 +180,8 @@ test('original quick periods and all 94 saved members remain accessible from the
     assert.equal(params.has('from'), false);
     assert.equal(params.has('to'), false);
     assert.equal(params.get('reviewSelection'), 'all');
-    assert.equal(params.get('completion'), 'both');
-    assert.equal(latestRequest().searchParams.get('completion'), 'both');
+    assert.equal(params.has('completion'), false);
+    assert.equal(latestRequest().searchParams.has('completion'), false);
     assert.equal(latestRequest().searchParams.get('to'), '2026-11-24');
   }
   await click(button('Volver a la selección'));

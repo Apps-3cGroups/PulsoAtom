@@ -1,25 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { meetingPeriodSnapshot } from '../src/data/meetingPeriods.js';
 import { summarySelectionParams, reviewSelectionId, selectedReview } from '../src/services/reviewSelection.js';
+import { resolveSummaryRange } from '../src/services/summaryDates.js';
 import { conversationLink, conversationReturn } from '../src/services/conversationNavigation.js';
 
-const period = meetingPeriodSnapshot.periods.find(p => p.id === meetingPeriodSnapshot.defaultPeriodId);
 const selection = { id: 'review94', from: '2026-11-17', to: '2026-11-19', count: 94 };
 
-test('an empty summary uses the requested meeting period regardless of the published sample', () => {
-  assert.ok(period, 'the configured default identifies an available meeting preset');
-  for (const configuredPeriod of meetingPeriodSnapshot.periods) for (const published of [undefined, selection, { ...selection, id: 'review214', count: 214 }]) {
-    const original = new URLSearchParams();
-    const next = summarySelectionParams(original, published, configuredPeriod);
-    assert.equal(original.size, 0);
-    assert.deepEqual(Object.fromEntries(next), {
-      reviewSelection: 'all', from: configuredPeriod.from, to: configuredPeriod.to,
-      meetingPeriod: configuredPeriod.id, completion: 'both',
-    });
-    assert.equal(reviewSelectionId(next), undefined);
-    assert.equal(selectedReview(next, published), null);
-  }
+test('an empty summary uses the three most recent complete local days', () => {
+  const original = new URLSearchParams();
+  const next = summarySelectionParams(original);
+  assert.equal(original.size, 0);
+  assert.deepEqual(Object.fromEntries(next), { reviewSelection: 'all', days: '3' });
+  assert.equal(reviewSelectionId(next), undefined);
+  assert.equal(selectedReview(next, selection), null);
+  const days = next.get('days');
+  const now = new Date('2026-11-28T05:59:59Z');
+  assert.deepEqual(resolveSummaryRange({ days, now }), {
+    from: '2026-11-24', to: '2026-11-26', preset: 3, totalDays: 3,
+  });
+  assert.deepEqual(resolveSummaryRange({ days, now: new Date('2026-11-28T06:00:00Z') }), {
+    from: '2026-11-25', to: '2026-11-27', preset: 3, totalDays: 3,
+  });
 });
 
 test('every explicit URL parameter prevents the new default, including opt-outs and old return links', () => {
@@ -30,7 +31,7 @@ test('every explicit URL parameter prevents the new default, including opt-outs 
     'dateBasis=started', 'agreement=both', 'page=2', 'meetingPeriod=meeting-volume-20261125',
   ]) {
     const original = new URLSearchParams(query);
-    const next = summarySelectionParams(original, selection, period);
+    const next = summarySelectionParams(original);
     assert.equal(next.toString(), original.toString(), query);
     const returnTo = `/?${original}`;
     const detail = new URL(conversationLink('example', returnTo), 'https://pulso.invalid');

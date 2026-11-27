@@ -11,15 +11,13 @@ test('the historical correction count stays distinct from later source changes',
   assert.match(reviewSelectionSourceNote({ ...selection, sourceChangedCount: 69, timeCorrectionCount: 68 }), /^68 conversaciones/);
   assert.doesNotMatch(reviewSelectionSourceNote({ ...selection, sourceChangedCount: 69 }), /69|corrección de horas/);
 });
-test('only an unfiltered entry adopts the server selection; explicit filters and opt-out survive refresh', () => {
-  const initial = new URLSearchParams();
-  const resolved = summarySelectionParams(initial, selection);
-  assert.equal(initial.size, 0);
+test('a saved selection is used when explicitly requested and still published', () => {
+  const resolved = summarySelectionParams(new URLSearchParams('reviewSelection=review94'));
   assert.equal(reviewSelectionId(resolved), selection.id);
   assert.equal(selectedReview(resolved, selection), selection);
-  assert.equal(summarySelectionParams(initial, undefined).size, 0);
+  assert.equal(selectedReview(resolved, undefined), null);
   for (const query of ['days=3', 'countries=HN', 'figures=', 'from=2026-11-17&to=2026-11-19', 'reviewSelection=all', 'reviewSelection=unknown']) {
-    assert.equal(summarySelectionParams(new URLSearchParams(query), selection).toString(), query.replaceAll(',', '%2C'));
+    assert.equal(summarySelectionParams(new URLSearchParams(query)).toString(), query.replaceAll(',', '%2C'));
     assert.equal(selectedReview(new URLSearchParams(query), selection), null);
   }
   // An invalid identifier must reach the server for validation, not silently fall back.
@@ -36,7 +34,7 @@ test('all normal periods leave the selection while preserving adjustable country
     assert.equal(next.get('figures'), 'critical');
     assert.equal(next.has('from'), false);
     assert.equal(next.has('to'), false);
-    assert.equal(summarySelectionParams(next, selection).toString(), next.toString());
+    assert.equal(summarySelectionParams(next).toString(), next.toString());
   }
 });
 
@@ -46,7 +44,7 @@ test('meeting ranges opt out of the saved sample and survive publication of a di
   assert.equal(next.get('from'), '2026-11-10'); assert.equal(next.get('to'), '2026-11-12'); assert.equal(next.has('days'), false);
   assert.equal(next.has('countries'), false); assert.equal(next.has('country'), false); assert.equal(next.has('figures'), false);
   const published = { id: 'fresh214', from: '2026-11-17', to: '2026-11-19', count: 214 };
-  assert.equal(summarySelectionParams(next, published).toString(), next.toString());
+  assert.equal(summarySelectionParams(next).toString(), next.toString());
   assert.equal(selectedReview(next, published), null);
   next.set('countries', 'HN,PA'); next.set('figures', 'critical');
   const custom = withSummaryDateRange(next, '2026-11-17', '2026-11-19');
